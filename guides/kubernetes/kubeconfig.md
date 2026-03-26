@@ -81,7 +81,84 @@ kubens <namespace>  # switch namespace
 
 ---
 
-## 4. Storing kubeconfig in Vault
+## 4. Never Writing to Disk
+
+`chmod 600` limits who can read a file, but the file is still on disk — accessible to root, included in backups, and readable by any process running as your user. For genuinely sensitive cluster credentials, avoid disk entirely.
+
+### Process substitution (bash / zsh)
+
+Fetch the kubeconfig from Vault and pipe it directly to `kubectl` without writing a file:
+
+```bash
+# Single command — kubeconfig never touches disk
+KUBECONFIG=<(vault kv get -field=kubeconfig secret/k8s/client-a-prod) kubectl get pods
+
+# Wrap in a shell function for convenience
+kube_client_a() {
+  KUBECONFIG=<(vault kv get -field=kubeconfig secret/k8s/client-a-prod) kubectl "$@"
+}
+
+kube_client_a get pods
+kube_client_a apply -f deployment.yaml
+```
+
+> ⚠️ Process substitution creates a file descriptor, not a real file. It is not compatible with tools that require a file path (e.g., some IDE integrations). Use the tmpfs approach below in those cases.
+
+### tmpfs mount (in-memory filesystem)
+
+Mount a RAM-based filesystem at `~/.kube`. Files written there never touch the physical disk and disappear on reboot:
+
+```bash
+# Mount a tmpfs at ~/.kube, owned by your user
+sudo mount -t tmpfs -o size=10m,mode=0700,uid=$(id -u),gid=$(id -g) tmpfs ~/.kube
+
+# Now write kubeconfig normally — it lives in RAM only
+vault kv get -field=kubeconfig secret/k8s/client-a-prod > ~/.kube/config
+chmod 600 ~/.kube/config
+
+# Verify it's mounted
+mount | grep kube
+
+# Unmount and wipe when done
+sudo umount ~/.kube
+```
+
+> ℹ️ On macOS, use a RAM disk: `diskutil eraseDisk APFS ramdisk $(hdiutil attach -nomount ram://20480)` then symlink `~/.kube` to the mount point.
+
+### Use OIDC so the kubeconfig has no secrets
+
+This is the gold standard: configure clusters to use OIDC authentication. The kubeconfig then contains only the cluster URL and OIDC issuer — no token, no certificate. It is safe to store anywhere.
+
+```bash
+# The kubeconfig only contains public metadata — the OIDC provider handles auth
+kubectl config set-credentials <USER> \
+  --auth-provider=oidc \
+  --auth-provider-arg=idp-issuer-url=https://sso.example.com \
+  --auth-provider-arg=client-id=<CLIENT_ID>
+  # No client-secret needed for public clients (PKCE flow)
+```
+
+When `kubectl` needs credentials it redirects to the OIDC provider, obtaining a short-lived token at runtime. The kubeconfig file itself is non-sensitive.
+
+### exec credential plugin
+
+For clusters using tools like `kubelogin`, `aws eks get-token`, or `gke-gcloud-auth-plugin`, the kubeconfig delegates credential fetching to an external command:
+
+```yaml
+users:
+  - name: my-cluster
+    user:
+      exec:
+        apiVersion: client.authentication.k8s.io/v1beta1
+        command: kubelogin
+        args: ["get-token", "--environment", "AzurePublicCloud", "--server-id", "<APP_ID>"]
+```
+
+The kubeconfig file has no static credentials — tokens are fetched dynamically. The kubeconfig is non-sensitive by itself, though it still reveals cluster endpoint information; follow your organisation's policy on whether it can be shared.
+
+---
+
+## 5. Storing kubeconfig in Vault
 
 For team environments, store kubeconfig in Vault rather than distributing files:
 
@@ -89,21 +166,16 @@ For team environments, store kubeconfig in Vault rather than distributing files:
 # Store
 vault kv put secret/k8s/client-a-prod kubeconfig=@~/.kube/client-a-prod.kubeconfig
 
-# Retrieve into temp file for a session
-vault kv get -field=kubeconfig secret/k8s/client-a-prod > /tmp/kubeconfig-session
-export KUBECONFIG=/tmp/kubeconfig-session
+# Retrieve without touching disk (process substitution)
+KUBECONFIG=<(vault kv get -field=kubeconfig secret/k8s/client-a-prod) kubectl get pods
 
-# Use it...
-kubectl get pods
-
-# Clean up
-unset KUBECONFIG
-rm /tmp/kubeconfig-session
+# Or retrieve into a tmpfs-backed path for tools that need a file path
+vault kv get -field=kubeconfig secret/k8s/client-a-prod > ~/.kube/config  # only if ~/.kube is on tmpfs
 ```
 
 ---
 
-## 5. Short-Lived Credentials with OIDC
+## 6. Short-Lived Credentials with OIDC
 
 Configure kubectl to use OIDC authentication (your organisation's SSO) instead of long-lived client certificates:
 
@@ -119,11 +191,19 @@ This means the kubeconfig itself doesn't contain a long-lived token — the OIDC
 
 ---
 
-## 6. Kubeconfig Merging
+## 7. Kubeconfig Merging
 
-See [kubeconfig-merge.sh](../../snippets/kubeconfig-merge.sh) for a safe merging script.
+See [kubeconfig-merge.sh](../../snippets/kubeconfig-merge.sh) for a safe merging script with conflict detection and automatic backup. Usage:
 
-Quick merge:
+```bash
+# Preview first (dry run)
+./snippets/kubeconfig-merge.sh ~/.kube/new-cluster.kubeconfig --dry-run
+
+# Merge (creates a timestamped backup automatically)
+./snippets/kubeconfig-merge.sh ~/.kube/new-cluster.kubeconfig
+```
+
+Quick merge (manual):
 
 ```bash
 KUBECONFIG=~/.kube/config:~/.kube/new-cluster.kubeconfig \
@@ -138,7 +218,7 @@ kubectl config get-contexts --kubeconfig=~/.kube/merged.config
 
 ---
 
-## 7. Offboarding / Credential Revocation
+## 8. Offboarding / Credential Revocation
 
 When a project ends:
 
@@ -158,3 +238,4 @@ Ask the cluster admin to revoke your OIDC/certificate credentials server-side.
 
 - [Kubernetes Secrets](k8s-secrets.md)
 - [kubeconfig-merge.sh snippet](../../snippets/kubeconfig-merge.sh)
+- [snippets/README.md — how to use snippets](../../snippets/README.md)

@@ -136,6 +136,12 @@ bw export --format json --session "$BW_SESSION"
 
 ---
 
+## Snippet
+
+[`bw-get-secret.sh`](../../snippets/bw-get-secret.sh) wraps the commands above into reusable shell functions (`bw_get_password`, `bw_get_field`, `bw_get_note`, etc.) that handle session management automatically. See [snippets/README.md](../../snippets/README.md) for usage.
+
+---
+
 ## Next Steps
 
 - [Using Bitwarden in scripts](scripting.md)

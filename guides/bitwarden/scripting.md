@@ -138,3 +138,18 @@ Add a lock trap:
 ```bash
 trap 'bw lock >/dev/null 2>&1' EXIT
 ```
+
+---
+
+## Examples
+
+Full working Bitwarden clients are available in the [examples](../../examples/) directory:
+
+| Language | File |
+|----------|------|
+| Bash | [`examples/bash/bitwarden-client.sh`](../../examples/bash/bitwarden-client.sh) |
+| Python | [`examples/python/bitwarden_client.py`](../../examples/python/bitwarden_client.py) |
+| Go | [`examples/go/bitwarden_client.go`](../../examples/go/bitwarden_client.go) |
+| TypeScript | [`examples/typescript/bitwarden-client.ts`](../../examples/typescript/bitwarden-client.ts) |
+
+For shell-level secret injection (exporting Bitwarden fields as env vars), see [`inject-env.sh`](../../snippets/inject-env.sh).

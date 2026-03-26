@@ -142,6 +142,21 @@ Your Vault token must have a policy granting access. If you receive `permission 
 
 ---
 
+## Examples
+
+Full working Vault clients are available in the [examples](../../examples/) directory:
+
+| Language | File |
+|----------|------|
+| Bash | [`examples/bash/vault-client.sh`](../../examples/bash/vault-client.sh) |
+| Python | [`examples/python/vault_client.py`](../../examples/python/vault_client.py) |
+| Go | [`examples/go/vault_client.go`](../../examples/go/vault_client.go) |
+| TypeScript | [`examples/typescript/vault-client.ts`](../../examples/typescript/vault-client.ts) |
+
+For shell-level secret injection (exporting Vault fields as env vars), see [`inject-env.sh`](../../snippets/inject-env.sh).
+
+---
+
 ## Next Steps
 
 - [Dynamic credentials](dynamic-secrets.md)
