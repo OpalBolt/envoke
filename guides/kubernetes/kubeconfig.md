@@ -104,6 +104,54 @@ kube_client_a apply -f deployment.yaml
 
 > ⚠️ Process substitution creates a file descriptor, not a real file. It is not compatible with tools that require a file path (e.g., some IDE integrations). Use the tmpfs approach below in those cases.
 
+### Shell helper with /dev/shm tmpfile
+
+A middle ground between process substitution (no file path) and a full tmpfs mount (requires `sudo`): write the kubeconfig to a RAM-backed tmpfile in `/dev/shm` (Linux) and point `KUBECONFIG` at it.
+
+**Source the snippet once in your shell profile:**
+
+```bash
+# ~/.bashrc or ~/.zshrc
+source ~/path/to/snippets/kctx.sh
+```
+
+> ⚠️ **Do not put this in `.envrc` (direnv) or `.env`.**
+> direnv exports environment variables to the parent shell but cannot export bash functions.
+> `.env` files are `KEY=value` pairs only. Shell functions belong in `.bashrc`/`.zshrc`
+> (personal use) or a dedicated helpers file you source explicitly.
+
+**Use it:**
+
+```bash
+kctx prod              # fetches from secret/k8s/prod by default
+kctx staging           # fetches from secret/k8s/staging
+kctx prod secret/infra/k8s/prod  # explicit Vault path
+
+kctx_status            # show active KUBECONFIG and current context
+kctx_clear             # wipe the tmpfile and unset KUBECONFIG
+```
+
+**Why this is better than the naïve one-liner:**
+
+```bash
+# ❌ Naïve — has several bugs
+kctx-prod() {
+  local tmpfile=$(mktemp /dev/shm/kubeconfig-XXXXXX)
+  vault kv get -field=kubeconfig secret/k8s/prod > "$tmpfile"
+  export KUBECONFIG="$tmpfile"
+  trap "rm -f $tmpfile" EXIT  # overwrites any existing EXIT trap on each call
+}
+```
+
+Problems with the above:
+- **`trap ... EXIT` is overwritten on each call** — calling the function twice means the first tmpfile is never cleaned up.
+- **No error handling** — if Vault fails, `KUBECONFIG` points to an empty file.
+- **`/dev/shm` is Linux-only** — macOS has no `/dev/shm`.
+
+The snippet in `snippets/kctx.sh` fixes all three: a single module-level EXIT trap + a tracked `_KCTX_TMPFILE` variable handles cleanup across multiple calls, Vault errors are caught before `KUBECONFIG` is updated, and macOS falls back gracefully (with a note that the file won't be RAM-backed).
+
+**On macOS:** `/dev/shm` does not exist. The snippet falls back to `$TMPDIR`. For genuine RAM-backed storage on macOS, use the tmpfs mount approach below.
+
 ### tmpfs mount (in-memory filesystem)
 
 Mount a RAM-based filesystem at `~/.kube`. Files written there never touch the physical disk and disappear on reboot:

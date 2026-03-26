@@ -185,6 +185,35 @@ bash snippets/pre-commit-hook.sh
 
 ---
 
+### [`kctx.sh`](kctx.sh)
+
+Ephemeral kubeconfig switching via Vault. Fetches a kubeconfig into a RAM-backed tmpfile (`/dev/shm` on Linux) and exports `KUBECONFIG` pointing at it. The tmpfile is cleaned up on the next call, on `kctx_clear`, or when the shell exits.
+
+**Prerequisites:** `vault` CLI. `kubectl` optional (for context display).
+
+**Functions:**
+
+| Function | Description |
+|----------|-------------|
+| `kctx <env> [vault-path]` | Fetch kubeconfig from `secret/k8s/<env>` (or explicit path) into a tmpfile |
+| `kctx_clear` | Remove the tmpfile and unset `KUBECONFIG` |
+| `kctx_status` | Show the active `KUBECONFIG`, storage type, and current context |
+
+**Usage:**
+
+```bash
+source snippets/kctx.sh  # add to ~/.bashrc or ~/.zshrc
+
+kctx prod                             # fetches from secret/k8s/prod
+kctx staging secret/infra/k8s/staging # explicit Vault path
+kctx_status                           # show what's active
+kctx_clear                            # clean up
+```
+
+**Related:** [Kubeconfig guide](../guides/kubernetes/kubeconfig.md)
+
+---
+
 ### [`kubeconfig-merge.sh`](kubeconfig-merge.sh)
 
 Safely merge kubeconfig files with conflict detection, backup creation, and dry-run support. Prevents accidentally overwriting contexts or mangling your `~/.kube/config`.
