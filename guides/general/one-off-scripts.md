@@ -10,7 +10,8 @@ This is the most common situation consultants run into, and also the most common
 
 | Option | Friction | Risk | Recommended? |
 |---|---|---|---|
-| Pull from Bitwarden at runtime | Low | None — key never touches disk or history | ✅ Yes |
+| Pull from Bitwarden via snippet | Low | None — key never touches disk or history | ✅ Yes |
+| Pull from Bitwarden directly with `bw` | Low | None | ✅ Yes |
 | Shell env var (set before running) | Low | Low — if you follow the rules below | ✅ Yes |
 | `.env` file | Medium | Medium — must never be committed | ⚠️ With care |
 | Hardcoded in the script | None | High — will end up in git | ❌ Never |
@@ -20,52 +21,77 @@ This is the most common situation consultants run into, and also the most common
 
 ## Option 1: Pull from Bitwarden at Runtime (Recommended)
 
-Store the key in Bitwarden as a login item or custom field. Retrieve it inline — the key is never written to disk, never exported to your shell environment, never in history.
+Store the key in Bitwarden once. Retrieve it at runtime — the key is never written to disk, never in shell history.
+
+### Using the snippet (recommended for bash scripts)
+
+[`snippets/bw-get-secret.sh`](../../snippets/bw-get-secret.sh) provides helper functions with built-in session management and clear error messages. Source it at the top of your script:
 
 ```bash
 #!/usr/bin/env bash
-# update-record.sh
-
 set -euo pipefail
 
-# Pull the key at runtime — not stored anywhere
-API_KEY=$(bw get password "my-api-key-item")
+# Source the helper — handles unlock, session checks, and error output
+source "$(dirname "$0")/../../snippets/bw-get-secret.sh"
+
+# bw_ensure_unlocked prompts once if the vault is locked; no-ops if already open
+bw_ensure_unlocked
+
+# Retrieve by item name — bw_get_password, bw_get_field, bw_get_note
+API_KEY=$(bw_get_password "my-api-key-item")
+trap 'unset API_KEY' EXIT INT TERM
 
 curl -s \
   -X PATCH "https://api.example.com/records/123" \
   -H "Authorization: Bearer ${API_KEY}" \
   -H "Content-Type: application/json" \
   -d '{"status": "active"}'
-
-unset API_KEY
 ```
 
-**First run — unlock Bitwarden once per session:**
+Available helpers in the snippet:
+
+| Function | What it retrieves |
+|---|---|
+| `bw_get_password "item"` | The password field of a login item |
+| `bw_get_username "item"` | The username field |
+| `bw_get_field "item" "field_name"` | A named custom field |
+| `bw_get_note "item"` | The notes field (certificates, private keys) |
+| `bw_ensure_unlocked` | Unlock once per session, no-op if already open |
+
+### Using `bw` directly (when you can't source the snippet)
+
+If you're writing a standalone script that can't reference the snippet path:
 
 ```bash
-export BW_SESSION=$(bw unlock --raw)
-# Now run your script — bw commands will work without prompting
-bash update-record.sh
-```
+#!/usr/bin/env bash
+set -euo pipefail
 
-See [`snippets/bw-get-secret.sh`](../../snippets/bw-get-secret.sh) for helper functions like `bw_ensure_unlocked` that handle the session automatically.
+# Unlock once per session — skip if BW_SESSION is already set
+if [[ -z "${BW_SESSION:-}" ]]; then
+  BW_SESSION=$(bw unlock --raw) || { echo "❌ Failed to unlock Bitwarden" >&2; exit 1; }
+  export BW_SESSION
+fi
+
+API_KEY=$(bw get password "my-api-key-item" --session "$BW_SESSION") \
+  || { echo "❌ Could not retrieve API key from Bitwarden" >&2; exit 1; }
+trap 'unset API_KEY' EXIT INT TERM
+
+curl -s \
+  -X PATCH "https://api.example.com/records/123" \
+  -H "Authorization: Bearer ${API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d '{"status": "active"}'
+```
 
 ---
 
 ## Option 2: Shell Environment Variable
 
-Set the key in your current shell session, run the script, then unset it. The key lives in memory only and is never written to the script file.
-
-**Set without saving to history** (prefix with a space — requires `HISTCONTROL=ignorespace`):
+Set the key in your current shell session, run the script, then unset it. Useful when the script itself shouldn't know anything about Bitwarden.
 
 ```bash
-#  export API_KEY=sk-abc123   # leading space — not saved to ~/.bash_history
-```
-
-**Or retrieve from Bitwarden/Vault for the session:**
-
-```bash
-export API_KEY=$(bw get password "my-api-key-item")
+# Retrieve from Bitwarden into your shell, then run the script
+export API_KEY=$(bw get password "my-api-key-item" --session "$BW_SESSION")
 bash update-record.sh
 unset API_KEY
 ```
@@ -76,7 +102,7 @@ unset API_KEY
 #!/usr/bin/env bash
 set -euo pipefail
 
-: "${API_KEY:?API_KEY is not set. Run: export API_KEY=\$(bw get password \"my-api-key-item\")}"
+: "${API_KEY:?API_KEY is not set. Export it first: export API_KEY=\$(bw get password \"item-name\" --session \"\$BW_SESSION\")}"
 
 curl -s \
   -X PATCH "https://api.example.com/records/123" \
@@ -94,7 +120,7 @@ The `: "${VAR:?message}"` pattern exits immediately with a clear error if the va
 If you must use a `.env` file, follow these rules without exception:
 
 1. **Add `.env` to `.gitignore` before creating the file**
-2. Never send the file over Slack, email, or any chat tool
+2. Never send the `.env` file over Slack, email, or chat
 3. Delete the file when the script is no longer needed
 
 ```bash
@@ -104,61 +130,185 @@ If you must use a `.env` file, follow these rules without exception:
 ```
 
 ```bash
-# .env  — never commit this
+# .env — never commit this
 API_KEY=sk-abc123
 API_BASE_URL=https://api.example.com
 ```
 
-Load and run in a single command so the values don't persist in your shell:
+Load for the duration of the command only:
 
 ```bash
-# Load .env only for the duration of this command
+# Bash — scoped to this one command
 env $(grep -v '^#' .env | xargs) bash update-record.sh
 
-# Or with dotenv-cli
-dotenv -- bash update-record.sh
-```
-
-```bash
-# Python — load from .env using python-dotenv
-pip install python-dotenv
-```
-
-```python
-# update_record.py
-import os
-import httpx
-from dotenv import load_dotenv
-
-load_dotenv()  # loads .env if present, falls back to real env vars
-
-api_key = os.environ["API_KEY"]  # raises KeyError if missing — intentional
-base_url = os.environ["API_BASE_URL"]
-
-response = httpx.patch(
-    f"{base_url}/records/123",
-    headers={"Authorization": f"Bearer {api_key}"},
-    json={"status": "active"},
-)
-response.raise_for_status()
-print(response.json())
+# Or with inject-env.sh (see snippets/)
+./snippets/inject-env.sh bitwarden "my-service" -- bash update-record.sh
 ```
 
 ---
 
-## Cleanup Pattern (Bash)
+## Complete Examples
 
-Use `trap` to ensure the key is always unset, even if the script fails:
+### Bash
+
+A fully self-contained script using the snippet. Copy, adjust the item name and endpoint, run.
 
 ```bash
 #!/usr/bin/env bash
+# update-record.sh — patch a record at an API endpoint
+#
+# Requires: bw (Bitwarden CLI), jq
+# Usage:    bash update-record.sh
+#
+# Store your API key in Bitwarden as a login item named "my-api-key-item".
+# The script will prompt to unlock the vault once per session.
+
 set -euo pipefail
 
-API_KEY=$(bw get password "my-api-key-item")
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SNIPPET="${SCRIPT_DIR}/../../snippets/bw-get-secret.sh"
+
+if [[ ! -f "$SNIPPET" ]]; then
+  echo "❌ bw-get-secret.sh not found at: $SNIPPET" >&2
+  echo "   Clone the repo or adjust the path." >&2
+  exit 1
+fi
+
+source "$SNIPPET"
+bw_ensure_unlocked
+
+# --- Configuration ---
+BW_ITEM="my-api-key-item"        # Name of the Bitwarden item
+API_BASE="https://api.example.com"
+RECORD_ID="123"
+
+# --- Retrieve secret ---
+API_KEY=$(bw_get_password "$BW_ITEM")
 trap 'unset API_KEY' EXIT INT TERM
 
-# ... do work ...
+# --- Do the work ---
+response=$(curl -s -w "\n%{http_code}" \
+  -X PATCH "${API_BASE}/records/${RECORD_ID}" \
+  -H "Authorization: Bearer ${API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d '{"status": "active"}')
+
+body=$(echo "$response" | head -n -1)
+status=$(echo "$response" | tail -n 1)
+
+if [[ "$status" -ge 200 && "$status" -lt 300 ]]; then
+  echo "✅ Updated (HTTP ${status}): $(echo "$body" | jq -c '.' 2>/dev/null || echo "$body")"
+else
+  echo "❌ Request failed (HTTP ${status}): $body" >&2
+  exit 1
+fi
 ```
+
+### Python
+
+Two patterns depending on how you want to supply the key.
+
+**Pattern A — inject via environment (cleanest, no Bitwarden dependency in the script):**
+
+```bash
+# Run it — key comes from Bitwarden, script reads from env
+export BW_SESSION=$(bw unlock --raw)
+API_KEY=$(bw get password "my-api-key-item" --session "$BW_SESSION") \
+  python update_record.py
+```
+
+```python
+#!/usr/bin/env python3
+# update_record.py — patch a record at an API endpoint
+#
+# Requires: httpx  (pip install httpx)
+# Usage:    API_KEY=<key> python update_record.py
+#           Or use inject-env.sh / export from bw before running.
+
+import os
+import sys
+import httpx
+
+API_BASE = "https://api.example.com"
+RECORD_ID = "123"
+
+# Fail fast with a clear message — don't let a missing key produce a silent 401
+api_key = os.environ.get("API_KEY")
+if not api_key:
+    sys.exit(
+        "❌ API_KEY is not set.\n"
+        "   Export it first:\n"
+        "     export BW_SESSION=$(bw unlock --raw)\n"
+        '     export API_KEY=$(bw get password "my-api-key-item" --session "$BW_SESSION")'
+    )
+
+try:
+    response = httpx.patch(
+        f"{API_BASE}/records/{RECORD_ID}",
+        headers={"Authorization": f"Bearer {api_key}"},
+        json={"status": "active"},
+        timeout=10,
+    )
+    response.raise_for_status()
+    print(f"✅ Updated (HTTP {response.status_code}):", response.json())
+except httpx.HTTPStatusError as e:
+    sys.exit(f"❌ Request failed (HTTP {e.response.status_code}): {e.response.text}")
+except httpx.RequestError as e:
+    sys.exit(f"❌ Network error: {e}")
+```
+
+**Pattern B — call `bw` from within the script (no pre-export needed):**
+
+```python
+#!/usr/bin/env python3
+# update_record.py — fetches its own key from Bitwarden via subprocess
+#
+# Requires: httpx  (pip install httpx)
+# Usage:    python update_record.py
+#           Vault will prompt once if BW_SESSION is not already set.
+
+import os
+import sys
+import subprocess
+import httpx
+
+API_BASE = "https://api.example.com"
+RECORD_ID = "123"
+BW_ITEM = "my-api-key-item"
+
+
+def bw_get_password(item_name: str) -> str:
+    session = os.environ.get("BW_SESSION", "")
+    cmd = ["bw", "get", "password", item_name]
+    if session:
+        cmd += ["--session", session]
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        sys.exit(f"❌ Could not retrieve '{item_name}' from Bitwarden: {result.stderr.strip()}")
+    return result.stdout.strip()
+
+
+api_key = bw_get_password(BW_ITEM)
+
+try:
+    response = httpx.patch(
+        f"{API_BASE}/records/{RECORD_ID}",
+        headers={"Authorization": f"Bearer {api_key}"},
+        json={"status": "active"},
+        timeout=10,
+    )
+    response.raise_for_status()
+    print(f"✅ Updated (HTTP {response.status_code}):", response.json())
+except httpx.HTTPStatusError as e:
+    sys.exit(f"❌ Request failed (HTTP {e.response.status_code}): {e.response.text}")
+except httpx.RequestError as e:
+    sys.exit(f"❌ Network error: {e}")
+finally:
+    del api_key  # clear from memory
+```
+
+> **Which pattern?** Use Pattern A when the script is simple or you control how it's launched. Use Pattern B when the script needs to be fully self-contained and you don't want to manage exports manually.
 
 ---
 
@@ -168,10 +318,10 @@ trap 'unset API_KEY' EXIT INT TERM
 # ❌ Hardcoded in the script — will end up in git
 curl -H "Authorization: Bearer sk-abc123secret" https://api.example.com
 
-# ❌ Passed as a CLI argument — visible in `ps aux`
+# ❌ Passed as a CLI argument — visible in `ps aux` and shell history
 ./update-record.sh sk-abc123secret
 
-# ❌ Echoed into the script from the shell — ends up in history
+# ❌ Echoed into a config file
 echo "API_KEY=sk-abc123" >> config.sh
 
 # ❌ Committed .env file — even in a "private" repo
@@ -183,19 +333,19 @@ git add .env && git commit -m "add config"
 ## Quick Reference
 
 ```bash
-# Store the key in Bitwarden (one time)
-bw create item  # or use the Bitwarden desktop app
-
-# Unlock Bitwarden for the session
+# Unlock Bitwarden for the session (once)
 export BW_SESSION=$(bw unlock --raw)
 
-# Run your script with the key pulled at runtime
-API_KEY=$(bw get password "item-name") bash update-record.sh
+# Option A: source the snippet, use helpers
+source snippets/bw-get-secret.sh
+API_KEY=$(bw_get_password "my-api-key-item")
 
-# Or export for the session and unset after
-export API_KEY=$(bw get password "item-name")
-bash update-record.sh
-unset API_KEY
+# Option B: call bw directly
+API_KEY=$(bw get password "my-api-key-item" --session "$BW_SESSION")
+
+# Option C: inject into a script without touching your shell
+./snippets/inject-env.sh bitwarden "my-api-key-item" -- bash update-record.sh
+./snippets/inject-env.sh bitwarden "my-api-key-item" -- python update_record.py
 ```
 
 ---
