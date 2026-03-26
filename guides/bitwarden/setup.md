@@ -1,5 +1,17 @@
 # Bitwarden CLI — Setup Guide
 
+## Which Bitwarden product do you need?
+
+Bitwarden has two separate products with different access models:
+
+| | **Password Manager** (this guide) | **Secrets Manager** |
+|---|---|---|
+| Use for | Personal credentials, team vault | Application code, CI/CD, scripts |
+| Access via | `bw` CLI + BW_SESSION | SDK + access token |
+| Guide | ← you are here | [secrets-manager-sdk.md](secrets-manager-sdk.md) |
+
+---
+
 ## Prerequisites
 
 - Node.js ≥ 18 (for `npm` install) OR download the standalone binary
@@ -128,3 +140,4 @@ fi
 
 - [Storing and retrieving secrets](usage.md)
 - [Using Bitwarden in scripts](scripting.md)
+- [Bitwarden Secrets Manager SDK](secrets-manager-sdk.md) — for application code and CI/CD

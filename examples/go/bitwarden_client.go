@@ -1,155 +1,169 @@
-// bitwarden_client.go — Retrieve secrets from Bitwarden via the bw CLI.
+// bitwarden_client.go — Retrieve secrets from Bitwarden Secrets Manager via the official SDK.
+//
+// This example uses the Bitwarden Secrets Manager product, designed for
+// machine-to-machine access (CI/CD, applications). It uses access tokens —
+// NOT the BW_SESSION used by the bw CLI for the personal vault.
 //
 // Prerequisites:
 //   go mod tidy
-//   bw login (or bw login --apikey)
-//   export BW_SESSION=$(bw unlock --raw)
+//
+//   # In Bitwarden: Organisation → Secrets Manager → Service Accounts
+//   # Create a service account, generate an access token, note the org ID.
+//   export BWS_ACCESS_TOKEN="0.your-access-token..."
+//   export BWS_ORGANIZATION_ID="your-org-uuid"
 //
 // Usage:
 //   go run bitwarden_client.go
+//
+// Docs: https://bitwarden.com/help/secrets-manager-overview/
+// SDK:  https://github.com/bitwarden/sdk-go
 
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
-	"strings"
+
+	sdk "github.com/bitwarden/sdk-go"
 )
 
-// BitwardenItem represents a Bitwarden vault item (partial).
-type BitwardenItem struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	Notes string `json:"notes"`
-	Login struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-	} `json:"login"`
-	Fields []struct {
-		Name  string `json:"name"`
-		Value string `json:"value"`
-	} `json:"fields"`
+// BitwardenSecretsClient wraps the Bitwarden Secrets Manager SDK client.
+type BitwardenSecretsClient struct {
+	client sdk.BitwardenClientInterface
+	orgID  string
 }
 
-// BitwardenClient wraps the bw CLI.
-type BitwardenClient struct {
-	session string
-}
-
-// NewBitwardenClient creates a client using the BW_SESSION environment variable.
-func NewBitwardenClient() (*BitwardenClient, error) {
-	session := os.Getenv("BW_SESSION")
-	if session == "" {
-		return nil, fmt.Errorf("BW_SESSION is not set — run: export BW_SESSION=$(bw unlock --raw)")
+// NewBitwardenSecretsClient creates and authenticates a Secrets Manager client.
+func NewBitwardenSecretsClient() (*BitwardenSecretsClient, error) {
+	accessToken := os.Getenv("BWS_ACCESS_TOKEN")
+	if accessToken == "" {
+		return nil, fmt.Errorf(
+			"BWS_ACCESS_TOKEN is not set\n" +
+				"Generate one under: Organisation → Secrets Manager → Service Accounts",
+		)
 	}
-	c := &BitwardenClient{session: session}
-	if err := c.verifyUnlocked(); err != nil {
-		return nil, err
-	}
-	return c, nil
-}
 
-func (c *BitwardenClient) run(args ...string) (string, error) {
-	args = append(args, "--session", c.session, "--nointeraction")
-	cmd := exec.Command("bw", args...)
-	out, err := cmd.Output()
+	orgID := os.Getenv("BWS_ORGANIZATION_ID")
+	if orgID == "" {
+		return nil, fmt.Errorf(
+			"BWS_ORGANIZATION_ID is not set\n" +
+				"Find it under: Organisation Settings in the Bitwarden web app",
+		)
+	}
+
+	apiURL := "https://api.bitwarden.com"
+	identityURL := "https://identity.bitwarden.com"
+
+	client, err := sdk.NewBitwardenClient(&apiURL, &identityURL)
 	if err != nil {
-		return "", fmt.Errorf("bw %s: %w", strings.Join(args[:len(args)-2], " "), err)
+		return nil, fmt.Errorf("creating Bitwarden client: %w", err)
 	}
-	return strings.TrimSpace(string(out)), nil
+
+	// stateFile persists auth state between calls; nil disables it.
+	var stateFile *string
+	if sf := os.Getenv("BWS_STATE_FILE"); sf != "" {
+		stateFile = &sf
+	}
+
+	// v1.0.0 API: AccessTokenLogin is a top-level method on the client.
+	if err := client.AccessTokenLogin(accessToken, stateFile); err != nil {
+		client.Close()
+		return nil, fmt.Errorf("authenticating with access token: %w", err)
+	}
+
+	return &BitwardenSecretsClient{client: client, orgID: orgID}, nil
 }
 
-func (c *BitwardenClient) verifyUnlocked() error {
-	out, err := c.run("status")
-	if err != nil || !strings.Contains(out, `"status":"unlocked"`) {
-		return fmt.Errorf("Bitwarden vault is locked or session key is invalid")
+// Close releases the underlying SDK client resources.
+func (c *BitwardenSecretsClient) Close() {
+	c.client.Close()
+}
+
+// GetSecretByID retrieves a secret value by its UUID.
+func (c *BitwardenSecretsClient) GetSecretByID(secretID string) (string, error) {
+	response, err := c.client.Secrets().Get(secretID)
+	if err != nil {
+		return "", fmt.Errorf("getting secret %q: %w", secretID, err)
+	}
+	return response.Value, nil
+}
+
+// GetSecretByKey retrieves a secret value by its human-readable key name.
+// Prefer GetSecretByID when the UUID is known — it avoids an extra API call.
+func (c *BitwardenSecretsClient) GetSecretByKey(key string) (string, error) {
+	secrets, err := c.client.Secrets().List(c.orgID)
+	if err != nil {
+		return "", fmt.Errorf("listing secrets: %w", err)
+	}
+	for _, s := range secrets.Data {
+		if s.Key == key {
+			return c.GetSecretByID(s.ID)
+		}
+	}
+	return "", fmt.Errorf("secret with key %q not found in organisation", key)
+}
+
+// ListSecrets returns all secrets (key + ID only; values are not included).
+func (c *BitwardenSecretsClient) ListSecrets() ([]sdk.SecretIdentifierResponse, error) {
+	response, err := c.client.Secrets().List(c.orgID)
+	if err != nil {
+		return nil, fmt.Errorf("listing secrets: %w", err)
+	}
+	return response.Data, nil
+}
+
+// CreateSecret creates a new secret and returns its UUID.
+func (c *BitwardenSecretsClient) CreateSecret(key, value, note string, projectIDs []string) (string, error) {
+	response, err := c.client.Secrets().Create(key, value, note, c.orgID, projectIDs)
+	if err != nil {
+		return "", fmt.Errorf("creating secret %q: %w", key, err)
+	}
+	return response.ID, nil
+}
+
+// UpdateSecret updates an existing secret by UUID.
+func (c *BitwardenSecretsClient) UpdateSecret(secretID, key, value, note string, projectIDs []string) error {
+	_, err := c.client.Secrets().Update(secretID, key, value, note, c.orgID, projectIDs)
+	if err != nil {
+		return fmt.Errorf("updating secret %q: %w", secretID, err)
 	}
 	return nil
 }
 
-// Sync syncs the vault from the server.
-func (c *BitwardenClient) Sync() error {
-	_, err := c.run("sync")
-	return err
-}
-
-// GetItem retrieves a full item by name.
-func (c *BitwardenClient) GetItem(itemName string) (*BitwardenItem, error) {
-	out, err := c.run("get", "item", itemName)
+// DeleteSecrets deletes one or more secrets by UUID.
+func (c *BitwardenSecretsClient) DeleteSecrets(secretIDs []string) error {
+	_, err := c.client.Secrets().Delete(secretIDs)
 	if err != nil {
-		return nil, fmt.Errorf("item %q not found: %w", itemName, err)
+		return fmt.Errorf("deleting secrets: %w", err)
 	}
-	var item BitwardenItem
-	if err := json.Unmarshal([]byte(out), &item); err != nil {
-		return nil, fmt.Errorf("parsing item JSON: %w", err)
-	}
-	return &item, nil
-}
-
-// GetPassword retrieves the password of a login item by name.
-func (c *BitwardenClient) GetPassword(itemName string) (string, error) {
-	out, err := c.run("get", "password", itemName)
-	if err != nil || out == "" {
-		return "", fmt.Errorf("password for %q not found: %w", itemName, err)
-	}
-	return out, nil
-}
-
-// GetField retrieves a custom field from a named item.
-func (c *BitwardenClient) GetField(itemName, fieldName string) (string, error) {
-	item, err := c.GetItem(itemName)
-	if err != nil {
-		return "", err
-	}
-	for _, f := range item.Fields {
-		if f.Name == fieldName {
-			return f.Value, nil
-		}
-	}
-	return "", fmt.Errorf("field %q not found in item %q", fieldName, itemName)
-}
-
-// ListItems returns all items matching an optional search term.
-func (c *BitwardenClient) ListItems(search string) ([]BitwardenItem, error) {
-	args := []string{"list", "items"}
-	if search != "" {
-		args = append(args, "--search", search)
-	}
-	out, err := c.run(args...)
-	if err != nil {
-		return nil, err
-	}
-	var items []BitwardenItem
-	if err := json.Unmarshal([]byte(out), &items); err != nil {
-		return nil, fmt.Errorf("parsing items JSON: %w", err)
-	}
-	return items, nil
+	return nil
 }
 
 func main() {
-	client, err := NewBitwardenClient()
+	bws, err := NewBitwardenSecretsClient()
 	if err != nil {
-		log.Fatalf("Failed to create Bitwarden client: %v", err)
+		log.Fatalf("Failed to create Bitwarden Secrets Manager client: %v", err)
+	}
+	defer bws.Close()
+
+	// List all secrets (key + ID only — values not included in listing)
+	secrets, err := bws.ListSecrets()
+	if err != nil {
+		log.Fatalf("ListSecrets error: %v", err)
+	}
+	fmt.Printf("Organisation has %d secret(s):\n", len(secrets))
+	for _, s := range secrets {
+		fmt.Printf("  %s  (%s)\n", s.Key, s.ID)
 	}
 
-	items, err := client.ListItems("github")
-	if err != nil {
-		log.Fatalf("ListItems error: %v", err)
-	}
-	fmt.Printf("Found %d item(s) matching 'github'\n", len(items))
-
-	if len(items) > 0 {
-		item := items[0]
-		fmt.Printf("First match: %s\n", item.Name)
-
-		password, err := client.GetPassword(item.Name)
+	if len(secrets) > 0 {
+		first := secrets[0]
+		value, err := bws.GetSecretByID(first.ID)
 		if err != nil {
-			fmt.Printf("Could not retrieve password: %v\n", err)
+			fmt.Printf("Could not retrieve secret: %v\n", err)
 		} else {
-			fmt.Printf("Password retrieved (length: %d)\n", len(password))
+			fmt.Printf("\nFirst secret '%s' value length: %d\n", first.Key, len(value))
 		}
 	}
 }

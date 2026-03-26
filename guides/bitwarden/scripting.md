@@ -145,11 +145,14 @@ trap 'bw lock >/dev/null 2>&1' EXIT
 
 Full working Bitwarden clients are available in the [examples](../../examples/) directory:
 
-| Language | File |
-|----------|------|
-| Bash | [`examples/bash/bitwarden-client.sh`](../../examples/bash/bitwarden-client.sh) |
-| Python | [`examples/python/bitwarden_client.py`](../../examples/python/bitwarden_client.py) |
-| Go | [`examples/go/bitwarden_client.go`](../../examples/go/bitwarden_client.go) |
-| TypeScript | [`examples/typescript/bitwarden-client.ts`](../../examples/typescript/bitwarden-client.ts) |
+| Language | File | Product |
+|----------|------|---------|
+| Bash | [`examples/bash/bitwarden-client.sh`](../../examples/bash/bitwarden-client.sh) | Password Manager (bw CLI) |
+| Python | [`examples/python/bitwarden_client.py`](../../examples/python/bitwarden_client.py) | Secrets Manager (SDK) |
+| Go | [`examples/go/bitwarden_client.go`](../../examples/go/bitwarden_client.go) | Secrets Manager (SDK) |
+| TypeScript | [`examples/typescript/bitwarden-client.ts`](../../examples/typescript/bitwarden-client.ts) | Secrets Manager (SDK) |
+
+For Bitwarden **Secrets Manager** SDK usage (Python, Go, TypeScript), see the dedicated guide:
+[guides/bitwarden/secrets-manager-sdk.md](secrets-manager-sdk.md).
 
 For shell-level secret injection (exporting Bitwarden fields as env vars), see [`inject-env.sh`](../../snippets/inject-env.sh).

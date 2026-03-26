@@ -15,31 +15,75 @@
 
 ## Rules
 
-1. **Never commit `.env` to version control** — add `.env` to `.gitignore`
-2. **Never send `.env` files over Slack, email, or chat**
-3. **Always use `.env.example` or `.env.template`** — a version-controlled file with keys but no values
-4. **Prefer runtime injection** over persistent `.env` files for production-adjacent environments
+1. **Never put secret values directly in `.env` files** — use references to Vault or Bitwarden instead
+2. **Never commit `.env` to version control** — add `.env` to `.gitignore`
+3. **Never send `.env` files over Slack, email, or chat**
+4. **Always use `.env.example`** — a version-controlled file with reference syntax, not real values
+5. **Prefer runtime injection** over persistent `.env` files for production-adjacent environments
 
 ---
 
-## .env.example Pattern
+## .env Reference Pattern (Recommended)
 
-Check in a template with placeholder values:
+Instead of storing secrets in `.env` files, store **references** that are resolved at runtime by your secret manager. This file is safe to commit because it contains no real values.
 
 ```bash
-# .env.example — commit this
+# .env.example — safe to commit (references, not secrets)
+DATABASE_URL=bw://prod-db/password
+DATABASE_USER=bw://prod-db/username
+STRIPE_SECRET_KEY=bw://stripe-api/field:secret_key
+INTERNAL_API_TOKEN=vault://secret/myproject/app#api_token
+```
+
+Resolve references at runtime using [`snippets/resolve-env-refs.sh`](../../snippets/resolve-env-refs.sh):
+
+```bash
+# Mode 1 — exec (recommended): inject directly, no shell exposure
+./snippets/resolve-env-refs.sh .env.example -- node server.js
+./snippets/resolve-env-refs.sh .env.example -- python app.py
+
+# Mode 2 — source into current shell (safe alternative to eval)
+source <(./snippets/resolve-env-refs.sh .env.example)
+```
+
+> ⚠️ **Never use `eval "$(./resolve-env-refs.sh ...)"`** — `eval` re-interprets secret values
+> as shell code, enabling injection attacks if a secret contains `$(...)` or backticks.
+> Use `source <(...)` instead.
+
+### Reference syntax
+
+**Bitwarden Password Manager** (resolved via `bw` CLI):
+
+| Reference | Retrieves |
+|-----------|-----------|
+| `bw://item-name` | Password field (default) |
+| `bw://item-name/password` | Password field |
+| `bw://item-name/username` | Username field |
+| `bw://item-name/note` | Notes field |
+| `bw://item-name/field:fname` | Custom field named `fname` |
+
+**HashiCorp Vault** (resolved via `vault` CLI):
+
+| Reference | Retrieves |
+|-----------|-----------|
+| `vault://secret/path#field` | Single field from KV path |
+| `vault://secret/path` | All fields from KV path as `KEY=value` |
+
+---
+
+## .env.example Pattern (legacy — without references)
+
+If your team is not yet using the reference pattern, the minimum is to check in placeholder values with no real secrets:
+
+```bash
+# .env.example — commit this (old pattern — no references, no real values)
 DATABASE_URL=postgresql://user:password@localhost:5432/mydb
 STRIPE_API_KEY=sk_test_<YOUR_KEY_HERE>
 AWS_ACCESS_KEY_ID=<YOUR_AWS_KEY>
 AWS_SECRET_ACCESS_KEY=<YOUR_AWS_SECRET>
 ```
 
-Each developer creates their own `.env` locally from the template:
-
-```bash
-cp .env.example .env
-# Then fill in real values from Vault or Bitwarden
-```
+Each developer then creates their own `.env` locally from the template, filling in values retrieved from Vault or Bitwarden. **Migrate to the reference pattern above** to eliminate this manual step.
 
 ---
 
@@ -55,9 +99,8 @@ Use tools that load `.env` only for the duration of the command:
 brew install direnv
 # Add to shell: eval "$(direnv hook zsh)"
 
-# .envrc
-export DATABASE_URL=$(vault kv get -field=url secret/myproject/db)
-export STRIPE_API_KEY=$(bw get password "stripe-api-key")
+# .envrc — resolves references at directory entry
+eval "$(./snippets/resolve-env-refs.sh .env.example)"
 ```
 
 ```bash
@@ -148,4 +191,5 @@ docker secret create db_password - < <(vault kv get -field=password secret/db)
 ## Related
 
 - [Shell security](shell-security.md)
+- [resolve-env-refs.sh snippet](../../snippets/resolve-env-refs.sh)
 - [inject-env.sh snippet](../../snippets/inject-env.sh)

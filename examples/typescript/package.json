@@ -8,6 +8,7 @@
     "bitwarden": "ts-node bitwarden-client.ts"
   },
   "dependencies": {
+    "@bitwarden/sdk-napi": "^1.0.0",
     "node-vault": "^0.10.0"
   },
   "devDependencies": {

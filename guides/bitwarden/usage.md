@@ -136,12 +136,17 @@ bw export --format json --session "$BW_SESSION"
 
 ---
 
-## Snippet
+## Snippet and SDK
 
 [`bw-get-secret.sh`](../../snippets/bw-get-secret.sh) wraps the commands above into reusable shell functions (`bw_get_password`, `bw_get_field`, `bw_get_note`, etc.) that handle session management automatically. See [snippets/README.md](../../snippets/README.md) for usage.
+
+For **application code** (Python, Go, TypeScript), use the **Bitwarden Secrets Manager SDK** instead of the CLI. The SDK uses machine access tokens, not BW_SESSION, and is designed for programmatic use:
+
+→ [Bitwarden Secrets Manager SDK guide](secrets-manager-sdk.md)
 
 ---
 
 ## Next Steps
 
 - [Using Bitwarden in scripts](scripting.md)
+- [Bitwarden Secrets Manager SDK](secrets-manager-sdk.md)

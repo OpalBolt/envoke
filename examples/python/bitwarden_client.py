@@ -1,109 +1,155 @@
 """
-bitwarden_client.py — Retrieve secrets from Bitwarden via the bw CLI.
+bitwarden_client.py — Retrieve secrets from Bitwarden Secrets Manager via the official SDK.
+
+This example uses the Bitwarden Secrets Manager product, which is designed for
+machine-to-machine access (CI/CD, applications). It uses access tokens — NOT
+the BW_SESSION used by the bw CLI for the personal vault.
 
 Prerequisites:
     pip install -r requirements.txt
-    bw login (or bw login --apikey)
-    export BW_SESSION=$(bw unlock --raw)
+
+    # In Bitwarden: Organisation → Secrets Manager → Service Accounts
+    # Create a service account, generate an access token, note the org ID.
+    export BWS_ACCESS_TOKEN="0.your-access-token..."
+    export BWS_ORGANIZATION_ID="your-org-uuid"
 
 Usage:
     python bitwarden_client.py
+
+Docs: https://bitwarden.com/help/secrets-manager-overview/
+SDK:  https://github.com/bitwarden/sdk-python
 """
 
-import json
 import os
-import subprocess
 import sys
 
+from bitwarden_sdk import BitwardenClient, client_settings_from_dict
 
-class BitwardenClient:
-    """Thin wrapper around the Bitwarden CLI (`bw`)."""
 
-    def __init__(self, session: str | None = None):
-        self.session = session or os.environ.get("BW_SESSION", "")
-        if not self.session:
-            raise EnvironmentError(
-                "BW_SESSION is not set. Run: export BW_SESSION=$(bw unlock --raw)"
-            )
-        self._verify_unlocked()
+def _make_client(
+    api_url: str = "https://api.bitwarden.com",
+    identity_url: str = "https://identity.bitwarden.com",
+) -> BitwardenClient:
+    """Create and authenticate a Bitwarden Secrets Manager client."""
+    access_token = os.environ.get("BWS_ACCESS_TOKEN", "")
+    if not access_token:
+        raise EnvironmentError(
+            "BWS_ACCESS_TOKEN is not set.\n"
+            "Generate one under: Organisation → Secrets Manager → Service Accounts"
+        )
 
-    def _run(self, args: list[str], check: bool = True) -> subprocess.CompletedProcess:
-        """Run a bw CLI command with the session key."""
-        cmd = ["bw"] + args + ["--session", self.session, "--nointeraction"]
-        return subprocess.run(cmd, capture_output=True, text=True, check=check)
+    client = BitwardenClient(
+        settings=client_settings_from_dict({
+            "apiUrl": api_url,
+            "identityUrl": identity_url,
+            "userAgent": "bitwarden-sdk-python-example/1.0",
+            "deviceType": "SDK",
+        })
+    )
 
-    def _verify_unlocked(self) -> None:
-        result = self._run(["status"], check=False)
-        if result.returncode != 0 or '"status":"unlocked"' not in result.stdout:
-            raise PermissionError("Bitwarden vault is locked or session key is invalid.")
+    # state_file persists the auth state between calls (optional, pass "" to disable)
+    state_file = os.environ.get("BWS_STATE_FILE", "")
+    client.auth().login_access_token(access_token, state_file)
+    return client
 
-    def sync(self) -> None:
-        """Sync vault from server."""
-        self._run(["sync"])
 
-    def get_password(self, item_name: str) -> str:
-        """Retrieve the password for a login item by name."""
-        result = self._run(["get", "password", item_name], check=False)
-        if result.returncode != 0 or not result.stdout.strip():
-            raise KeyError(f"Item '{item_name}' not found or has no password.")
-        return result.stdout.strip()
+def get_secret_by_id(client: BitwardenClient, secret_id: str) -> str:
+    """Retrieve a secret value by its UUID."""
+    response = client.secrets().get(secret_id)
+    return response.data.value
 
-    def get_username(self, item_name: str) -> str:
-        """Retrieve the username for a login item by name."""
-        result = self._run(["get", "username", item_name])
-        return result.stdout.strip()
 
-    def get_item(self, item_name: str) -> dict:
-        """Retrieve the full item JSON by name."""
-        result = self._run(["get", "item", item_name], check=False)
-        if result.returncode != 0:
-            raise KeyError(f"Item '{item_name}' not found.")
-        return json.loads(result.stdout)
+def get_secret_by_key(client: BitwardenClient, organization_id: str, key: str) -> str:
+    """Retrieve a secret value by its human-readable key name.
 
-    def get_field(self, item_name: str, field_name: str) -> str:
-        """Retrieve a custom field value from an item."""
-        item = self.get_item(item_name)
-        fields = item.get("fields") or []
-        for field in fields:
-            if field.get("name") == field_name:
-                return field.get("value", "")
-        raise KeyError(f"Field '{field_name}' not found in item '{item_name}'.")
+    Requires listing all secrets first. Prefer get_secret_by_id when the
+    UUID is known — it avoids the extra API call.
+    """
+    response = client.secrets().list(organization_id)
+    for summary in response.data.data:
+        if summary.key == key:
+            return get_secret_by_id(client, summary.id)
+    raise KeyError(f"Secret with key '{key}' not found in organisation.")
 
-    def get_note(self, item_name: str) -> str:
-        """Retrieve the notes of an item (e.g. a certificate or config blob)."""
-        result = self._run(["get", "notes", item_name])
-        return result.stdout.strip()
 
-    def list_items(self, search: str | None = None) -> list[dict]:
-        """List vault items, optionally filtered by a search term."""
-        args = ["list", "items"]
-        if search:
-            args += ["--search", search]
-        result = self._run(args)
-        return json.loads(result.stdout)
+def list_secrets(client: BitwardenClient, organization_id: str) -> list[dict]:
+    """Return a list of {id, key} dicts for all secrets in the organisation.
+
+    Values are NOT included — fetch individually with get_secret_by_id.
+    """
+    response = client.secrets().list(organization_id)
+    return [{"id": s.id, "key": s.key} for s in response.data.data]
+
+
+def create_secret(
+    client: BitwardenClient,
+    organization_id: str,
+    key: str,
+    value: str,
+    note: str = "",
+    project_ids: list[str] | None = None,
+) -> str:
+    """Create a new secret and return its UUID."""
+    response = client.secrets().create(
+        key=key,
+        value=value,
+        note=note,
+        organization_id=organization_id,
+        project_ids=project_ids or [],
+    )
+    return response.data.id
+
+
+def update_secret(
+    client: BitwardenClient,
+    secret_id: str,
+    organization_id: str,
+    key: str,
+    value: str,
+    note: str = "",
+    project_ids: list[str] | None = None,
+) -> None:
+    """Update an existing secret by UUID."""
+    client.secrets().update(
+        id=secret_id,
+        key=key,
+        value=value,
+        note=note,
+        organization_id=organization_id,
+        project_ids=project_ids or [],
+    )
+
+
+def delete_secrets(client: BitwardenClient, secret_ids: list[str]) -> None:
+    """Delete one or more secrets by UUID list."""
+    client.secrets().delete(secret_ids)
 
 
 def demo() -> None:
+    org_id = os.environ.get("BWS_ORGANIZATION_ID", "")
+    if not org_id:
+        sys.exit(
+            "ERROR: BWS_ORGANIZATION_ID is not set.\n"
+            "Find it under: Organisation Settings in the Bitwarden web app."
+        )
+
     try:
-        client = BitwardenClient()
-    except (EnvironmentError, PermissionError) as e:
+        client = _make_client()
+    except EnvironmentError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         sys.exit(1)
 
-    # Search for items
-    items = client.list_items(search="github")
-    print(f"Found {len(items)} item(s) matching 'github'")
+    # List all secrets (keys only — values are not included in the listing)
+    secrets = list_secrets(client, org_id)
+    print(f"Organisation has {len(secrets)} secret(s):")
+    for s in secrets:
+        print(f"  {s['key']}  ({s['id']})")
 
-    if items:
-        item = items[0]
-        print(f"First match: {item.get('name')}")
-
-        # Get password (don't print in real code)
-        try:
-            password = client.get_password(item["name"])
-            print(f"Password retrieved (length: {len(password)})")
-        except KeyError as e:
-            print(f"Could not retrieve password: {e}")
+    if secrets:
+        # Retrieve the full value for the first secret
+        first = secrets[0]
+        value = get_secret_by_id(client, first["id"])
+        print(f"\nFirst secret '{first['key']}' value length: {len(value)}")
 
 
 if __name__ == "__main__":

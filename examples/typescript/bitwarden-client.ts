@@ -1,136 +1,155 @@
 /**
- * bitwarden-client.ts — Retrieve secrets from Bitwarden via the bw CLI.
+ * bitwarden-client.ts — Retrieve secrets from Bitwarden Secrets Manager via the official SDK.
+ *
+ * This example uses the Bitwarden Secrets Manager product, designed for
+ * machine-to-machine access (CI/CD, applications). It uses access tokens —
+ * NOT the BW_SESSION used by the bw CLI for the personal vault.
  *
  * Prerequisites:
  *   npm install
- *   bw login (or bw login --apikey)
- *   export BW_SESSION=$(bw unlock --raw)
+ *
+ *   # In Bitwarden: Organisation → Secrets Manager → Service Accounts
+ *   # Create a service account, generate an access token, note the org ID.
+ *   export BWS_ACCESS_TOKEN="0.your-access-token..."
+ *   export BWS_ORGANIZATION_ID="your-org-uuid"
  *
  * Usage:
  *   npx ts-node bitwarden-client.ts
+ *
+ * Docs: https://bitwarden.com/help/secrets-manager-overview/
+ * SDK:  https://github.com/bitwarden/sdk (languages/js)
  */
 
-import { execSync, ExecSyncOptionsWithStringEncoding } from "child_process";
+import * as bitwarden from "@bitwarden/sdk-napi";
 
-interface BitwardenLogin {
-  username?: string;
-  password?: string;
-}
-
-interface BitwardenField {
-  name: string;
-  value: string;
-  type: number;
-}
-
-interface BitwardenItem {
+interface SecretSummary {
   id: string;
-  name: string;
-  notes?: string;
-  login?: BitwardenLogin;
-  fields?: BitwardenField[];
+  key: string;
 }
 
-class BitwardenClient {
-  private readonly session: string;
+class BitwardenSecretsClient {
+  private client: bitwarden.BitwardenClient;
+  private readonly orgId: string;
 
-  constructor(session?: string) {
-    this.session = session ?? process.env.BW_SESSION ?? "";
-    if (!this.session) {
+  constructor(client: bitwarden.BitwardenClient, orgId: string) {
+    this.client = client;
+    this.orgId = orgId;
+  }
+
+  static async create(
+    apiUrl = "https://api.bitwarden.com",
+    identityUrl = "https://identity.bitwarden.com",
+  ): Promise<BitwardenSecretsClient> {
+    const accessToken = process.env.BWS_ACCESS_TOKEN;
+    if (!accessToken) {
       throw new Error(
-        "BW_SESSION is not set — run: export BW_SESSION=$(bw unlock --raw)"
+        "BWS_ACCESS_TOKEN is not set.\n" +
+          "Generate one under: Organisation → Secrets Manager → Service Accounts",
       );
     }
-    this.verifyUnlocked();
-  }
 
-  private run(args: string[]): string {
-    const opts: ExecSyncOptionsWithStringEncoding = {
-      encoding: "utf-8",
-      env: { ...process.env, BW_SESSION: this.session },
-      stdio: ["pipe", "pipe", "pipe"],
-    };
-    try {
-      return execSync(
-        ["bw", ...args, "--session", this.session, "--nointeraction"].join(" "),
-        opts
-      ).trim();
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      throw new Error(`bw ${args[0]} failed: ${msg}`);
+    const orgId = process.env.BWS_ORGANIZATION_ID;
+    if (!orgId) {
+      throw new Error(
+        "BWS_ORGANIZATION_ID is not set.\n" +
+          "Find it under: Organisation Settings in the Bitwarden web app.",
+      );
     }
+
+    const client = new bitwarden.BitwardenClient({
+      apiUrl,
+      identityUrl,
+      userAgent: "bitwarden-sdk-ts-example/1.0",
+      deviceType: bitwarden.DeviceType.SDK,
+    });
+
+    // stateFile persists auth state between calls; pass "" to disable.
+    const stateFile = process.env.BWS_STATE_FILE ?? "";
+    await client.auth().loginAccessToken(accessToken, stateFile);
+
+    return new BitwardenSecretsClient(client, orgId);
   }
 
-  private verifyUnlocked(): void {
-    const status = this.run(["status"]);
-    if (!status.includes('"status":"unlocked"')) {
-      throw new Error("Bitwarden vault is locked or session key is invalid.");
+  /** Retrieve a secret value by its UUID. */
+  async getSecretById(secretId: string): Promise<string> {
+    const response = await this.client.secrets().get(secretId);
+    return response.value;
+  }
+
+  /**
+   * Retrieve a secret value by its human-readable key name.
+   * Prefer getSecretById when the UUID is known — it avoids an extra API call.
+   */
+  async getSecretByKey(key: string): Promise<string> {
+    const secrets = await this.listSecrets();
+    const match = secrets.find((s) => s.key === key);
+    if (!match) {
+      throw new Error(`Secret with key "${key}" not found in organisation.`);
     }
+    return this.getSecretById(match.id);
   }
 
-  sync(): void {
-    this.run(["sync"]);
+  /** List all secrets (key + ID only; values are NOT included). */
+  async listSecrets(): Promise<SecretSummary[]> {
+    const response = await this.client.secrets().list(this.orgId);
+    return response.data.map((s) => ({ id: s.id, key: s.key }));
   }
 
-  getItem(itemName: string): BitwardenItem {
-    const json = this.run(["get", "item", `"${itemName}"`]);
-    return JSON.parse(json) as BitwardenItem;
+  /** Create a new secret and return its UUID. */
+  async createSecret(
+    key: string,
+    value: string,
+    note = "",
+    projectIds: string[] = [],
+  ): Promise<string> {
+    const response = await this.client
+      .secrets()
+      .create(this.orgId, key, value, note, projectIds);
+    return response.id;
   }
 
-  getPassword(itemName: string): string {
-    const result = this.run(["get", "password", `"${itemName}"`]);
-    if (!result) {
-      throw new Error(`Password for "${itemName}" not found.`);
-    }
-    return result;
+  /** Update an existing secret by UUID. */
+  async updateSecret(
+    secretId: string,
+    key: string,
+    value: string,
+    note = "",
+    projectIds: string[] = [],
+  ): Promise<void> {
+    await this.client
+      .secrets()
+      .update(this.orgId, secretId, key, value, note, projectIds);
   }
 
-  getUsername(itemName: string): string {
-    return this.run(["get", "username", `"${itemName}"`]);
-  }
-
-  getField(itemName: string, fieldName: string): string {
-    const item = this.getItem(itemName);
-    const field = item.fields?.find((f) => f.name === fieldName);
-    if (!field) {
-      throw new Error(`Field "${fieldName}" not found in item "${itemName}".`);
-    }
-    return field.value;
-  }
-
-  getNote(itemName: string): string {
-    return this.run(["get", "notes", `"${itemName}"`]);
-  }
-
-  listItems(search?: string): BitwardenItem[] {
-    const args = ["list", "items"];
-    if (search) args.push("--search", search);
-    const json = this.run(args);
-    return JSON.parse(json) as BitwardenItem[];
+  /** Delete one or more secrets by UUID list. */
+  async deleteSecrets(secretIds: string[]): Promise<void> {
+    await this.client.secrets().delete(secretIds);
   }
 }
 
-function main(): void {
-  let client: BitwardenClient;
+async function main(): Promise<void> {
+  let bws: BitwardenSecretsClient;
   try {
-    client = new BitwardenClient();
+    bws = await BitwardenSecretsClient.create();
   } catch (err) {
     console.error(`ERROR: ${(err as Error).message}`);
     process.exit(1);
   }
 
-  const items = client.listItems("github");
-  console.log(`Found ${items.length} item(s) matching 'github'`);
+  // List all secrets (keys only — values not included in listing)
+  const secrets = await bws.listSecrets();
+  console.log(`Organisation has ${secrets.length} secret(s):`);
+  for (const s of secrets) {
+    console.log(`  ${s.key}  (${s.id})`);
+  }
 
-  if (items.length > 0) {
-    const item = items[0];
-    console.log(`First match: ${item.name}`);
-
+  if (secrets.length > 0) {
+    const first = secrets[0];
     try {
-      const password = client.getPassword(item.name);
-      console.log(`Password retrieved (length: ${password.length})`);
+      const value = await bws.getSecretById(first.id);
+      console.log(`\nFirst secret '${first.key}' value length: ${value.length}`);
     } catch (err) {
-      console.log(`Could not retrieve password: ${(err as Error).message}`);
+      console.log(`Could not retrieve secret: ${(err as Error).message}`);
     }
   }
 }

@@ -1,0 +1,277 @@
+#!/usr/bin/env bash
+# resolve-env-refs.sh — Resolve bw:// and vault:// references in a .env file.
+#
+# Instead of storing actual secrets in .env files, store references:
+#
+#   DATABASE_URL=bw://prod-db/password
+#   DATABASE_USER=bw://prod-db/username
+#   STRIPE_KEY=bw://stripe-api/field:api_key
+#   VAULT_TOKEN=vault://secret/myproject/stripe#secret_key
+#
+# USAGE MODES
+#
+#   Mode 1 — exec (recommended, no shell injection risk):
+#     ./snippets/resolve-env-refs.sh .env.example -- node server.js
+#     Resolves references and execs the command with the env vars set.
+#     Resolved values never enter your shell; no eval needed.
+#
+#   Mode 2 — source (safe for loading into current shell):
+#     source <(./snippets/resolve-env-refs.sh .env.example)
+#     Outputs shell-escaped "export KEY=VALUE" lines — use source, NOT eval.
+#
+# ⚠️  NEVER use:  eval "$(./snippets/resolve-env-refs.sh .env.example)"
+#     eval re-interprets secret values as shell code, enabling injection attacks.
+#     Use "source <(...)" or exec mode instead.
+#
+# Reference formats:
+#
+#   Bitwarden Password Manager (bw CLI):
+#     bw://item-name              → password field (default)
+#     bw://item-name/password     → password field
+#     bw://item-name/username     → username field
+#     bw://item-name/note         → notes field
+#     bw://item-name/field:fname  → custom field named "fname"
+#
+#   HashiCorp Vault KV v2:
+#     vault://secret/path         → all fields (one export per field)
+#     vault://secret/path#field   → single field value
+#
+# Prerequisites:
+#   Bitwarden: bw CLI installed; BW_SESSION exported or vault will be unlocked interactively
+#   Vault:     vault CLI installed; VAULT_ADDR and VAULT_TOKEN set
+
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# _bw_ensure_session
+#   Ensures BW_SESSION is set and exports it. Interactive unlock if needed.
+# ---------------------------------------------------------------------------
+_bw_ensure_session() {
+  if ! command -v bw >/dev/null 2>&1; then
+    echo "❌ bw CLI not found. Install: npm install -g @bitwarden/cli" >&2
+    return 1
+  fi
+
+  if [[ -z "${BW_SESSION:-}" ]]; then
+    echo "🔐 Unlocking Bitwarden vault..." >&2
+    BW_SESSION=$(bw unlock --raw) || {
+      echo "❌ Failed to unlock Bitwarden vault" >&2
+      return 1
+    }
+    export BW_SESSION
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# _resolve_bw_ref <item_name> <field_spec>
+#   Resolves a bw:// reference. Prints the raw secret value to stdout.
+#   field_spec: password | username | note | field:<name>
+# ---------------------------------------------------------------------------
+_resolve_bw_ref() {
+  local item_name="$1"
+  local field_spec="${2:-password}"
+
+  _bw_ensure_session || return 1
+
+  case "$field_spec" in
+    password)
+      bw get password "$item_name" --session "$BW_SESSION" 2>/dev/null
+      ;;
+    username)
+      bw get username "$item_name" --session "$BW_SESSION" 2>/dev/null
+      ;;
+    note|notes)
+      bw get notes "$item_name" --session "$BW_SESSION" 2>/dev/null
+      ;;
+    field:*)
+      local fname="${field_spec#field:}"
+      bw get item "$item_name" --session "$BW_SESSION" 2>/dev/null \
+        | jq -re --arg f "$fname" '.fields[]? | select(.name == $f) | .value' \
+        || { echo "❌ Field '$fname' not found in item '$item_name'" >&2; return 1; }
+      ;;
+    *)
+      echo "❌ Unknown bw field spec '$field_spec'. Use: password, username, note, field:<name>" >&2
+      return 1
+      ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# _resolve_vault_ref_single <path> <field>
+#   Resolves a single Vault KV field. Prints the raw value to stdout.
+# ---------------------------------------------------------------------------
+_resolve_vault_ref_single() {
+  local vault_path="$1"
+  local field="$2"
+
+  if ! command -v vault >/dev/null 2>&1; then
+    echo "❌ vault CLI not found. See: https://developer.hashicorp.com/vault/docs/install" >&2
+    return 1
+  fi
+
+  : "${VAULT_ADDR:?VAULT_ADDR must be set for vault:// references}"
+
+  vault kv get -field="$field" "$vault_path" 2>/dev/null || {
+    echo "❌ Field '$field' not found at vault path '$vault_path'" >&2
+    return 1
+  }
+}
+
+# ---------------------------------------------------------------------------
+# _resolve_env_file_nul <file>
+#   Core resolver. Emits NUL-delimited KEY\0VALUE\0 pairs for every resolved
+#   entry. NUL as delimiter ensures values containing spaces, newlines, or
+#   any other special characters are handled correctly throughout.
+#
+#   For vault:// paths without a #field, emits one pair per KV field using
+#   the vault field name (uppercased) as the key.
+# ---------------------------------------------------------------------------
+_resolve_env_file_nul() {
+  local env_file="${1:?Usage: _resolve_env_file_nul <file>}"
+
+  if [[ ! -f "$env_file" ]]; then
+    echo "❌ File not found: $env_file" >&2
+    return 1
+  fi
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    # Skip blank lines and comments
+    [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+    # Skip lines without '='
+    [[ "$line" != *=* ]] && continue
+
+    local key="${line%%=*}"
+    local value="${line#*=}"
+
+    # Validate key: must be a legal shell variable name. Reject anything else
+    # to prevent injection when the output is sourced (e.g. a key of "$(cmd)").
+    if [[ ! "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+      echo "❌ Invalid env var name '$key' in $env_file — skipping (keys must match [A-Za-z_][A-Za-z0-9_]*)" >&2
+      continue
+    fi
+
+    # Strip surrounding quotes
+    if [[ "$value" =~ ^\"(.*)\"$ ]]; then
+      value="${BASH_REMATCH[1]}"
+    elif [[ "$value" =~ ^\'(.*)\'$ ]]; then
+      value="${BASH_REMATCH[1]}"
+    fi
+
+    if [[ "$value" == bw://* ]]; then
+      local ref="${value#bw://}"
+      local item_name field_spec
+
+      if [[ "$ref" == */* ]]; then
+        item_name="${ref%%/*}"
+        field_spec="${ref#*/}"
+      else
+        item_name="$ref"
+        field_spec="password"
+      fi
+
+      local resolved
+      resolved=$(_resolve_bw_ref "$item_name" "$field_spec") || return 1
+      printf '%s\0%s\0' "$key" "$resolved"
+
+    elif [[ "$value" == vault://* ]]; then
+      local ref="${value#vault://}"
+
+      if [[ "$ref" == *#* ]]; then
+        local vault_path="${ref%%#*}"
+        local field="${ref#*#}"
+        local resolved
+        resolved=$(_resolve_vault_ref_single "$vault_path" "$field") || return 1
+        printf '%s\0%s\0' "$key" "$resolved"
+      else
+        # All fields from vault path.
+        # jq -j with \u0000 produces NUL-delimited KEY\0VALUE\0 pairs directly,
+        # so values containing newlines or spaces are preserved exactly.
+        if ! command -v vault >/dev/null 2>&1; then
+          echo "❌ vault CLI not found." >&2; return 1
+        fi
+        : "${VAULT_ADDR:?VAULT_ADDR must be set for vault:// references}"
+        vault kv get -format=json "$ref" 2>/dev/null \
+          | jq -j '.data.data // .data | to_entries[] | "\(.key | ascii_upcase)\u0000\(.value)\u0000"' \
+          || { echo "❌ Could not read vault path '$ref'" >&2; return 1; }
+      fi
+
+    else
+      printf '%s\0%s\0' "$key" "$value"
+    fi
+
+  done < "$env_file"
+}
+
+# ---------------------------------------------------------------------------
+# resolve_env_file <file>
+#   Public API for source mode. Reads the .env file, resolves references,
+#   and prints shell-escaped "export KEY=VALUE" lines safe for:
+#     source <(./snippets/resolve-env-refs.sh .env.example)
+# ---------------------------------------------------------------------------
+resolve_env_file() {
+  while IFS= read -r -d $'\0' k && IFS= read -r -d $'\0' v; do
+    # Validate key at point of emission — catches Vault-derived keys that bypass
+    # the .env-line validation (e.g. a Vault field named "$(cmd)").
+    if [[ ! "$k" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+      echo "❌ Invalid key '$k' (from resolved source) — skipping" >&2
+      continue
+    fi
+    printf 'export %s=%q\n' "$k" "$v"
+  done < <(_resolve_env_file_nul "${1:?Usage: resolve_env_file <file>}")
+}
+
+# ---------------------------------------------------------------------------
+# Main
+#   With "-- command": resolve and exec the command with vars injected.
+#   Without "--": emit shell-escaped exports for "source <(...)".
+# ---------------------------------------------------------------------------
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  if [[ $# -eq 0 ]]; then
+    cat >&2 <<'EOF'
+Usage:
+  # Mode 1 — exec (recommended, safe for any secret value):
+  resolve-env-refs.sh <env-file> -- <command> [args...]
+
+  # Mode 2 — source into current shell:
+  source <(resolve-env-refs.sh <env-file>)
+
+  ⚠️  Never use eval — use "source <(...)".
+
+Reference formats in your .env.example:
+  DATABASE_PASSWORD=bw://prod-db/password
+  DATABASE_USER=bw://prod-db/username
+  STRIPE_KEY=bw://stripe-api/field:api_key
+  VAULT_SECRET=vault://secret/myproject/app#api_key
+  VAULT_ALL=vault://secret/myproject/app
+EOF
+    exit 1
+  fi
+
+  env_file="$1"
+  shift
+
+  if [[ "${1:-}" == "--" ]]; then
+    shift
+    if [[ $# -eq 0 ]]; then
+      echo "❌ No command specified after '--'" >&2
+      exit 1
+    fi
+
+    # Build env array directly from NUL-delimited pairs — no re-parsing, no eval.
+    # Values are kept byte-for-byte as emitted by the resolvers.
+    # Key validation here is defence-in-depth (exec mode is not injection-prone,
+    # but we reject garbage keys to avoid passing nonsense to the child process).
+    declare -a env_vars=()
+    while IFS= read -r -d $'\0' k && IFS= read -r -d $'\0' v; do
+      if [[ ! "$k" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+        echo "❌ Invalid key '$k' (from resolved source) — skipping" >&2
+        continue
+      fi
+      env_vars+=("${k}=${v}")
+    done < <(_resolve_env_file_nul "$env_file")
+
+    exec env "${env_vars[@]}" "$@"
+  else
+    resolve_env_file "$env_file"
+  fi
+fi

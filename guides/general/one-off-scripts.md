@@ -115,9 +115,29 @@ The `: "${VAR:?message}"` pattern exits immediately with a clear error if the va
 
 ---
 
-## Option 3: .env File (Use With Care)
+## Option 3: .env File with References (Use With Care)
 
-If you must use a `.env` file, follow these rules without exception:
+Never put actual secret values in a `.env` file. Instead, use references that are resolved at runtime:
+
+```bash
+# .env.example — safe to commit (references, not real secrets)
+API_KEY=bw://my-api-key-item/password
+API_BASE_URL=https://api.example.com
+```
+
+Resolve references before running your command:
+
+```bash
+# Resolve and inject into a child process (recommended)
+./snippets/resolve-env-refs.sh .env.example -- bash update-record.sh
+
+# Or resolve into the current shell (safe — use source, not eval)
+source <(./snippets/resolve-env-refs.sh .env.example)
+bash update-record.sh
+unset API_KEY
+```
+
+If you must use a `.env` file with literal values (legacy), follow these rules without exception:
 
 1. **Add `.env` to `.gitignore` before creating the file**
 2. Never send the `.env` file over Slack, email, or chat
@@ -127,12 +147,6 @@ If you must use a `.env` file, follow these rules without exception:
 # .gitignore — add this BEFORE creating .env
 .env
 *.env
-```
-
-```bash
-# .env — never commit this
-API_KEY=sk-abc123
-API_BASE_URL=https://api.example.com
 ```
 
 Load for the duration of the command only:
@@ -326,6 +340,9 @@ echo "API_KEY=sk-abc123" >> config.sh
 
 # ❌ Committed .env file — even in a "private" repo
 git add .env && git commit -m "add config"
+
+# ❌ Real secret value in .env.example — defeats the purpose
+echo "API_KEY=sk-abc123real" > .env.example  # NO — use bw://item-name/field instead
 ```
 
 ---
@@ -346,6 +363,10 @@ API_KEY=$(bw get password "my-api-key-item" --session "$BW_SESSION")
 # Option C: inject into a script without touching your shell
 ./snippets/inject-env.sh bitwarden "my-api-key-item" -- bash update-record.sh
 ./snippets/inject-env.sh bitwarden "my-api-key-item" -- python update_record.py
+
+# Option D: .env.example with references (team-friendly, safe to commit)
+#   .env.example contains: API_KEY=bw://my-api-key-item/password
+./snippets/resolve-env-refs.sh .env.example -- bash update-record.sh
 ```
 
 ---
@@ -354,6 +375,7 @@ API_KEY=$(bw get password "my-api-key-item" --session "$BW_SESSION")
 
 - [bw-get-secret.sh snippet](../../snippets/bw-get-secret.sh)
 - [inject-env.sh snippet](../../snippets/inject-env.sh)
+- [resolve-env-refs.sh snippet](../../snippets/resolve-env-refs.sh)
 - [Bitwarden setup guide](../bitwarden/setup.md)
 - [Bitwarden scripting guide](../bitwarden/scripting.md)
 - [.env file security](env-files.md)

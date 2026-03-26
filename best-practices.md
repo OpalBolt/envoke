@@ -9,14 +9,19 @@ A quick reference for consultants working with sensitive credentials.
 ### Storage
 - Store secrets in **Vault** or **Bitwarden** — never in plaintext files
 - Use **short-lived / dynamic credentials** where possible (Vault dynamic secrets)
-- Use **`.env.example`** (with placeholders) instead of committing real `.env` files
+- Use **`.env.example` with references** (`bw://item/field`, `vault://path#field`) — never plaintext values, never real secrets
 - Encrypt files before sharing if you must transfer credentials (GPG, age)
 
 ### Runtime
 - Inject secrets as **environment variables at runtime**, not baked into config files
+- Use `resolve-env-refs.sh` to resolve `bw://` / `vault://` references from `.env.example` at runtime: `./resolve-env-refs.sh .env.example -- command` (exec mode) or `source <(./resolve-env-refs.sh .env.example)` (shell mode — never `eval`)
 - Use `eval "$(vault kv get ...)"` or `inject-env.sh` to scope secrets to a single process
 - **Unset** sensitive environment variables after use: `unset API_KEY`
 - Use a `trap ... EXIT` to clean up secrets in scripts
+
+### Application Code
+- Use the **Bitwarden Secrets Manager SDK** (`bitwarden-sdk`, `sdk-go`, `@bitwarden/sdk-napi`) for Python/Go/TypeScript application code — not subprocess calls to the `bw` CLI
+- Use `bw` CLI only for personal vault / shell scripts; use the SDK for app code and CI/CD
 
 ### Git
 - Add `.env`, `*.pem`, `*.key`, `kubeconfig` to **`.gitignore`** (and global gitignore)
@@ -78,7 +83,8 @@ Where do I store this secret?
 | Write to Vault | `vault kv put secret/path key=value` |
 | Read from Vault | `vault kv get -field=key secret/path` |
 | Unlock Bitwarden | `export BW_SESSION=$(bw unlock --raw)` |
-| Get from Bitwarden | `bw get password "item-name"` |
+| Get from Bitwarden (CLI) | `bw get password "item-name"` |
+| Resolve .env references | `./snippets/resolve-env-refs.sh .env.example -- command` |
 | Inject into process | `./snippets/inject-env.sh vault secret/path -- command` |
 | Scan for leaked secrets | `gitleaks protect --staged` |
 | Check shell history for secrets | `history \| grep -iE "key\|secret\|password\|token"` |
@@ -96,6 +102,7 @@ Where do I store this secret?
 | Vault dynamic secrets | [guides/vault/dynamic-secrets.md](guides/vault/dynamic-secrets.md) |
 | Bitwarden setup | [guides/bitwarden/setup.md](guides/bitwarden/setup.md) |
 | Bitwarden scripting | [guides/bitwarden/scripting.md](guides/bitwarden/scripting.md) |
+| **Bitwarden Secrets Manager SDK** | [guides/bitwarden/secrets-manager-sdk.md](guides/bitwarden/secrets-manager-sdk.md) |
 | Git security | [guides/general/git-security.md](guides/general/git-security.md) |
 | .env file security | [guides/general/env-files.md](guides/general/env-files.md) |
 | Shell security | [guides/general/shell-security.md](guides/general/shell-security.md) |
