@@ -90,6 +90,7 @@ Where do I store this secret?
 
 | Topic | Guide |
 |---|---|
+| One-off scripts | [guides/general/one-off-scripts.md](guides/general/one-off-scripts.md) |
 | Vault setup | [guides/vault/setup.md](guides/vault/setup.md) |
 | Vault authentication | [guides/vault/authentication.md](guides/vault/authentication.md) |
 | Vault dynamic secrets | [guides/vault/dynamic-secrets.md](guides/vault/dynamic-secrets.md) |

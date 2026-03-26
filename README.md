@@ -243,6 +243,7 @@ Detailed step-by-step guides in [`guides/`](guides/).
 
 | Guide | Description |
 |---|---|
+| [one-off-scripts.md](guides/general/one-off-scripts.md) | **Start here** — keys for quick API scripts (most common use case) |
 | [git-security.md](guides/general/git-security.md) | Pre-commit hooks, `.gitignore`, `gitleaks` |
 | [env-files.md](guides/general/env-files.md) | Secure handling of `.env` files |
 | [shell-security.md](guides/general/shell-security.md) | Avoid secrets in history and `ps` output |
