@@ -31,15 +31,14 @@
 #   references in the file itself, exports resolved values, then returns early
 #   so the raw reference strings below are never executed as shell assignments.
 #   An unload_env() cleanup function is defined and registered on EXIT.
+#   If a different .env was previously loaded, it is unloaded first.
 #
-#   The `declare -f resolve_env_file &>/dev/null` guard ensures the loader
-#   actually loaded (curl can fail silently via process substitution — without
-#   this guard, a failed fetch would still skip the raw assignments below).
+#   Works in bash and zsh — no shell-specific syntax required in the .env file.
 #
 #   # .env
 #   source <(curl -fsSL "https://raw.githubusercontent.com/eficode/secure-handling-of-secrets/<SHA>/snippets/resolve-env-refs.sh") \
-#     && declare -f resolve_env_file &>/dev/null \
-#     && source <(resolve_env_file "${BASH_SOURCE[0]}") \
+#     && declare -f _load_self_env &>/dev/null \
+#     && _load_self_env \
 #     && return 0 2>/dev/null; true
 #
 #   DATABASE_URL=bw://prod-db/password
@@ -49,7 +48,6 @@
 #   Then: source .env          # resolves refs, sets EXIT cleanup trap
 #         unload_env           # manual cleanup (also fires automatically on EXIT)
 #
-#   ⚠️  Zsh users: replace ${BASH_SOURCE[0]} with ${(%):-%x}
 #   ⚠️  The EXIT trap from resolve_env_file replaces any pre-existing EXIT trap.
 #       To chain with an existing trap: trap 'unload_env; your_existing_cleanup' EXIT
 #
@@ -251,17 +249,63 @@ _resolve_env_file_nul() {
 }
 
 # ---------------------------------------------------------------------------
+# _load_self_env
+#   Shell-portable self-loader. Detects bash or zsh, introspects the call
+#   stack to find the .env file that sourced it, and calls resolve_env_file
+#   on that file. If a previous env is active (_LOADED_ENV_FILE is set),
+#   it is unloaded first so stale secrets never accumulate.
+#
+#   Used by the self-loading .env first-line pattern:
+#     source <(curl -fsSL "https://.../resolve-env-refs.sh") \
+#       && declare -f _load_self_env &>/dev/null \
+#       && _load_self_env \
+#       && return 0 2>/dev/null; true
+# ---------------------------------------------------------------------------
+_load_self_env() {
+  local _env_file
+
+  if [[ -n "${BASH_VERSION:-}" ]]; then
+    # BASH_SOURCE[1] = the file that called this function
+    _env_file="${BASH_SOURCE[1]}"
+  elif [[ -n "${ZSH_VERSION:-}" ]]; then
+    # funcfiletrace[1] = "filename:lineno" of the call site; strip the line number
+    local _ft="${funcfiletrace[1]}"
+    _env_file="${_ft%:*}"
+  else
+    echo "❌ resolve-env-refs: unsupported shell (bash or zsh required)" >&2
+    return 1
+  fi
+
+  if [[ -z "${_env_file:-}" || ! -f "${_env_file}" ]]; then
+    echo "❌ resolve-env-refs: cannot determine caller file; use resolve_env_file <path> instead" >&2
+    return 1
+  fi
+
+  # Unload any previously active env before loading the new one.
+  # Prints a message when switching projects so the change is visible.
+  if [[ -n "${_LOADED_ENV_FILE:-}" ]]; then
+    if [[ "${_LOADED_ENV_FILE}" != "${_env_file}" ]]; then
+      echo "🔄 Switching env: ${_LOADED_ENV_FILE} → ${_env_file}" >&2
+    fi
+    { type unload_env &>/dev/null && unload_env; } 2>/dev/null || true
+  fi
+
+  source <(resolve_env_file "${_env_file}")
+}
+
+# ---------------------------------------------------------------------------
 # resolve_env_file <file>
 #   Public API for source mode. Reads the .env file, resolves references,
 #   and prints shell-escaped "export KEY=VALUE" lines safe for:
 #     source <(./snippets/resolve-env-refs.sh .env.example)
 #
-#   When sourced outside of direnv, also emits an unload_env() function and
-#   registers it as an EXIT trap so resolved secrets are automatically unset
-#   when the shell session ends. Call unload_env manually to deactivate early.
+#   When sourced outside of direnv, also emits:
+#     - _LOADED_ENV_FILE  — tracks which file is currently active
+#     - unload_env()      — idempotent cleanup function
+#     - trap unload_env EXIT — auto-cleanup when the shell exits
 #
-#   Inside direnv, no trap is emitted — direnv tracks env diffs and reverts
-#   them automatically when you leave the directory.
+#   Inside direnv, no tracking or trap is emitted — direnv manages its own
+#   env diff and reverts changes automatically when you leave the directory.
 # ---------------------------------------------------------------------------
 resolve_env_file() {
   local _file="${1:?Usage: resolve_env_file <file>}"
@@ -281,9 +325,9 @@ resolve_env_file() {
 
   # Emit cleanup — skip inside direnv (it manages its own env diff and revert)
   if [[ ${#_keys[@]} -gt 0 ]] && [[ -z "${DIRENV_DIR:-}" ]]; then
-    # Accumulate across multiple resolve_env_file calls in the same session
     printf '_LOADED_ENV_VARS="${_LOADED_ENV_VARS:+${_LOADED_ENV_VARS} }%s"\n' "${_keys[*]}"
-    printf 'unload_env() { [[ -n "${_LOADED_ENV_VARS:-}" ]] && unset ${_LOADED_ENV_VARS} 2>/dev/null; unset _LOADED_ENV_VARS 2>/dev/null; }\n'
+    printf '_LOADED_ENV_FILE=%q\n' "$_file"
+    printf 'unload_env() { [[ -n "${_LOADED_ENV_VARS:-}" ]] && unset ${_LOADED_ENV_VARS} 2>/dev/null; unset _LOADED_ENV_VARS _LOADED_ENV_FILE 2>/dev/null; }\n'
     printf 'trap unload_env EXIT\n'
   fi
 }
@@ -293,7 +337,7 @@ resolve_env_file() {
 #   With "-- command": resolve and exec the command with vars injected.
 #   Without "--": emit shell-escaped exports for "source <(...)".
 # ---------------------------------------------------------------------------
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+if [[ "${BASH_SOURCE[0]:-}" == "${0}" ]]; then
   if [[ $# -eq 0 ]]; then
     cat >&2 <<'EOF'
 Usage:

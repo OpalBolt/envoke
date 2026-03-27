@@ -41,6 +41,9 @@
             pkgs.jq
           ];
 
+          # Adding this to suppress deprecation warnings from bitwarden-cli, which is a dependency of this project. 
+          env.NODE_OPTIONS = "--no-deprecation";
+
           shellHook = ''
             echo "secrets dev shell ready – bw, vault, python, go, node/ts available"
           '';

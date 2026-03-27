@@ -58,13 +58,13 @@ source_url "https://raw.githubusercontent.com/eficode/secure-handling-of-secrets
 source <(resolve_env_file .env)
 ```
 
-**Self-loading `.env` — resolves on `source .env`, registers EXIT cleanup trap:**
+**Self-loading `.env` — bash/zsh auto-detected, unloads previous env automatically:**
 
 ```bash
 # .env (line 1 does all the work)
 source <(curl -fsSL "https://raw.githubusercontent.com/eficode/secure-handling-of-secrets/<SHA>/snippets/resolve-env-refs.sh") \
-  && declare -f resolve_env_file &>/dev/null \
-  && source <(resolve_env_file "${BASH_SOURCE[0]}") \
+  && declare -f _load_self_env &>/dev/null \
+  && _load_self_env \
   && return 0 2>/dev/null; true
 
 DATABASE_URL=bw://prod-db/password

@@ -45,27 +45,32 @@ direnv allow .   # grant permission once per project
 
 ### Pattern 2 — self-loading .env (standalone shell)
 
-Put the loader as line 1 of your `.env`. When you `source .env`, the script fetches the resolver, processes all `bw://` and `vault://` references, exports the resolved values, and exits early — the raw reference strings below are **never executed as shell assignments**. An `unload_env` function is registered on `EXIT` for cleanup.
+Put the loader as line 1 of your `.env`. When you `source .env`, the script:
+1. Fetches the resolver from GitHub (with `declare -f` guard to detect curl failures)
+2. Detects bash or zsh automatically — no shell-specific syntax needed
+3. Unloads any previously active env (prints a message when switching projects)
+4. Resolves all `bw://` and `vault://` references and exports the values
+5. Returns early so the raw reference strings below never execute as shell assignments
+6. Registers `unload_env()` + `trap unload_env EXIT` for cleanup
 
 ```bash
 # .env
 source <(curl -fsSL "https://raw.githubusercontent.com/eficode/secure-handling-of-secrets/<SHA>/snippets/resolve-env-refs.sh") \
-  && declare -f resolve_env_file &>/dev/null \
-  && source <(resolve_env_file "${BASH_SOURCE[0]}") \
+  && declare -f _load_self_env &>/dev/null \
+  && _load_self_env \
   && return 0 2>/dev/null; true
 
-# References below are parsed by resolve_env_file above — not executed by bash:
+# References below are parsed by resolve_env_file above — not executed by bash/zsh:
 DATABASE_URL=bw://prod-db/password
 STRIPE_KEY=bw://stripe-api/field:api_key
 VAULT_TOKEN=vault://secret/myproject/app#token
 ```
 
 ```bash
-source .env        # resolves all refs, registers EXIT trap
+source .env        # resolves all refs, registers EXIT trap, unloads previous if any
 unload_env         # optional: manual cleanup before shell exits
+echo $_LOADED_ENV_FILE   # shows which env is currently active
 ```
-
-> ⚠️ **Zsh users:** replace `${BASH_SOURCE[0]}` with `${(%):-%x}`
 
 ### Pattern 3 — exec mode (safest: secrets never enter your shell)
 
