@@ -31,10 +31,10 @@ This repository standardises how to store, retrieve, and inject secrets using Va
 
 | | [Snippets](#snippets) | [Examples](#examples) |
 |---|---|---|
-| **What it is** | A small, focused shell function or script you `source` or copy-paste into your own work | A complete, runnable program in a specific language |
-| **When to use** | You need a single operation in a shell script or terminal session | You're integrating secret retrieval into application code |
-| **Scope** | One task (e.g. unlock vault, get a password, inject env) | Full client pattern including error handling, session management, and typed interfaces |
-| **How to use** | `source snippets/bw-get-secret.sh` then call the function | Copy the file into your project, install dependencies, adapt as needed |
+| **What it is** | A small, focused shell function or script you `source` or reference from GitHub | A complete, runnable program in a specific language |
+| **When to use** | You need to load secrets into your shell or inject them into a process | You're integrating secret retrieval into application code |
+| **Scope** | One task (resolve env refs, scan commits, switch kubeconfig) | Full client pattern including error handling, session management, and typed interfaces |
+| **How to use** | `source_url` in `.envrc` or `source <(curl ...)` in `.env` | Copy the file into your project, install dependencies, adapt as needed |
 | **Languages** | Bash only | Bash · Python · Go · TypeScript |
 
 **Rule of thumb:** reach for a snippet when you're automating something at the shell level. Use an example when you need secret retrieval inside application code.
@@ -43,58 +43,42 @@ This repository standardises how to store, retrieve, and inject secrets using Va
 
 ## Snippets
 
-Snippets live in [`snippets/`](snippets/). Each file is self-contained and designed to be `source`d in shell scripts or used as-is.
+Snippets live in [`snippets/`](snippets/). Each file is self-contained and designed to be `source`d in shell scripts or loaded from GitHub.
 
-### `vault-login.sh` — Vault authentication helpers
+### `resolve-env-refs.sh` — The one pattern you need
 
-```bash
-source snippets/vault-login.sh
+Store references (not secrets) in your `.env` file, resolve them at runtime via Bitwarden or Vault.
 
-vault_login_oidc              # browser-based OIDC login
-vault_login_approle "$ROLE_ID" "$SECRET_ID"   # non-interactive AppRole (CI/CD)
-vault_login_token  "$CI_VAULT_TOKEN"          # use a known token
-vault_token_renew                              # extend TTL before it expires
-vault_logout                                   # revoke token, clear env
-```
-
-Use this when: you need to authenticate to Vault before running a script and want consistent error handling without reimplementing auth logic every time.
-
----
-
-### `bw-get-secret.sh` — Bitwarden secret retrieval helpers
+**direnv (recommended) — loads on `cd`, unloads when you leave:**
 
 ```bash
-source snippets/bw-get-secret.sh
-
-bw_ensure_unlocked                        # prompts for unlock if BW_SESSION is missing/expired
-bw_get_password  "github-token"           # retrieve a login password by item name
-bw_get_username  "github-token"           # retrieve the username
-bw_get_field     "aws-prod" "access_key"  # retrieve a named custom field
-bw_get_note      "prod-tls-cert"          # retrieve the notes field (for certs / keys)
-bw_get_totp      "my-2fa-login"           # get the current TOTP code
-bw_lock                                   # lock vault and unset BW_SESSION
+# .envrc
+source_url "https://raw.githubusercontent.com/eficode/secure-handling-of-secrets/<SHA>/snippets/resolve-env-refs.sh" \
+  "sha256-<HASH>"
+source <(resolve_env_file .env)
 ```
 
-Uses the [Bitwarden CLI (`bw`)](https://github.com/bitwarden/clients) under the hood.
-Install: `brew install bitwarden-cli` or see [guides/bitwarden/setup.md](guides/bitwarden/setup.md).
-
-Use this when: you need a single secret value in a shell script without pulling in a full example.
-
----
-
-### `inject-env.sh` — Inject secrets as environment variables into a process
+**Self-loading `.env` — resolves on `source .env`, registers EXIT cleanup trap:**
 
 ```bash
-# Inject all fields from a Vault path as env vars into a command
-./snippets/inject-env.sh vault secret/myproject/dev -- node server.js
+# .env (line 1 does all the work)
+source <(curl -fsSL "https://raw.githubusercontent.com/eficode/secure-handling-of-secrets/<SHA>/snippets/resolve-env-refs.sh") \
+  && declare -f resolve_env_file &>/dev/null \
+  && source <(resolve_env_file "${BASH_SOURCE[0]}") \
+  && return 0 2>/dev/null; true
 
-# Inject from a Bitwarden item
-./snippets/inject-env.sh bitwarden "prod-api-service" -- python app.py
+DATABASE_URL=bw://prod-db/password
+STRIPE_KEY=bw://stripe-api/field:api_key
+VAULT_TOKEN=vault://secret/myproject/app#token
 ```
 
-The secrets are **never written to disk or shell history** — they are passed directly to the child process via `exec env`. When the process exits, the secrets are gone.
+**Exec mode — secrets never enter your shell:**
 
-Use this when: you want to run a local service with real credentials without exporting them to your shell.
+```bash
+./snippets/resolve-env-refs.sh .env -- node server.js
+```
+
+See [`snippets/README.md`](snippets/README.md) for the full reference syntax and security-pinning instructions.
 
 ---
 
@@ -107,8 +91,6 @@ chmod +x .git/hooks/pre-commit
 ```
 
 Blocks commits that contain patterns matching API keys, tokens, passwords, and private keys. Wraps `gitleaks` if available, falls back to regex patterns.
-
-Use this when: setting up a new project and you want a safety net before `git push`.
 
 ---
 

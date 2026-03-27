@@ -100,7 +100,7 @@ export VAULT_TOKEN="$(vault write -field=token auth/approle/login \
 
 ## Snippet
 
-[`vault-login.sh`](../../snippets/vault-login.sh) provides ready-to-source functions for all three auth methods above (`vault_login_oidc`, `vault_login_approle`, `vault_login_token`). See [snippets/README.md](../../snippets/README.md) for usage.
+[`resolve-env-refs.sh`](../../snippets/resolve-env-refs.sh) handles vault:// references directly in `.env` files and supports all three auth methods above as prerequisites. Set `VAULT_TOKEN` before using vault:// references. See [snippets/README.md](../../snippets/README.md) for the full pattern.
 
 ---
 

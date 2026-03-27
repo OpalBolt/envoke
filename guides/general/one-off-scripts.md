@@ -23,22 +23,20 @@ This is the most common situation consultants run into, and also the most common
 
 Store the key in Bitwarden once. Retrieve it at runtime — the key is never written to disk, never in shell history.
 
-### Using the snippet (recommended for bash scripts)
-
-[`snippets/bw-get-secret.sh`](../../snippets/bw-get-secret.sh) provides helper functions with built-in session management and clear error messages. Source it at the top of your script:
+### Using the bw CLI directly (recommended for bash scripts)
 
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Source the helper — handles unlock, session checks, and error output
-source "$(dirname "$0")/../../snippets/bw-get-secret.sh"
+# Unlock once per session (no-op if BW_SESSION is already set)
+if [[ -z "${BW_SESSION:-}" ]]; then
+  BW_SESSION=$(bw unlock --raw)
+  export BW_SESSION
+fi
 
-# bw_ensure_unlocked prompts once if the vault is locked; no-ops if already open
-bw_ensure_unlocked
-
-# Retrieve by item name — bw_get_password, bw_get_field, bw_get_note
-API_KEY=$(bw_get_password "my-api-key-item")
+# Retrieve the key — password field by default
+API_KEY=$(bw get password "my-api-key-item" --session "$BW_SESSION")
 trap 'unset API_KEY' EXIT INT TERM
 
 curl -s \
@@ -48,15 +46,14 @@ curl -s \
   -d '{"status": "active"}'
 ```
 
-Available helpers in the snippet:
+Available `bw get` sub-commands:
 
-| Function | What it retrieves |
-|---|---|
-| `bw_get_password "item"` | The password field of a login item |
-| `bw_get_username "item"` | The username field |
-| `bw_get_field "item" "field_name"` | A named custom field |
-| `bw_get_note "item"` | The notes field (certificates, private keys) |
-| `bw_ensure_unlocked` | Unlock once per session, no-op if already open |
+| Command | What it retrieves |
+|---------|-------------------|
+| `bw get password "item"` | The password field of a login item |
+| `bw get username "item"` | The username field |
+| `bw get notes "item"` | The notes field (certificates, private keys) |
+| `bw get item "item" \| jq -r '.fields[] \| select(.name == "fname") \| .value'` | A named custom field |
 
 ### Using `bw` directly (when you can't source the snippet)
 
@@ -155,8 +152,8 @@ Load for the duration of the command only:
 # Bash — scoped to this one command
 env $(grep -v '^#' .env | xargs) bash update-record.sh
 
-# Or with inject-env.sh (see snippets/)
-./snippets/inject-env.sh bitwarden "my-service" -- bash update-record.sh
+# Or with resolve-env-refs.sh exec mode (bw:// and vault:// refs supported)
+./snippets/resolve-env-refs.sh .env -- bash update-record.sh
 ```
 
 ---
@@ -165,7 +162,7 @@ env $(grep -v '^#' .env | xargs) bash update-record.sh
 
 ### Bash
 
-A fully self-contained script using the snippet. Copy, adjust the item name and endpoint, run.
+A fully self-contained script using the `bw` CLI directly. Copy, adjust the item name and endpoint, run.
 
 ```bash
 #!/usr/bin/env bash
@@ -179,17 +176,12 @@ A fully self-contained script using the snippet. Copy, adjust the item name and 
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SNIPPET="${SCRIPT_DIR}/../../snippets/bw-get-secret.sh"
-
-if [[ ! -f "$SNIPPET" ]]; then
-  echo "❌ bw-get-secret.sh not found at: $SNIPPET" >&2
-  echo "   Clone the repo or adjust the path." >&2
-  exit 1
+# Unlock once per session
+if [[ -z "${BW_SESSION:-}" ]]; then
+  echo "🔐 Unlocking Bitwarden vault..." >&2
+  BW_SESSION=$(bw unlock --raw) || { echo "❌ Failed to unlock Bitwarden vault" >&2; exit 1; }
+  export BW_SESSION
 fi
-
-source "$SNIPPET"
-bw_ensure_unlocked
 
 # --- Configuration ---
 BW_ITEM="my-api-key-item"        # Name of the Bitwarden item
@@ -197,7 +189,7 @@ API_BASE="https://api.example.com"
 RECORD_ID="123"
 
 # --- Retrieve secret ---
-API_KEY=$(bw_get_password "$BW_ITEM")
+API_KEY=$(bw get password "$BW_ITEM" --session "$BW_SESSION")
 trap 'unset API_KEY' EXIT INT TERM
 
 # --- Do the work ---
@@ -237,7 +229,7 @@ API_KEY=$(bw get password "my-api-key-item" --session "$BW_SESSION") \
 #
 # Requires: httpx  (pip install httpx)
 # Usage:    API_KEY=<key> python update_record.py
-#           Or use inject-env.sh / export from bw before running.
+#           Or use resolve-env-refs.sh / export from bw before running.
 
 import os
 import sys
@@ -353,28 +345,25 @@ echo "API_KEY=sk-abc123real" > .env.example  # NO — use bw://item-name/field i
 # Unlock Bitwarden for the session (once)
 export BW_SESSION=$(bw unlock --raw)
 
-# Option A: source the snippet, use helpers
-source snippets/bw-get-secret.sh
-API_KEY=$(bw_get_password "my-api-key-item")
-
-# Option B: call bw directly
+# Option A: call bw directly
 API_KEY=$(bw get password "my-api-key-item" --session "$BW_SESSION")
 
-# Option C: inject into a script without touching your shell
-./snippets/inject-env.sh bitwarden "my-api-key-item" -- bash update-record.sh
-./snippets/inject-env.sh bitwarden "my-api-key-item" -- python update_record.py
+# Option B: inject into a script without touching your shell (exec mode)
+./snippets/resolve-env-refs.sh .env -- bash update-record.sh
+./snippets/resolve-env-refs.sh .env -- python update_record.py
 
-# Option D: .env.example with references (team-friendly, safe to commit)
-#   .env.example contains: API_KEY=bw://my-api-key-item/password
-./snippets/resolve-env-refs.sh .env.example -- bash update-record.sh
+# Option C: .env with references (team-friendly, safe to commit)
+#   .env contains: API_KEY=bw://my-api-key-item/password
+./snippets/resolve-env-refs.sh .env -- bash update-record.sh
+
+# Option D: load into current shell (direnv or source .env)
+source <(./snippets/resolve-env-refs.sh .env)
 ```
 
 ---
 
 ## Related
 
-- [bw-get-secret.sh snippet](../../snippets/bw-get-secret.sh)
-- [inject-env.sh snippet](../../snippets/inject-env.sh)
 - [resolve-env-refs.sh snippet](../../snippets/resolve-env-refs.sh)
 - [Bitwarden setup guide](../bitwarden/setup.md)
 - [Bitwarden scripting guide](../bitwarden/scripting.md)

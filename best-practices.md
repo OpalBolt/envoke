@@ -15,7 +15,7 @@ A quick reference for consultants working with sensitive credentials.
 ### Runtime
 - Inject secrets as **environment variables at runtime**, not baked into config files
 - Use `resolve-env-refs.sh` to resolve `bw://` / `vault://` references from `.env.example` at runtime: `./resolve-env-refs.sh .env.example -- command` (exec mode) or `source <(./resolve-env-refs.sh .env.example)` (shell mode — never `eval`)
-- Use `eval "$(vault kv get ...)"` or `inject-env.sh` to scope secrets to a single process
+- Use `eval "$(vault kv get ...)"` to scope secrets to a single process
 - **Unset** sensitive environment variables after use: `unset API_KEY`
 - Use a `trap ... EXIT` to clean up secrets in scripts
 
@@ -85,7 +85,7 @@ Where do I store this secret?
 | Unlock Bitwarden | `export BW_SESSION=$(bw unlock --raw)` |
 | Get from Bitwarden (CLI) | `bw get password "item-name"` |
 | Resolve .env references | `./snippets/resolve-env-refs.sh .env.example -- command` |
-| Inject into process | `./snippets/inject-env.sh vault secret/path -- command` |
+| Inject into process | `./snippets/resolve-env-refs.sh .env -- command` |
 | Scan for leaked secrets | `gitleaks protect --staged` |
 | Check shell history for secrets | `history \| grep -iE "key\|secret\|password\|token"` |
 | Rotate a Vault secret | `vault kv patch secret/path key=<new-value>` |

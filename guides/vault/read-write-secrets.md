@@ -153,7 +153,11 @@ Full working Vault clients are available in the [examples](../../examples/) dire
 | Go | [`examples/go/vault_client.go`](../../examples/go/vault_client.go) |
 | TypeScript | [`examples/typescript/vault-client.ts`](../../examples/typescript/vault-client.ts) |
 
-For shell-level secret injection (exporting Vault fields as env vars), see [`inject-env.sh`](../../snippets/inject-env.sh).
+For shell-level secret injection (exporting Vault fields as env vars), use [`resolve-env-refs.sh`](../../snippets/resolve-env-refs.sh) exec mode:
+
+```bash
+./snippets/resolve-env-refs.sh .env -- node server.js
+```
 
 ---
 

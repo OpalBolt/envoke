@@ -98,9 +98,16 @@ Use tools that load `.env` only for the duration of the command:
 ```bash
 brew install direnv
 # Add to shell: eval "$(direnv hook zsh)"
+```
 
-# .envrc — resolves references at directory entry
-eval "$(./snippets/resolve-env-refs.sh .env.example)"
+Pin the resolver to a specific commit SHA (immutable) and validate with an SRI hash.
+Generate the hash: `shasum -a 256 snippets/resolve-env-refs.sh | awk '{print $1}' | xxd -r -p | base64`
+
+```bash
+# .envrc — resolves bw:// and vault:// references at directory entry
+source_url "https://raw.githubusercontent.com/eficode/secure-handling-of-secrets/<SHA>/snippets/resolve-env-refs.sh" \
+  "sha256-<HASH>"
+source <(resolve_env_file .env)
 ```
 
 ```bash
@@ -125,15 +132,14 @@ env DATABASE_URL="$(vault kv get -field=url secret/myproject/db)" node server.js
 
 ## Injecting from Vault at Runtime
 
-Instead of a `.env` file, inject at runtime from Vault:
+Instead of a `.env` file, inject directly from Vault into a child process:
 
 ```bash
-# inject-env.sh — see snippets/
-eval "$(vault kv get -format=json secret/myproject/dev | \
-  jq -r '.data.data | to_entries[] | "export \(.key | ascii_upcase)=\(.value)"')"
-```
+# Exec mode — secrets are passed directly to the process, never touch your shell
+./snippets/resolve-env-refs.sh .env -- node server.js
 
-Or use **Vault Agent** to automatically populate environment variables for a long-running process.
+# Or use Vault Agent to automatically populate environment variables for a long-running process
+```
 
 ---
 
@@ -192,4 +198,3 @@ docker secret create db_password - < <(vault kv get -field=password secret/db)
 
 - [Shell security](shell-security.md)
 - [resolve-env-refs.sh snippet](../../snippets/resolve-env-refs.sh)
-- [inject-env.sh snippet](../../snippets/inject-env.sh)

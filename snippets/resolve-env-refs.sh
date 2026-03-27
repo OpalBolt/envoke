@@ -8,7 +8,54 @@
 #   STRIPE_KEY=bw://stripe-api/field:api_key
 #   VAULT_TOKEN=vault://secret/myproject/stripe#secret_key
 #
-# USAGE MODES
+# ─────────────────────────────────────────────────────────────────────────────
+# QUICKSTART — two patterns
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Pattern 1 — direnv (recommended; security-pinned, automatic cleanup on cd away)
+#
+#   Pin the script to a specific commit SHA and validate with an SRI hash.
+#   Generate the hash: shasum -a 256 resolve-env-refs.sh | awk '{print $1}' \
+#                        | xxd -r -p | base64
+#
+#   # .envrc
+#   source_url "https://raw.githubusercontent.com/eficode/secure-handling-of-secrets/<SHA>/snippets/resolve-env-refs.sh" \
+#     "sha256-<HASH>"
+#   source <(resolve_env_file .env)
+#
+#   Then: direnv allow .
+#
+# Pattern 2 — self-loading .env (standalone shell: source .env)
+#
+#   Line 1 fetches and sources this script, resolves all bw:// and vault://
+#   references in the file itself, exports resolved values, then returns early
+#   so the raw reference strings below are never executed as shell assignments.
+#   An unload_env() cleanup function is defined and registered on EXIT.
+#
+#   The `declare -f resolve_env_file &>/dev/null` guard ensures the loader
+#   actually loaded (curl can fail silently via process substitution — without
+#   this guard, a failed fetch would still skip the raw assignments below).
+#
+#   # .env
+#   source <(curl -fsSL "https://raw.githubusercontent.com/eficode/secure-handling-of-secrets/<SHA>/snippets/resolve-env-refs.sh") \
+#     && declare -f resolve_env_file &>/dev/null \
+#     && source <(resolve_env_file "${BASH_SOURCE[0]}") \
+#     && return 0 2>/dev/null; true
+#
+#   DATABASE_URL=bw://prod-db/password
+#   STRIPE_KEY=bw://stripe-api/field:api_key
+#   VAULT_TOKEN=vault://secret/myproject/app#token
+#
+#   Then: source .env          # resolves refs, sets EXIT cleanup trap
+#         unload_env           # manual cleanup (also fires automatically on EXIT)
+#
+#   ⚠️  Zsh users: replace ${BASH_SOURCE[0]} with ${(%):-%x}
+#   ⚠️  The EXIT trap from resolve_env_file replaces any pre-existing EXIT trap.
+#       To chain with an existing trap: trap 'unload_env; your_existing_cleanup' EXIT
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# USAGE MODES (when used as a script, not sourced)
+# ─────────────────────────────────────────────────────────────────────────────
 #
 #   Mode 1 — exec (recommended, no shell injection risk):
 #     ./snippets/resolve-env-refs.sh .env.example -- node server.js
@@ -23,6 +70,7 @@
 #     eval re-interprets secret values as shell code, enabling injection attacks.
 #     Use "source <(...)" or exec mode instead.
 #
+# ─────────────────────────────────────────────────────────────────────────────
 # Reference formats:
 #
 #   Bitwarden Password Manager (bw CLI):
@@ -207,17 +255,37 @@ _resolve_env_file_nul() {
 #   Public API for source mode. Reads the .env file, resolves references,
 #   and prints shell-escaped "export KEY=VALUE" lines safe for:
 #     source <(./snippets/resolve-env-refs.sh .env.example)
+#
+#   When sourced outside of direnv, also emits an unload_env() function and
+#   registers it as an EXIT trap so resolved secrets are automatically unset
+#   when the shell session ends. Call unload_env manually to deactivate early.
+#
+#   Inside direnv, no trap is emitted — direnv tracks env diffs and reverts
+#   them automatically when you leave the directory.
 # ---------------------------------------------------------------------------
 resolve_env_file() {
-  while IFS= read -r -d $'\0' k && IFS= read -r -d $'\0' v; do
+  local _file="${1:?Usage: resolve_env_file <file>}"
+  local _k _v
+  local -a _keys=()
+
+  while IFS= read -r -d $'\0' _k && IFS= read -r -d $'\0' _v; do
     # Validate key at point of emission — catches Vault-derived keys that bypass
     # the .env-line validation (e.g. a Vault field named "$(cmd)").
-    if [[ ! "$k" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
-      echo "❌ Invalid key '$k' (from resolved source) — skipping" >&2
+    if [[ ! "$_k" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+      echo "❌ Invalid key '$_k' (from resolved source) — skipping" >&2
       continue
     fi
-    printf 'export %s=%q\n' "$k" "$v"
-  done < <(_resolve_env_file_nul "${1:?Usage: resolve_env_file <file>}")
+    printf 'export %s=%q\n' "$_k" "$_v"
+    _keys+=("$_k")
+  done < <(_resolve_env_file_nul "$_file")
+
+  # Emit cleanup — skip inside direnv (it manages its own env diff and revert)
+  if [[ ${#_keys[@]} -gt 0 ]] && [[ -z "${DIRENV_DIR:-}" ]]; then
+    # Accumulate across multiple resolve_env_file calls in the same session
+    printf '_LOADED_ENV_VARS="${_LOADED_ENV_VARS:+${_LOADED_ENV_VARS} }%s"\n' "${_keys[*]}"
+    printf 'unload_env() { [[ -n "${_LOADED_ENV_VARS:-}" ]] && unset ${_LOADED_ENV_VARS} 2>/dev/null; unset _LOADED_ENV_VARS 2>/dev/null; }\n'
+    printf 'trap unload_env EXIT\n'
+  fi
 }
 
 # ---------------------------------------------------------------------------

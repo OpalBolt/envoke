@@ -155,4 +155,8 @@ Full working Bitwarden clients are available in the [examples](../../examples/) 
 For Bitwarden **Secrets Manager** SDK usage (Python, Go, TypeScript), see the dedicated guide:
 [guides/bitwarden/secrets-manager-sdk.md](secrets-manager-sdk.md).
 
-For shell-level secret injection (exporting Bitwarden fields as env vars), see [`inject-env.sh`](../../snippets/inject-env.sh).
+For shell-level secret injection (exporting Bitwarden fields as env vars), use [`resolve-env-refs.sh`](../../snippets/resolve-env-refs.sh) exec mode:
+
+```bash
+./snippets/resolve-env-refs.sh .env -- node server.js
+```

@@ -55,9 +55,7 @@ Consultants regularly handle sensitive credentials across multiple projects and 
 │       ├── kubeconfig.md         # Secure kubeconfig management
 │       └── k8s-secrets.md        # Working with Kubernetes secrets locally
 ├── snippets/
-│   ├── vault-login.sh            # Vault authentication helpers
-│   ├── bw-get-secret.sh          # Bitwarden CLI secret retrieval
-│   ├── inject-env.sh             # Inject secrets into environment without persisting
+│   ├── resolve-env-refs.sh       # Resolve bw:// and vault:// refs; self-loading .env + direnv
 │   ├── pre-commit-hook.sh        # Git pre-commit hook to detect secrets
 │   └── kubeconfig-merge.sh       # Safely merge kubeconfig files
 ├── examples/
