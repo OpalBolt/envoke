@@ -9,7 +9,10 @@
   outputs = { self, nixpkgs, flake-utils }:
     flake-utils.lib.eachDefaultSystem (system:
       let
-        pkgs = import nixpkgs { inherit system; };
+        pkgs = import nixpkgs {
+          inherit system;
+          config.allowUnfree = true;
+        };
 
         python = pkgs.python3.withPackages (ps: [
           ps.hvac
@@ -30,9 +33,8 @@
             pkgs.go
 
             # TypeScript / Node.js
-            pkgs.nodejs
-            pkgs.nodePackages.typescript
-            pkgs.nodePackages.ts-node
+            pkgs.nodejs_24
+            pkgs.typescript
 
             # Utilities
             pkgs.git
