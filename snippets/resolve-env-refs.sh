@@ -90,22 +90,53 @@ set -euo pipefail
 
 # ---------------------------------------------------------------------------
 # _bw_ensure_session
-#   Ensures BW_SESSION is set and exports it. Interactive unlock if needed.
+#   Ensures BW_SESSION is set and exports it.
+#   Handles all three vault states:
+#     unauthenticated → bw login (interactive, or API key if BW_CLIENTID/BW_CLIENTSECRET set)
+#     locked          → bw unlock (interactive, or --passwordenv BW_PASSWORD if set)
+#     unlocked        → re-unlock to obtain a fresh session token
 # ---------------------------------------------------------------------------
 _bw_ensure_session() {
+  if [[ -n "${BW_SESSION:-}" ]]; then
+    return 0
+  fi
+
   if ! command -v bw >/dev/null 2>&1; then
     echo "❌ bw CLI not found. Install: npm install -g @bitwarden/cli" >&2
     return 1
   fi
 
-  if [[ -z "${BW_SESSION:-}" ]]; then
-    echo "🔐 Unlocking Bitwarden vault..." >&2
+  local bw_status
+  bw_status=$(bw status 2>/dev/null | jq -r '.status // empty' 2>/dev/null) || bw_status=""
+
+  if [[ "$bw_status" == "unauthenticated" ]]; then
+    echo "🔑 Logging in to Bitwarden..." >&2
+    if [[ -n "${BW_CLIENTID:-}" && -n "${BW_CLIENTSECRET:-}" ]]; then
+      bw login --apikey 2>/dev/null || {
+        echo "❌ API key login failed. Check BW_CLIENTID / BW_CLIENTSECRET." >&2
+        return 1
+      }
+    else
+      bw login || {
+        echo "❌ Failed to log in to Bitwarden" >&2
+        return 1
+      }
+    fi
+  fi
+
+  echo "🔐 Unlocking Bitwarden vault..." >&2
+  if [[ -n "${BW_PASSWORD:-}" ]]; then
+    BW_SESSION=$(bw unlock --passwordenv BW_PASSWORD --raw) || {
+      echo "❌ Failed to unlock Bitwarden vault" >&2
+      return 1
+    }
+  else
     BW_SESSION=$(bw unlock --raw) || {
       echo "❌ Failed to unlock Bitwarden vault" >&2
       return 1
     }
-    export BW_SESSION
   fi
+  export BW_SESSION
 }
 
 # ---------------------------------------------------------------------------
@@ -173,7 +204,7 @@ _resolve_vault_ref_single() {
 #   the vault field name (uppercased) as the key.
 # ---------------------------------------------------------------------------
 _resolve_env_file_nul() {
-  local env_file="${1:?Usage: _resolve_env_file_nul <file>}"
+local env_file="${1:?Usage: _resolve_env_file_nul <file>}"
 
   if [[ ! -f "$env_file" ]]; then
     echo "❌ File not found: $env_file" >&2
@@ -198,12 +229,18 @@ _resolve_env_file_nul() {
 
     # Strip surrounding quotes
     if [[ "$value" =~ ^\"(.*)\"$ ]]; then
+	# BASH_REMATCH is an array variable that contains the results of the last regex match
+	# performed by the =~ operator in bash. BASH_REMATCH[0] holds the entire matched string,
+	# while BASH_REMATCH[1], BASH_REMATCH[2], etc. hold the captured groups (substrings in parentheses).
+	# In this case, BASH_REMATCH[1] extracts the first captured group from the regex pattern match.
       value="${BASH_REMATCH[1]}"
     elif [[ "$value" =~ ^\'(.*)\'$ ]]; then
       value="${BASH_REMATCH[1]}"
     fi
 
     if [[ "$value" == bw://* ]]; then
+	# Removes the "bw://" prefix from the value variable and stores the result in ref
+	# Uses bash parameter expansion to strip the prefix, leaving only the secret identifier
       local ref="${value#bw://}"
       local item_name field_spec
 
@@ -360,6 +397,9 @@ EOF
   fi
 
   env_file="$1"
+# Removes the first positional parameter ($1) from the list of arguments,
+# shifting all remaining parameters down by one position ($2 becomes $1, etc.).
+# This is typically used to process arguments sequentially in a loop.
   shift
 
   if [[ "${1:-}" == "--" ]]; then
