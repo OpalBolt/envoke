@@ -26,16 +26,24 @@ Then choose how you want to resolve them:
 
 [direnv](https://direnv.net/) automatically loads your env when you enter the directory and **unloads it when you leave** — no cleanup needed.
 
-Pin the script to a specific commit SHA for security. Generate the SRI hash:
+Since the repo is private, use `gh api` to download and cache the script locally. Pin to a specific commit SHA and verify the hash on each cache miss. Generate the hash:
 
 ```bash
-shasum -a 256 snippets/resolve-env-refs.sh | awk '{print $1}' | xxd -r -p | base64
+openssl dgst -sha256 -binary snippets/resolve-env-refs.sh | base64
 ```
 
 ```bash
 # .envrc
-source_url "https://raw.githubusercontent.com/eficode/secure-handling-of-secrets/<SHA>/snippets/resolve-env-refs.sh" \
-  "sha256-<HASH>"
+_script="${HOME}/.cache/resolve-env-refs-<SHA>.sh"
+_expected_hash="sha256-<HASH>"
+if [[ ! -f "$_script" ]]; then
+  gh api repos/eficode/secure-handling-of-secrets/contents/snippets/resolve-env-refs.sh?ref=<SHA> \
+    -H "Accept: application/vnd.github.raw" > "$_script"
+  _actual=$(openssl dgst -sha256 -binary "$_script" | base64)
+  [[ "sha256-$_actual" == "$_expected_hash" ]] \
+    || { rm -f "$_script"; echo "resolve-env-refs: hash mismatch — aborting"; exit 1; }
+fi
+source "$_script"
 source <(resolve_env_file .env)
 ```
 
@@ -43,10 +51,12 @@ source <(resolve_env_file .env)
 direnv allow .   # grant permission once per project
 ```
 
+**Requires:** `gh` CLI authenticated (`gh auth login`). The script is downloaded once and cached; subsequent `direnv` reloads skip the network call.
+
 ### Pattern 2 — self-loading .env (standalone shell)
 
-Put the loader as line 1 of your `.env`. When you `source .env`, the script:
-1. Fetches the resolver from GitHub (with `declare -f` guard to detect curl failures)
+Put the loader as line 1 of your `.env`. Uses `gh api` for private-repo access. When you `source .env`, the script:
+1. Fetches the resolver via `gh api` (uses existing `gh auth` — no extra token needed)
 2. Detects bash or zsh automatically — no shell-specific syntax needed
 3. Unloads any previously active env (prints a message when switching projects)
 4. Resolves all `bw://` and `vault://` references and exports the values
@@ -55,7 +65,8 @@ Put the loader as line 1 of your `.env`. When you `source .env`, the script:
 
 ```bash
 # .env
-source <(curl -fsSL "https://raw.githubusercontent.com/eficode/secure-handling-of-secrets/<SHA>/snippets/resolve-env-refs.sh") \
+source <(gh api repos/eficode/secure-handling-of-secrets/contents/snippets/resolve-env-refs.sh?ref=<SHA> \
+  -H "Accept: application/vnd.github.raw") \
   && declare -f _load_self_env &>/dev/null \
   && _load_self_env \
   && return 0 2>/dev/null; true
@@ -71,6 +82,8 @@ source .env        # resolves all refs, registers EXIT trap, unloads previous if
 unload_env         # optional: manual cleanup before shell exits
 echo $_LOADED_ENV_FILE   # shows which env is currently active
 ```
+
+**Requires:** `gh` CLI authenticated (`gh auth login`).
 
 ### Pattern 3 — exec mode (safest: secrets never enter your shell)
 

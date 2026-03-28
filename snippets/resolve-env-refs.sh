@@ -14,29 +14,40 @@
 #
 # Pattern 1 — direnv (recommended; security-pinned, automatic cleanup on cd away)
 #
-#   Pin the script to a specific commit SHA and validate with an SRI hash.
-#   Generate the hash: shasum -a 256 resolve-env-refs.sh | awk '{print $1}' \
-#                        | xxd -r -p | base64
+#   For private repos, use `gh api` to download and cache the script locally.
+#   Pin to a specific commit SHA and verify the SHA-256 hash on each cache miss.
+#   Generate the hash: openssl dgst -sha256 -binary resolve-env-refs.sh | base64
 #
 #   # .envrc
-#   source_url "https://raw.githubusercontent.com/eficode/secure-handling-of-secrets/<SHA>/snippets/resolve-env-refs.sh" \
-#     "sha256-<HASH>"
+#   _script="${HOME}/.cache/resolve-env-refs-<SHA>.sh"
+#   _expected_hash="sha256-<HASH>"
+#   if [[ ! -f "$_script" ]]; then
+#     gh api repos/eficode/secure-handling-of-secrets/contents/snippets/resolve-env-refs.sh?ref=<SHA> \
+#       -H "Accept: application/vnd.github.raw" > "$_script"
+#     _actual=$(openssl dgst -sha256 -binary "$_script" | base64)
+#     [[ "sha256-$_actual" == "$_expected_hash" ]] \
+#       || { rm -f "$_script"; echo "resolve-env-refs: hash mismatch — aborting"; exit 1; }
+#   fi
+#   source "$_script"
 #   source <(resolve_env_file .env)
 #
 #   Then: direnv allow .
 #
 # Pattern 2 — self-loading .env (standalone shell: source .env)
 #
-#   Line 1 fetches and sources this script, resolves all bw:// and vault://
-#   references in the file itself, exports resolved values, then returns early
-#   so the raw reference strings below are never executed as shell assignments.
+#   Line 1 fetches and sources this script via `gh api` (uses existing gh auth,
+#   works with private repos), resolves all bw:// and vault:// references in the
+#   file itself, exports resolved values, then returns early so the raw reference
+#   strings below are never executed as shell assignments.
 #   An unload_env() cleanup function is defined and registered on EXIT.
 #   If a different .env was previously loaded, it is unloaded first.
 #
 #   Works in bash and zsh — no shell-specific syntax required in the .env file.
+#   Requires: gh CLI authenticated (`gh auth login`).
 #
 #   # .env
-#   source <(curl -fsSL "https://raw.githubusercontent.com/eficode/secure-handling-of-secrets/<SHA>/snippets/resolve-env-refs.sh") \
+#   source <(gh api repos/eficode/secure-handling-of-secrets/contents/snippets/resolve-env-refs.sh?ref=<SHA> \
+#     -H "Accept: application/vnd.github.raw") \
 #     && declare -f _load_self_env &>/dev/null \
 #     && _load_self_env \
 #     && return 0 2>/dev/null; true
@@ -293,7 +304,8 @@ local env_file="${1:?Usage: _resolve_env_file_nul <file>}"
 #   it is unloaded first so stale secrets never accumulate.
 #
 #   Used by the self-loading .env first-line pattern:
-#     source <(curl -fsSL "https://.../resolve-env-refs.sh") \
+#     source <(gh api repos/OWNER/REPO/contents/snippets/resolve-env-refs.sh?ref=<SHA> \
+#       -H "Accept: application/vnd.github.raw") \
 #       && declare -f _load_self_env &>/dev/null \
 #       && _load_self_env \
 #       && return 0 2>/dev/null; true
