@@ -83,7 +83,7 @@
 # Prerequisites
 # ─────────────────────────────────────────────────────────────────────────────
 #
-#   bw://  references: bw CLI + jq installed; BW_SESSION set or vault unlocked interactively
+#   bw://  references: bw CLI installed; BW_SESSION must be set (export BW_SESSION=$(bw unlock --raw))
 #   vault:// references: vault CLI; VAULT_ADDR and VAULT_TOKEN set
 
 # Strict mode only when running as a script. When sourced, functions handle
@@ -92,83 +92,33 @@
 
 # ---------------------------------------------------------------------------
 # _bw_ensure_session
-#   Ensures BW_SESSION is set. Handles unauthenticated, locked, and unlocked
-#   vault states. Uses BW_CLIENTID/BW_CLIENTSECRET for API-key login and
-#   BW_PASSWORD for non-interactive unlock when set.
+#   Requires BW_SESSION to already be set. Fails with a clear message if not.
+#   To set: export BW_SESSION=$(bw unlock --raw)
 # ---------------------------------------------------------------------------
 _bw_ensure_session() {
-  if [[ -n "${BW_SESSION:-}" ]]; then
-    # Validate only when bw is available. Only discard BW_SESSION when the vault
-    # conclusively reports it invalid (locked/unauthenticated). Any ambiguous result
-    # (jq missing, unexpected output, network issue) must NOT discard a potentially
-    # valid session — bw get errors are explicit now and will surface the real cause.
-    if ! command -v bw >/dev/null 2>&1; then
-      echo "❌ bw CLI not found. Install: npm install -g @bitwarden/cli" >&2
-      return 1
-    fi
-    local _sess_status
-    _sess_status=$(bw status 2>/dev/null | jq -r '.status // empty' 2>/dev/null) || _sess_status=""
-    case "$_sess_status" in
-      unlocked) return 0 ;;
-      locked|unauthenticated)
-        echo "⚠️  BW_SESSION is set but vault reports '$_sess_status' — clearing and re-unlocking..." >&2
-        unset BW_SESSION
-        ;;
-      *) return 0 ;;  # ambiguous — trust the session; bw get errors are explicit now
-    esac
-  fi
-
-  if ! command -v bw >/dev/null 2>&1; then
-    echo "❌ bw CLI not found. Install: npm install -g @bitwarden/cli" >&2
+  if [[ -z "${BW_SESSION:-}" ]]; then
+    echo "❌ BW_SESSION is not set." >&2
+    echo "   Run: export BW_SESSION=\$(bw unlock --raw)" >&2
     return 1
   fi
+}
 
-  local bw_status
-  bw_status=$(bw status 2>/dev/null | jq -r '.status // empty' 2>/dev/null) || bw_status=""
-
-  if [[ "$bw_status" == "unauthenticated" ]]; then
-    echo "🔑 Logging in to Bitwarden..." >&2
-    if [[ -n "${BW_CLIENTID:-}" && -n "${BW_CLIENTSECRET:-}" ]]; then
-      bw login --apikey 2>/dev/null || {
-        echo "❌ API key login failed. Check BW_CLIENTID / BW_CLIENTSECRET." >&2
-        return 1
-      }
-    else
-      bw login || {
-        echo "❌ Failed to log in to Bitwarden" >&2
-        return 1
-      }
-    fi
+# ---------------------------------------------------------------------------
+# _bw_get <bw args...>
+#   Thin wrapper around the bw CLI. Passes stdout through unchanged. On
+#   failure, surfaces bw's own stderr (which 2>/dev/null would have hidden)
+#   before returning 1, so callers can print a context-specific message.
+# ---------------------------------------------------------------------------
+_bw_get() {
+  local _bw_stderr _rc=0
+  _bw_stderr=$(mktemp)
+  bw "$@" 2>"$_bw_stderr" || _rc=$?
+  if [[ $_rc -ne 0 ]]; then
+    cat "$_bw_stderr" >&2
+    rm -f "$_bw_stderr"
+    return 1
   fi
-
-  echo "🔐 Unlocking Bitwarden vault..." >&2
-  if [[ -n "${BW_PASSWORD:-}" ]]; then
-    # Non-interactive: capture stderr so we can surface the real error.
-    local _unlock_stderr _unlock_rc=0
-    _unlock_stderr=$(mktemp)
-    BW_SESSION=$(bw unlock --passwordenv BW_PASSWORD --raw 2>"$_unlock_stderr") || _unlock_rc=$?
-    if [[ $_unlock_rc -ne 0 ]]; then
-      echo "❌ Failed to unlock Bitwarden vault" >&2
-      local _bw_err
-      _bw_err=$(grep -v '^[[:space:]]*$' "$_unlock_stderr" 2>/dev/null | tail -5) || true
-      [[ -n "$_bw_err" ]] && printf '   └─ %s\n' "$_bw_err" >&2
-      if grep -qi "not the expected type\|key.*type\|decryption.*fail" "$_unlock_stderr" 2>/dev/null; then
-        echo "   💡 Key-type mismatch — try: bw logout && bw login" >&2
-      fi
-      rm -f "$_unlock_stderr"
-      return 1
-    fi
-    rm -f "$_unlock_stderr"
-  else
-    # Interactive: do NOT redirect stderr. The bw CLI writes the password prompt to
-    # stderr via inquirer.js; redirecting stderr to a file hides the prompt entirely.
-    BW_SESSION=$(bw unlock --raw) || {
-      echo "❌ Failed to unlock Bitwarden vault" >&2
-      echo "   💡 If a crypto/key-type error appeared above, try: bw logout && bw login" >&2
-      return 1
-    }
-  fi
-  export BW_SESSION
+  rm -f "$_bw_stderr"
 }
 
 # ---------------------------------------------------------------------------
@@ -184,19 +134,19 @@ _resolve_bw_ref() {
 
   case "$field_spec" in
     password)
-      bw get password "$item_name" --session "$BW_SESSION" 2>/dev/null || {
+      _bw_get get password "$item_name" --session "$BW_SESSION" || {
         echo "❌ Bitwarden item '$item_name' not found or inaccessible (password field)" >&2
         return 1
       }
       ;;
     username)
-      bw get username "$item_name" --session "$BW_SESSION" 2>/dev/null || {
+      _bw_get get username "$item_name" --session "$BW_SESSION" || {
         echo "❌ Bitwarden item '$item_name' not found or inaccessible (username field)" >&2
         return 1
       }
       ;;
     note|notes)
-      bw get notes "$item_name" --session "$BW_SESSION" 2>/dev/null || {
+      _bw_get get notes "$item_name" --session "$BW_SESSION" || {
         echo "❌ Bitwarden item '$item_name' not found or inaccessible (notes field)" >&2
         return 1
       }
@@ -204,7 +154,7 @@ _resolve_bw_ref() {
     field:*)
       local fname="${field_spec#field:}"
       local _item_json
-      _item_json=$(bw get item "$item_name" --session "$BW_SESSION" 2>/dev/null) || {
+      _item_json=$(_bw_get get item "$item_name" --session "$BW_SESSION") || {
         echo "❌ Bitwarden item '$item_name' not found or inaccessible" >&2
         return 1
       }
