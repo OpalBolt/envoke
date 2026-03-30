@@ -98,7 +98,15 @@
 # ---------------------------------------------------------------------------
 _bw_ensure_session() {
   if [[ -n "${BW_SESSION:-}" ]]; then
-    return 0
+    # Quick local check — if bw can't decrypt the vault with this session token,
+    # don't silently fail later when fetching secrets.
+    local _sess_status
+    _sess_status=$(bw status 2>/dev/null | jq -r '.status // empty' 2>/dev/null) || _sess_status=""
+    if [[ "$_sess_status" == "unlocked" ]]; then
+      return 0
+    fi
+    echo "⚠️  BW_SESSION is set but vault reports '${_sess_status:-unknown}' — clearing and re-unlocking..." >&2
+    unset BW_SESSION
   fi
 
   if ! command -v bw >/dev/null 2>&1; then
@@ -125,17 +133,26 @@ _bw_ensure_session() {
   fi
 
   echo "🔐 Unlocking Bitwarden vault..." >&2
+  # Capture bw's stderr so we can surface the real error instead of a generic message.
+  local _unlock_stderr _unlock_rc=0
+  _unlock_stderr=$(mktemp)
   if [[ -n "${BW_PASSWORD:-}" ]]; then
-    BW_SESSION=$(bw unlock --passwordenv BW_PASSWORD --raw) || {
-      echo "❌ Failed to unlock Bitwarden vault" >&2
-      return 1
-    }
+    BW_SESSION=$(bw unlock --passwordenv BW_PASSWORD --raw 2>"$_unlock_stderr") || _unlock_rc=$?
   else
-    BW_SESSION=$(bw unlock --raw) || {
-      echo "❌ Failed to unlock Bitwarden vault" >&2
-      return 1
-    }
+    BW_SESSION=$(bw unlock --raw 2>"$_unlock_stderr") || _unlock_rc=$?
   fi
+  if [[ $_unlock_rc -ne 0 ]]; then
+    echo "❌ Failed to unlock Bitwarden vault" >&2
+    local _bw_err
+    _bw_err=$(grep -v '^[[:space:]]*$' "$_unlock_stderr" 2>/dev/null | tail -5) || true
+    [[ -n "$_bw_err" ]] && printf '   └─ %s\n' "$_bw_err" >&2
+    if grep -qi "not the expected type\|key.*type\|decryption.*fail" "$_unlock_stderr" 2>/dev/null; then
+      echo "   💡 Key-type mismatch — try: bw logout && bw login" >&2
+    fi
+    rm -f "$_unlock_stderr"
+    return 1
+  fi
+  rm -f "$_unlock_stderr"
   export BW_SESSION
 }
 
@@ -152,17 +169,31 @@ _resolve_bw_ref() {
 
   case "$field_spec" in
     password)
-      bw get password "$item_name" --session "$BW_SESSION" 2>/dev/null
+      bw get password "$item_name" --session "$BW_SESSION" 2>/dev/null || {
+        echo "❌ Bitwarden item '$item_name' not found or inaccessible (password field)" >&2
+        return 1
+      }
       ;;
     username)
-      bw get username "$item_name" --session "$BW_SESSION" 2>/dev/null
+      bw get username "$item_name" --session "$BW_SESSION" 2>/dev/null || {
+        echo "❌ Bitwarden item '$item_name' not found or inaccessible (username field)" >&2
+        return 1
+      }
       ;;
     note|notes)
-      bw get notes "$item_name" --session "$BW_SESSION" 2>/dev/null
+      bw get notes "$item_name" --session "$BW_SESSION" 2>/dev/null || {
+        echo "❌ Bitwarden item '$item_name' not found or inaccessible (notes field)" >&2
+        return 1
+      }
       ;;
     field:*)
       local fname="${field_spec#field:}"
-      bw get item "$item_name" --session "$BW_SESSION" 2>/dev/null \
+      local _item_json
+      _item_json=$(bw get item "$item_name" --session "$BW_SESSION" 2>/dev/null) || {
+        echo "❌ Bitwarden item '$item_name' not found or inaccessible" >&2
+        return 1
+      }
+      printf '%s' "$_item_json" \
         | jq -re --arg f "$fname" '.fields[]? | select(.name == $f) | .value' \
         || { echo "❌ Field '$fname' not found in item '$item_name'" >&2; return 1; }
       ;;
