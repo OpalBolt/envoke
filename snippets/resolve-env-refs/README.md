@@ -122,6 +122,91 @@ resolve_yaml_exec config.yaml -- kubectl apply -f {}
 resolve_yaml_exec secrets.yaml -- some-tool --config {}
 ```
 
+### Bash scripts — extract individual values
+
+For bash scripts that need specific config values rather than piping the full YAML, use `resolve_yaml_value`. It resolves the whole file, then extracts the key. Requires **yq** or **python3+pyyaml**.
+
+```bash
+source ~/.config/resolve-env-refs/resolve-env-refs.sh
+
+# Extract resolved values into bash variables
+DB_HOST=$(resolve_yaml_value config.yaml database.host)
+DB_PASS=$(resolve_yaml_value config.yaml database.password)   # resolves bw://
+API_KEY=$(resolve_yaml_value config.yaml api.stripe_key)      # resolves vault://
+
+echo "Connecting to $DB_HOST"
+./my-app --db-host "$DB_HOST" --db-pass "$DB_PASS"
+```
+
+Dot notation traverses nested keys; integer segments index lists:
+
+```bash
+FIRST_URL=$(resolve_yaml_value services.yaml services.0.url)
+```
+
+---
+
+## Python drop-in
+
+`resolve_yaml_refs.py` is a zero-dependency-except-pyyaml module that recursively resolves all `bw://` and `vault://` references in any YAML structure. Drop it next to your script or install it in your project.
+
+```bash
+pip install pyyaml
+cp snippets/resolve-env-refs/resolve_yaml_refs.py your-project/
+```
+
+### Import usage
+
+```python
+from resolve_yaml_refs import load_yaml
+
+# All refs resolved — returns a plain Python dict.
+config = load_yaml("config.yaml")
+db_password = config["database"]["password"]    # actual secret
+api_key     = config["api"]["stripe_key"]       # actual secret
+
+# From an already-loaded string:
+from resolve_yaml_refs import load_yaml_string
+config = load_yaml_string(yaml_text)
+
+# Resolve a single reference:
+from resolve_yaml_refs import resolve_value
+secret = resolve_value("bw://prod-db/password")
+secret = resolve_value("vault://secret/myapp#token")
+```
+
+Works with any nesting depth and with lists:
+
+```yaml
+# config.yaml
+database:
+  password: bw://prod-db/password
+  username: bw://prod-db/username
+services:
+  - name: stripe
+    api_key: vault://secret/payments#stripe_key
+  - name: sendgrid
+    api_key: bw://sendgrid/field:api_key
+```
+
+```python
+config = load_yaml("config.yaml")
+# All four refs above are resolved — nested dicts and lists handled automatically.
+stripe_key = config["services"][0]["api_key"]
+```
+
+### CLI usage
+
+```bash
+# Resolved YAML to stdout (pipe anywhere):
+python resolve_yaml_refs.py config.yaml
+python resolve_yaml_refs.py values.yaml | helm upgrade myapp . -f -
+
+# Extract a single value:
+python resolve_yaml_refs.py config.yaml --key database.password
+DB_PASS=$(python resolve_yaml_refs.py config.yaml --key database.password)
+```
+
 ### YAML reference syntax
 
 ```yaml
@@ -157,15 +242,17 @@ api:
 
 | Tool | Required for |
 |------|-------------|
-| `bw` CLI | `bw://` references |
-| `jq` | `bw://` custom field extraction |
-| `vault` CLI | `vault://` references |
+| `bw` CLI | `bw://` references (bash + Python) |
+| `jq` | `bw://` custom field extraction (bash only) |
+| `vault` CLI | `vault://` references (bash + Python) |
 | `VAULT_ADDR` env var | `vault://` references |
 | `VAULT_TOKEN` env var | `vault://` references |
+| `pyyaml` | Python drop-in (`pip install pyyaml`) |
+| `yq` or `python3+pyyaml` | `resolve_yaml_value` (bash) |
 
-**Bitwarden session:** `BW_SESSION` is obtained automatically. To avoid interactive prompts:
-- Set `BW_PASSWORD` to unlock non-interactively
-- Set `BW_CLIENTID` + `BW_CLIENTSECRET` for API key login
+**Bitwarden session:** `BW_SESSION` is required for both bash and Python.
+- Bash: set automatically on first unlock; or set `BW_PASSWORD` for non-interactive unlock
+- Python: must be set before calling `load_yaml`: `export BW_SESSION=$(bw unlock --raw)`
 
 ---
 
@@ -176,7 +263,7 @@ Resolved secrets are tracked in `_LOADED_ENV_VARS` and unset:
 - **When you leave** a direnv-managed directory (`cd` away)
 - **Manually** via `unload_env`
 
-YAML mode: secrets exist only in memory (stdout pipe) or in a `/dev/shm` temp file that is deleted after the command exits.
+YAML mode: secrets exist only in memory (stdout pipe) or in a `/dev/shm` temp file that is deleted after the command exits. The Python module never writes resolved values to disk.
 
 ---
 
@@ -186,3 +273,4 @@ YAML mode: secrets exist only in memory (stdout pipe) or in a `/dev/shm` temp fi
 - Keys are validated against `[A-Za-z_][A-Za-z0-9_]*` before emission to prevent injection attacks.
 - YAML resolved values are always double-quoted and escaped, preventing YAML injection from secrets containing special characters.
 - `resolve_yaml_exec` uses `/dev/shm` (RAM) when available so secrets are never written to a physical disk.
+- The Python module calls `bw` and `vault` CLIs via subprocess with `capture_output=True` — resolved values are never echoed to a terminal or log.

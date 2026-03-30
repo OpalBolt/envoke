@@ -69,8 +69,15 @@
 #   Temp file is created in /dev/shm (RAM) when available, chmod 600,
 #   and deleted immediately after the command exits.
 #
+#   Single value extraction (for bash scripts):
+#     DB_PASS=$(resolve_yaml_value config.yaml database.password)
+#     API_KEY=$(resolve_yaml_value config.yaml api.stripe_key)
+#     Requires yq or python3+pyyaml.
+#
 #   ⚠️  vault:// without #field is not supported in YAML mode.
 #       Use vault://secret/path#fieldname to target a single field.
+#
+#   Python drop-in: see resolve_yaml_refs.py in the same directory.
 #
 # ─────────────────────────────────────────────────────────────────────────────
 # Prerequisites
@@ -432,6 +439,9 @@ resolve_yaml_file() {
     fi
 
     # Match: optional-quote ref optional-quote optional-trailing-comment
+    # Quoted values: # inside quotes is not a comment — match the full quoted string.
+    # Unquoted bw://: # is NOT part of the ref; a trailing "# comment" is allowed.
+    # Unquoted vault://: # IS part of the ref (path#field); only SPACE+# starts a comment.
     local ref_val="" trailing=""
     if [[ "$after_colon" =~ ^\"(bw://[^\"[:space:]]+|vault://[^\"[:space:]]+)\"([[:space:]]*#.*)?$ ]]; then
       ref_val="${BASH_REMATCH[1]}"
@@ -439,7 +449,11 @@ resolve_yaml_file() {
     elif [[ "$after_colon" =~ ^\'(bw://[^\'[:space:]]+|vault://[^\'[:space:]]+)\'([[:space:]]*#.*)?$ ]]; then
       ref_val="${BASH_REMATCH[1]}"
       trailing="${BASH_REMATCH[2]:-}"
-    elif [[ "$after_colon" =~ ^(bw://[^[:space:]\"\'#]+|vault://[^[:space:]\"\'#]+)([[:space:]]*#.*)?$ ]]; then
+    elif [[ "$after_colon" =~ ^(bw://[^[:space:]\"\'#]+)([[:space:]]*#.*)?$ ]]; then
+      ref_val="${BASH_REMATCH[1]}"
+      trailing="${BASH_REMATCH[2]:-}"
+    elif [[ "$after_colon" =~ ^(vault://[^[:space:]\"\']+)([[:space:]]+#.*)?$ ]]; then
+      # vault:// refs include #field — only whitespace-prefixed # starts a comment
       ref_val="${BASH_REMATCH[1]}"
       trailing="${BASH_REMATCH[2]:-}"
     else
@@ -525,7 +539,45 @@ resolve_yaml_exec() {
 }
 
 # ---------------------------------------------------------------------------
-# Main
+# resolve_yaml_value <file> <key.path>
+#   Extracts a single resolved value from a YAML file using dot notation.
+#   Resolves any bw:// or vault:// reference in the target value.
+#
+#   key.path uses dots to traverse nested keys. List indices are integers.
+#   Examples:
+#     database.password
+#     api.keys.stripe
+#     services.0.url
+#
+#   Requires yq (https://github.com/mikefarah/yq) or python3 with pyyaml.
+#
+#   Usage:
+#     DB_PASS=$(resolve_yaml_value config.yaml database.password)
+#     API_KEY=$(resolve_yaml_value config.yaml api.stripe_key)
+# ---------------------------------------------------------------------------
+resolve_yaml_value() {
+  local yaml_file="${1:?Usage: resolve_yaml_value <file> <key.path>}"
+  local key_path="${2:?Usage: resolve_yaml_value <file> <key.path>}"
+
+  if command -v yq >/dev/null 2>&1; then
+    resolve_yaml_file "$yaml_file" | yq ".$key_path"
+  elif command -v python3 >/dev/null 2>&1; then
+    resolve_yaml_file "$yaml_file" | \
+      python3 -c "
+import sys, yaml
+data = yaml.safe_load(sys.stdin)
+v = data
+for part in sys.argv[1].split('.'):
+    v = v[part] if isinstance(v, dict) else v[int(part)]
+print(v, end='')
+" "$key_path"
+  else
+    echo "❌ resolve_yaml_value requires yq or python3 with pyyaml" >&2
+    return 1
+  fi
+}
+
+
 #   With "-- command": resolve .env and exec the command with vars injected.
 #   Without "--":      emit shell-escaped exports for "source <(...)".
 #   With "--yaml":     resolve YAML file to stdout, or exec with temp file.
