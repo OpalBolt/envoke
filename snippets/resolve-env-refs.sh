@@ -1,6 +1,18 @@
 #!/usr/bin/env bash
 # resolve-env-refs.sh — Resolve bw:// and vault:// references in a .env file.
 #
+# ⚠️  DEPRECATED — this file has moved.
+#
+#   The canonical version is now at: snippets/resolve-env-refs/resolve-env-refs.sh
+#   It adds YAML support and an installer. Install once, reference from ~/.config:
+#
+#     ./snippets/resolve-env-refs/install.sh
+#
+#   See: snippets/resolve-env-refs/README.md
+#
+#   This file is kept for backward compatibility and will be removed in a future release.
+# ─────────────────────────────────────────────────────────────────────────────
+#
 # Instead of storing actual secrets in .env files, store references:
 #
 #   DATABASE_URL=bw://prod-db/password
