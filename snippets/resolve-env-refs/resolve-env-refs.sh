@@ -122,6 +122,53 @@ _bw_get() {
 }
 
 # ---------------------------------------------------------------------------
+# _bw_get_item_json <item_name>
+#   Retrieves a single Bitwarden item as JSON using 'bw list items --search',
+#   then filters to an exact name match. This avoids the 'bw get' code path
+#   that crashes with a null-pointer on org items when org keys aren't loaded
+#   (known Bitwarden CLI bug: orgKeys is null after bw unlock --raw).
+#
+#   Fails if the name matches zero items ("not found") or more than one item
+#   ("ambiguous") to prevent silently injecting credentials from the wrong item.
+# ---------------------------------------------------------------------------
+_bw_get_item_json() {
+  local item_name="$1"
+
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "❌ jq is required for Bitwarden lookups. Install: https://stedolan.github.io/jq/" >&2
+    return 1
+  fi
+
+  local _list_json
+  _list_json=$(_bw_get list items --search "$item_name" --session "$BW_SESSION") || {
+    echo "❌ Failed to list Bitwarden items (check BW_SESSION is valid)" >&2
+    return 1
+  }
+
+  local _count
+  _count=$(printf '%s' "$_list_json" \
+    | jq --arg n "$item_name" '[.[] | select(.name == $n)] | length') || {
+    echo "❌ jq parse error while searching for '$item_name'" >&2
+    return 1
+  }
+
+  case "$_count" in
+    0)
+      echo "❌ Bitwarden item '$item_name' not found" >&2
+      return 1
+      ;;
+    1) ;;
+    *)
+      echo "❌ Bitwarden item name '$item_name' is ambiguous — $_count items match. Rename them to be unique." >&2
+      return 1
+      ;;
+  esac
+
+  printf '%s' "$_list_json" \
+    | jq -e --arg n "$item_name" 'first(.[] | select(.name == $n))'
+}
+
+# ---------------------------------------------------------------------------
 # _resolve_bw_ref <item_name> <field_spec>
 #   Resolves a bw:// reference. Prints the raw secret value to stdout.
 #   field_spec: password | username | note | field:<name>
@@ -132,32 +179,30 @@ _resolve_bw_ref() {
 
   _bw_ensure_session || return 1
 
+  local _item_json
+  _item_json=$(_bw_get_item_json "$item_name") || return 1
+
   case "$field_spec" in
     password)
-      _bw_get get password "$item_name" --session "$BW_SESSION" || {
-        echo "❌ Bitwarden item '$item_name' not found or inaccessible (password field)" >&2
+      printf '%s' "$_item_json" | jq -re '.login.password // empty' || {
+        echo "❌ Bitwarden item '$item_name': no password field" >&2
         return 1
       }
       ;;
     username)
-      _bw_get get username "$item_name" --session "$BW_SESSION" || {
-        echo "❌ Bitwarden item '$item_name' not found or inaccessible (username field)" >&2
+      printf '%s' "$_item_json" | jq -re '.login.username // empty' || {
+        echo "❌ Bitwarden item '$item_name': no username field" >&2
         return 1
       }
       ;;
     note|notes)
-      _bw_get get notes "$item_name" --session "$BW_SESSION" || {
-        echo "❌ Bitwarden item '$item_name' not found or inaccessible (notes field)" >&2
+      printf '%s' "$_item_json" | jq -re '.notes // empty' || {
+        echo "❌ Bitwarden item '$item_name': no notes field" >&2
         return 1
       }
       ;;
     field:*)
       local fname="${field_spec#field:}"
-      local _item_json
-      _item_json=$(_bw_get get item "$item_name" --session "$BW_SESSION") || {
-        echo "❌ Bitwarden item '$item_name' not found or inaccessible" >&2
-        return 1
-      }
       printf '%s' "$_item_json" \
         | jq -re --arg f "$fname" '.fields[]? | select(.name == $f) | .value' \
         || { echo "❌ Field '$fname' not found in item '$item_name'" >&2; return 1; }
