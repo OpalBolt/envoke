@@ -11,13 +11,46 @@ Go CLI tooling for safely fetching secrets from Bitwarden and HashiCorp Vault in
 | [`renv`](docs/renv.md) | Resolve `bw://` and `vault://` references in `.env` and YAML files |
 | [`kctx`](docs/kctx.md) | Fetch ephemeral kubeconfig files from Vault or Bitwarden |
 
+## Installation
+
+### Nix Flake
+
+Add the repo as a flake input and include the packages in your configuration:
+
+```nix
+# flake.nix
+{
+  inputs = {
+    secure-handling-of-secrets.url = "github:eficode/secure-handling-of-secrets";
+  };
+
+  outputs = { self, nixpkgs, secure-handling-of-secrets, ... }: {
+    # NixOS or home-manager — add to environment.systemPackages / home.packages:
+    #   secure-handling-of-secrets.packages.${system}.renv
+    #   secure-handling-of-secrets.packages.${system}.kctx
+    #   secure-handling-of-secrets.packages.${system}.default  # both binaries
+  };
+}
+```
+
+Or install ad-hoc without touching your config:
+
+```bash
+nix profile install github:eficode/secure-handling-of-secrets        # both (default)
+nix profile install github:eficode/secure-handling-of-secrets#renv
+nix profile install github:eficode/secure-handling-of-secrets#kctx
+```
+
+### Go
+
+```bash
+go install github.com/eficode/secure-handling-of-secrets/cmd/renv@latest
+go install github.com/eficode/secure-handling-of-secrets/cmd/kctx@latest
+```
+
 ## Quick start
 
 ```bash
-# Install both binaries
-go install github.com/eficode/secure-handling-of-secrets/cmd/renv@latest
-go install github.com/eficode/secure-handling-of-secrets/cmd/kctx@latest
-
 # Shell integration
 source <(renv shell-init)
 source <(kctx-bin shell-init)

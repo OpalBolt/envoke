@@ -1,5 +1,5 @@
 {
-  description = "Secure handling of secrets – renv and kctx Go CLI tools";
+  description = "secure-handling-of-secrets — renv and kctx CLI tools";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -9,81 +9,61 @@
   outputs = { self, nixpkgs, flake-utils }:
     flake-utils.lib.eachDefaultSystem (system:
       let
-        pkgs = import nixpkgs {
-          inherit system;
-          config.allowUnfree = true;
-        };
+        pkgs = nixpkgs.legacyPackages.${system};
 
-        # Shared buildGoModule arguments
-        commonArgs = {
+        # Shared build attributes — vendor/ dir is committed so no hash needed.
+        # CGO_ENABLED=0 is enforced via devShell; buildGoModule pure-Go builds
+        # don't link C so CGO is irrelevant at the Nix derivation level.
+        # trimpath is true by default in nixpkgs buildGoModule.
+        common = {
           src = ./.;
-          # vendor/ directory is committed — nix uses it directly (no network needed)
           vendorHash = null;
-          CGO_ENABLED = "0";
-          ldflags = [ "-trimpath" "-s" "-w" ];
         };
 
-        renv = pkgs.buildGoModule (commonArgs // {
+        renv = pkgs.buildGoModule (common // {
           pname = "renv";
-          version = "dev";
+          version = "0.1.0";
           subPackages = [ "cmd/renv" ];
-          meta = with pkgs.lib; {
-            description = "Resolve bw:// and vault:// secret refs in .env and YAML files";
-            license = licenses.mit;
-            mainProgram = "renv";
-          };
         });
 
-        kctx = pkgs.buildGoModule (commonArgs // {
+        kctx = pkgs.buildGoModule (common // {
           pname = "kctx";
-          version = "dev";
+          version = "0.1.0";
           subPackages = [ "cmd/kctx" ];
-          meta = with pkgs.lib; {
-            description = "Ephemeral kubeconfig switching via Vault or Bitwarden";
-            license = licenses.mit;
-            mainProgram = "kctx";
-          };
+        });
+
+        # Default package builds both binaries
+        all = pkgs.buildGoModule (common // {
+          pname = "secure-handling-of-secrets";
+          version = "0.1.0";
+          subPackages = [ "cmd/renv" "cmd/kctx" ];
         });
       in
       {
-        # nix build .#renv  →  builds renv binary
-        # nix build .#kctx  →  builds kctx binary
-        # nix build          →  builds both (default = combined package)
         packages = {
           inherit renv kctx;
-          default = pkgs.symlinkJoin {
-            name = "secure-handling-of-secrets";
-            paths = [ renv kctx ];
-          };
+          default = all;
         };
 
-        # nix develop  →  full dev environment
+        apps = {
+          renv = flake-utils.lib.mkApp { drv = renv; };
+          kctx = flake-utils.lib.mkApp { drv = kctx; };
+          # nix run → renv
+          default = flake-utils.lib.mkApp { drv = renv; };
+        };
+
         devShells.default = pkgs.mkShell {
-          packages = [
-            # Go toolchain
-            pkgs.go
-            pkgs.gopls
-            pkgs.go-tools          # staticcheck
-            pkgs.gotools            # goimports, gofmt etc.
-            pkgs.goreleaser
-            pkgs.gnumake
-
-            # Secret manager CLIs (for integration tests)
-            pkgs.bitwarden-cli
-            pkgs.vault
-
-            # Utilities
-            pkgs.git
-            pkgs.jq
+          packages = with pkgs; [
+            go
+            gotools  # goimports, etc.
+            gopls
+            go-tools # staticcheck
           ];
 
-          # Suppress Node.js deprecation warnings from bitwarden-cli (Electron/inquirer)
-          env.NODE_OPTIONS = "--no-deprecation";
-
           shellHook = ''
-            echo "secure-handling-of-secrets dev shell ready"
-            echo "  go $(go version | cut -d' ' -f3)  •  bw  •  vault  •  goreleaser"
+            export CGO_ENABLED=0
           '';
         };
-      });
+      }
+    );
 }

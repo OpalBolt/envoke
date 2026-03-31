@@ -1,3 +1,8 @@
+# Nix
+result
+result-*
+.direnv/
+
 # Build outputs
 /bin/
 /dist/
