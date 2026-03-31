@@ -1,0 +1,26 @@
+# Build outputs
+/bin/
+/dist/
+
+# Test artifacts
+coverage.out
+coverage.html
+*.test
+
+# Go workspace (not used, but guard against accidental creation)
+go.work
+go.work.sum
+
+# Editor and OS
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# Python bytecode (leftover from old snippets)
+__pycache__/
+*.pyc
+*.pyo
