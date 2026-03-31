@@ -7,6 +7,7 @@ import (
 	"github.com/eficode/secure-handling-of-secrets/internal/env"
 	"github.com/eficode/secure-handling-of-secrets/internal/secrets"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 var version = "dev"
@@ -65,6 +66,10 @@ With direnv, add this to your .envrc:
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
 				file = args[0]
+			}
+			if term.IsTerminal(int(os.Stdout.Fd())) {
+				fmt.Fprintln(os.Stderr, "renv: warning: stdout is a terminal — output will not be set as env vars.")
+				fmt.Fprintln(os.Stderr, "renv: use: eval \"$(renv resolve .env)\"")
 			}
 			cache := secrets.NewCache()
 			if *noCache {
