@@ -13,39 +13,31 @@
           inherit system;
           config.allowUnfree = true;
         };
-
-        python = pkgs.python3.withPackages (ps: [
-          ps.hvac
-        ]);
       in
       {
         devShells.default = pkgs.mkShell {
           packages = [
-            # Secret manager CLIs
+            # Go toolchain
+            pkgs.go
+            pkgs.gopls
+            pkgs.go-tools        # staticcheck
+            pkgs.gotools          # goimports, gofmt etc.
+            pkgs.goreleaser
+            pkgs.gnumake
+
+            # Secret manager CLIs (for integration tests)
             pkgs.bitwarden-cli
             pkgs.vault
-
-            # Python
-            python
-            pkgs.python3Packages.pip
-
-            # Go
-            pkgs.go
-
-            # TypeScript / Node.js
-            pkgs.nodejs_24
-            pkgs.typescript
 
             # Utilities
             pkgs.git
             pkgs.jq
           ];
 
-          # Adding this to suppress deprecation warnings from bitwarden-cli, which is a dependency of this project. 
           env.NODE_OPTIONS = "--no-deprecation";
 
           shellHook = ''
-            echo "secrets dev shell ready – bw, vault, python, go, node/ts available"
+            echo "secrets dev shell ready – bw, vault, go, goreleaser available"
           '';
         };
       });
