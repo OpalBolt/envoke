@@ -80,6 +80,19 @@ make test            # run all tests
 make lint            # go vet
 ```
 
+### Updating dependencies
+
+After running `go mod tidy` or changing any dependency in `go.mod`, the
+`vendorHash` in `flake.nix` must be updated:
+
+1. Set `vendorHash = pkgs.lib.fakeHash;` in the `common` block of `flake.nix`
+2. Run `nix build` — it will fail with a hash mismatch showing the correct value:
+   ```
+   specified: sha256-AAAA...
+      got:    sha256-<correct hash>
+   ```
+3. Replace `pkgs.lib.fakeHash` with the `got:` hash string
+
 ## Docs
 
 - [renv reference](docs/renv.md)
