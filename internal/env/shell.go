@@ -3,13 +3,21 @@ package env
 import (
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 )
 
+// validEnvKey matches POSIX env var names: start with letter or _, then alphanumeric or _.
+var validEnvKey = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
 // EmitExports writes "export KEY='value'" lines to w for each entry.
 // Values are shell-quoted (single-quote escaped).
+// Returns an error if any key contains characters that would break shell eval safety.
 func EmitExports(w io.Writer, entries []EnvEntry) error {
 	for _, e := range entries {
+		if !validEnvKey.MatchString(e.Key) {
+			return fmt.Errorf("invalid env key %q: must match [A-Za-z_][A-Za-z0-9_]*", e.Key)
+		}
 		quoted := shellQuote(e.Value)
 		if _, err := fmt.Fprintf(w, "export %s=%s\n", e.Key, quoted); err != nil {
 			return err

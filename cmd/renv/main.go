@@ -75,7 +75,7 @@ func resolveCmd(noCache *bool) *cobra.Command {
 			case "fish":
 				fmt.Println("# Fish shell trap not supported via eval; use renv clear-cache manually")
 			default:
-				fmt.Println("trap 'renv clear-session' EXIT")
+				fmt.Println("trap 'renv clear-cache' EXIT")
 			}
 			return nil
 		},

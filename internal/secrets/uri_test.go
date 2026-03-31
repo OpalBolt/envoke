@@ -106,6 +106,11 @@ func TestParseVaultRef(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name:    "empty path",
+			uri:     "vault://#field",
+			wantErr: true,
+		},
+		{
 			name:    "not vault URI",
 			uri:     "bw://folder/item",
 			wantErr: true,

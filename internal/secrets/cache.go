@@ -54,8 +54,9 @@ func cacheKey(uid, acctTag, folder string) string {
 }
 
 // CacheFile returns the path for a given uid, acctTag, and folder.
+// The filename includes a uid prefix so Clear(uid) can scope deletes.
 func (c *Cache) CacheFile(uid, acctTag, folder string) string {
-	return filepath.Join(c.Dir, "renv-"+cacheKey(uid, acctTag, folder)+".enc")
+	return filepath.Join(c.Dir, "renv-"+uid+"-"+cacheKey(uid, acctTag, folder)+".enc")
 }
 
 // Put encrypts items JSON and writes to cache file (chmod 600).
@@ -150,9 +151,9 @@ func (c *Cache) Get(uid, acctTag, folder, masterPassword string) ([]byte, error)
 	return unpadded, nil
 }
 
-// Clear removes all renv-*.enc files for the current user in the cache dir.
+// Clear removes all renv-<uid>-*.enc files owned by uid in the cache dir.
 func (c *Cache) Clear(uid string) error {
-	pattern := filepath.Join(c.Dir, "renv-*.enc")
+	pattern := filepath.Join(c.Dir, "renv-"+uid+"-*.enc")
 	matches, err := filepath.Glob(pattern)
 	if err != nil {
 		return fmt.Errorf("cache: glob: %w", err)
@@ -165,7 +166,7 @@ func (c *Cache) Clear(uid string) error {
 	return nil
 }
 
-// CacheStatus returns the paths and ages of all renv cache files.
+// CacheStatus returns the paths and ages of all renv cache files for any uid.
 func CacheStatus(c *Cache) ([]string, []string, error) {
 	pattern := filepath.Join(c.Dir, "renv-*.enc")
 	matches, err := filepath.Glob(pattern)

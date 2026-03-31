@@ -5,6 +5,24 @@ import (
 	"testing"
 )
 
+func TestEmitExportsKeyValidation(t *testing.T) {
+	// Malicious key with shell metacharacters — must be rejected
+	entries := []EnvEntry{
+		{Key: "FOO; rm -rf /", Value: "oops"},
+	}
+	var sb strings.Builder
+	if err := EmitExports(&sb, entries); err == nil {
+		t.Error("expected error for malicious key, got nil")
+	}
+
+	// Valid key
+	valid := []EnvEntry{{Key: "VALID_KEY_123", Value: "ok"}}
+	var sb2 strings.Builder
+	if err := EmitExports(&sb2, valid); err != nil {
+		t.Errorf("unexpected error for valid key: %v", err)
+	}
+}
+
 func TestEmitExports(t *testing.T) {
 	entries := []EnvEntry{
 		{Key: "FOO", Value: "bar"},

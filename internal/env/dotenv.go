@@ -24,13 +24,18 @@ func ResolveDotEnv(path string, bwClient *secrets.BWClient, vaultClient *secrets
 		return nil, fmt.Errorf("parsing %s: %w", path, err)
 	}
 
-	// Pass 1: collect unique bw:// folder names
+	// Pass 1: collect unique bw:// folder/collection names for batch pre-fetch
 	bwFolders := map[string]bool{}
+	bwCollections := map[string]bool{}
 	for _, e := range lines {
 		if strings.HasPrefix(e.Value, "bw://") {
 			ref, err := secrets.ParseBWRef(e.Value)
 			if err == nil {
-				bwFolders[ref.Folder] = true
+				if ref.IsCollection {
+					bwCollections[ref.Folder] = true
+				} else {
+					bwFolders[ref.Folder] = true
+				}
 			}
 		}
 	}
@@ -41,6 +46,14 @@ func ResolveDotEnv(path string, bwClient *secrets.BWClient, vaultClient *secrets
 			return nil, fmt.Errorf("pre-fetching BW folder %q: %w", folder, err)
 		}
 	}
+	// Pre-fetch all BW collections
+	for col := range bwCollections {
+		if _, err := bwClient.CollectionItems(col); err != nil {
+			return nil, fmt.Errorf("pre-fetching BW collection %q: %w", col, err)
+		}
+	}
+	// Zero BW session token once all fetches are done
+	defer bwClient.Close()
 
 	// Pass 2: resolve all entries
 	resolved := make([]EnvEntry, 0, len(lines))
@@ -96,6 +109,8 @@ func parseDotEnv(path string) ([]rawEntry, error) {
 
 	var entries []rawEntry
 	scanner := bufio.NewScanner(f)
+	// Increase buffer to 1 MiB — .env values can include PEM certs, kubeconfigs, JWTs
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {

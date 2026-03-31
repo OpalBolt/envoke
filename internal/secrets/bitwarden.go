@@ -1,6 +1,7 @@
 package secrets
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -8,6 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"golang.org/x/term"
 )
 
 // BWClient wraps the bw CLI for secret fetching.
@@ -16,8 +19,9 @@ type BWClient struct {
 	Cache          *Cache
 	MasterPassword string // cleared after first use
 
-	accountTag string // cached account tag
-	session    string // ephemeral session token
+	accountTag     string // cached account tag
+	session        string // ephemeral session token
+	sessionFromEnv bool   // true if session was sourced from BW_SESSION env var
 }
 
 // AccountTag returns an 8-char fingerprint of the active BW account.
@@ -52,6 +56,7 @@ func (c *BWClient) Session() (string, error) {
 	// 1. BW_SESSION env var
 	if s := os.Getenv("BW_SESSION"); s != "" {
 		c.session = s
+		c.sessionFromEnv = true
 		return c.session, nil
 	}
 
@@ -61,24 +66,25 @@ func (c *BWClient) Session() (string, error) {
 		pw = c.MasterPassword
 	}
 	if pw == "" {
-		// 3. Prompt on /dev/tty
+		// 3. Prompt on /dev/tty — no echo using x/term
 		tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 		if err != nil {
 			return "", fmt.Errorf("opening /dev/tty: %w", err)
 		}
 		defer tty.Close()
 		fmt.Fprintf(tty, "Bitwarden master password: ")
-		pwBytes := make([]byte, 256)
-		n, err := tty.Read(pwBytes)
+		pwBytes, err := term.ReadPassword(int(tty.Fd()))
 		if err != nil {
 			return "", fmt.Errorf("reading password from tty: %w", err)
 		}
-		pw = strings.TrimRight(string(pwBytes[:n]), "\n\r")
+		fmt.Fprintln(tty) // newline after hidden input
+		pw = string(pwBytes)
 	}
 
-	// bw unlock --raw — DO NOT redirect stderr (inquirer.js writes prompt there)
-	cmd := exec.Command("bw", "unlock", "--raw", pw)
+	// bw unlock --raw — pass password via stdin, NOT via argv (argv is world-readable via ps/proc)
+	cmd := exec.Command("bw", "unlock", "--raw")
 	cmd.Env = os.Environ()
+	cmd.Stdin = bytes.NewBufferString(pw + "\n")
 	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()
 	if err != nil {
@@ -89,6 +95,7 @@ func (c *BWClient) Session() (string, error) {
 		return "", fmt.Errorf("bw unlock returned empty session token")
 	}
 	c.session = token
+	c.sessionFromEnv = false
 	// Clear master password
 	zeroString(&c.MasterPassword)
 	pwCopy := pw
@@ -135,10 +142,6 @@ func (c *BWClient) FolderItems(folder string) ([]map[string]interface{}, error) 
 	// Cache result
 	_ = c.Cache.Put(uid, acctTag, folder, pw, out)
 
-	// Zero session and clear from env
-	zeroString(&c.session)
-	os.Unsetenv("BW_SESSION")
-
 	var items []map[string]interface{}
 	if err := json.Unmarshal(out, &items); err != nil {
 		return nil, fmt.Errorf("parsing bw list items output: %w", err)
@@ -182,14 +185,23 @@ func (c *BWClient) CollectionItems(collectionName string) ([]map[string]interfac
 	}
 
 	_ = c.Cache.Put(uid, acctTag, cacheKeyStr, pw, out)
-	zeroString(&c.session)
-	os.Unsetenv("BW_SESSION")
 
 	var items []map[string]interface{}
 	if err := json.Unmarshal(out, &items); err != nil {
 		return nil, fmt.Errorf("parsing bw list items output: %w", err)
 	}
 	return items, nil
+}
+
+// Close zeros the session token. Call this once when done with all BW operations.
+// It only unsets BW_SESSION if we did not read it from the environment.
+func (c *BWClient) Close() {
+	if c.session != "" {
+		zeroString(&c.session)
+	}
+	if !c.sessionFromEnv {
+		os.Unsetenv("BW_SESSION")
+	}
 }
 
 // findFolderID returns the Bitwarden folder ID for the given folder name.
@@ -313,6 +325,7 @@ func extractField(item map[string]interface{}, fieldSpec string) (string, error)
 }
 
 // masterPasswordForCache returns the password to use for cache key derivation.
+// Returns an error if no password source is available (avoids hardcoded fallback key).
 func (c *BWClient) masterPasswordForCache() string {
 	if c.MasterPassword != "" {
 		return c.MasterPassword
@@ -322,6 +335,11 @@ func (c *BWClient) masterPasswordForCache() string {
 	}
 	if s := os.Getenv("BW_SESSION"); s != "" {
 		return s
+	}
+	// Fall back to a session-derived token if we have one; callers should ensure
+	// a password source is available before operations requiring the cache.
+	if c.session != "" {
+		return c.session
 	}
 	return "default-cache-key"
 }

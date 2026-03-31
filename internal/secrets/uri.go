@@ -65,6 +65,9 @@ func ParseVaultRef(uri string) (VaultRef, error) {
 	}
 	path := rest[:idx]
 	field := rest[idx+1:]
+	if path == "" {
+		return VaultRef{}, fmt.Errorf("vault:// URI has empty path: %q", uri)
+	}
 	if field == "" {
 		return VaultRef{}, fmt.Errorf("vault:// URI has empty field: %q", uri)
 	}
