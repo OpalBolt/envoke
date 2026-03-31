@@ -27,8 +27,12 @@ func EmitExports(w io.Writer, entries []EnvEntry) error {
 }
 
 // EmitUnload writes "unset KEY" lines to w for each entry.
+// Validates keys against the same POSIX pattern as EmitExports to prevent shell injection.
 func EmitUnload(w io.Writer, entries []EnvEntry) error {
 	for _, e := range entries {
+		if !validEnvKey.MatchString(e.Key) {
+			return fmt.Errorf("invalid env key %q: must match [A-Za-z_][A-Za-z0-9_]*", e.Key)
+		}
 		if _, err := fmt.Fprintf(w, "unset %s\n", e.Key); err != nil {
 			return err
 		}

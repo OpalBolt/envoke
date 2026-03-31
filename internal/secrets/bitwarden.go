@@ -78,7 +78,10 @@ func (c *BWClient) Session() (string, error) {
 			return "", fmt.Errorf("reading password from tty: %w", err)
 		}
 		fmt.Fprintln(tty) // newline after hidden input
+		defer zeroBytes(pwBytes) // zero the raw bytes before they go out of scope
 		pw = string(pwBytes)
+		// Store for cache key derivation — cleared after unlock below
+		c.MasterPassword = pw
 	}
 
 	// bw unlock --raw — pass password via stdin, NOT via argv (argv is world-readable via ps/proc)
@@ -104,13 +107,27 @@ func (c *BWClient) Session() (string, error) {
 }
 
 // FolderItems fetches all items in the given BW folder.
+// It ensures cache key material is available before any cache operation.
 func (c *BWClient) FolderItems(folder string) ([]map[string]interface{}, error) {
 	uid := fmt.Sprintf("%d", os.Getuid())
 	acctTag, err := c.AccountTag()
 	if err != nil {
 		return nil, err
 	}
+
+	// Ensure we have a real password/key before cache operations.
+	// If only an interactive prompt would provide it, pre-call Session() so
+	// c.MasterPassword is populated before masterPasswordForCache() runs.
+	if c.MasterPassword == "" && os.Getenv("RENV_BW_PASSWORD") == "" && os.Getenv("BW_SESSION") == "" {
+		if _, err := c.Session(); err != nil {
+			return nil, err
+		}
+	}
 	pw := c.masterPasswordForCache()
+	if pw == "" {
+		// No material to encrypt cache — skip cache and fetch directly.
+		return c.fetchFolderItemsDirect(folder)
+	}
 
 	// Check cache
 	if cached, err := c.Cache.Get(uid, acctTag, folder, pw); err == nil && cached != nil {
@@ -149,6 +166,29 @@ func (c *BWClient) FolderItems(folder string) ([]map[string]interface{}, error) 
 	return items, nil
 }
 
+// fetchFolderItemsDirect fetches folder items without cache (used when no encryption key available).
+func (c *BWClient) fetchFolderItemsDirect(folder string) ([]map[string]interface{}, error) {
+	session, err := c.Session()
+	if err != nil {
+		return nil, err
+	}
+	folderID, err := c.findFolderID(folder, session)
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.Command("bw", "list", "items", "--folderid", folderID)
+	cmd.Env = append(os.Environ(), "BW_SESSION="+session)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("bw list items failed: %w", err)
+	}
+	var items []map[string]interface{}
+	if err := json.Unmarshal(out, &items); err != nil {
+		return nil, fmt.Errorf("parsing bw list items output: %w", err)
+	}
+	return items, nil
+}
+
 // CollectionItems fetches all items in the given BW collection.
 // URI format: bw://collection:<name>/item[/field]
 func (c *BWClient) CollectionItems(collectionName string) ([]map[string]interface{}, error) {
@@ -157,13 +197,21 @@ func (c *BWClient) CollectionItems(collectionName string) ([]map[string]interfac
 	if err != nil {
 		return nil, err
 	}
+
+	if c.MasterPassword == "" && os.Getenv("RENV_BW_PASSWORD") == "" && os.Getenv("BW_SESSION") == "" {
+		if _, err := c.Session(); err != nil {
+			return nil, err
+		}
+	}
 	pw := c.masterPasswordForCache()
 	cacheKeyStr := "collection:" + collectionName
 
-	if cached, err := c.Cache.Get(uid, acctTag, cacheKeyStr, pw); err == nil && cached != nil {
-		var items []map[string]interface{}
-		if err := json.Unmarshal(cached, &items); err == nil {
-			return items, nil
+	if pw != "" {
+		if cached, err := c.Cache.Get(uid, acctTag, cacheKeyStr, pw); err == nil && cached != nil {
+			var items []map[string]interface{}
+			if err := json.Unmarshal(cached, &items); err == nil {
+				return items, nil
+			}
 		}
 	}
 
@@ -184,7 +232,9 @@ func (c *BWClient) CollectionItems(collectionName string) ([]map[string]interfac
 		return nil, fmt.Errorf("bw list items (collection) failed: %w", err)
 	}
 
-	_ = c.Cache.Put(uid, acctTag, cacheKeyStr, pw, out)
+	if pw != "" {
+		_ = c.Cache.Put(uid, acctTag, cacheKeyStr, pw, out)
+	}
 
 	var items []map[string]interface{}
 	if err := json.Unmarshal(out, &items); err != nil {
@@ -198,6 +248,7 @@ func (c *BWClient) CollectionItems(collectionName string) ([]map[string]interfac
 func (c *BWClient) Close() {
 	if c.session != "" {
 		zeroString(&c.session)
+		c.session = "" // explicitly empty after zeroing NUL-bytes
 	}
 	if !c.sessionFromEnv {
 		os.Unsetenv("BW_SESSION")
@@ -325,7 +376,7 @@ func extractField(item map[string]interface{}, fieldSpec string) (string, error)
 }
 
 // masterPasswordForCache returns the password to use for cache key derivation.
-// Returns an error if no password source is available (avoids hardcoded fallback key).
+// Returns empty string if no source is available — callers MUST skip cache in that case.
 func (c *BWClient) masterPasswordForCache() string {
 	if c.MasterPassword != "" {
 		return c.MasterPassword
@@ -336,12 +387,12 @@ func (c *BWClient) masterPasswordForCache() string {
 	if s := os.Getenv("BW_SESSION"); s != "" {
 		return s
 	}
-	// Fall back to a session-derived token if we have one; callers should ensure
-	// a password source is available before operations requiring the cache.
-	if c.session != "" {
+	// Use the already-obtained session token (only if it's non-trivial length — not NUL-zeroed)
+	if len(c.session) > 0 && c.session[0] != 0 {
 		return c.session
 	}
-	return "default-cache-key"
+	// No material available — caller must skip cache to avoid encrypting with a hardcoded key.
+	return ""
 }
 
 // bwSHA256Hex returns the hex-encoded SHA-256 of s.

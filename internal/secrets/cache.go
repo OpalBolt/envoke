@@ -28,8 +28,9 @@ const (
 // Key derivation: PBKDF2-SHA256(masterPassword, salt, 100000 iter, 32 bytes)
 // Encryption: AES-256-CBC
 type Cache struct {
-	Dir    string
-	MaxAge time.Duration
+	Dir      string
+	MaxAge   time.Duration
+	Disabled bool // when true, Put and Get are no-ops (--no-cache flag)
 }
 
 // NewCache picks /dev/shm if available and writable, else /tmp.
@@ -60,7 +61,11 @@ func (c *Cache) CacheFile(uid, acctTag, folder string) string {
 }
 
 // Put encrypts items JSON and writes to cache file (chmod 600).
+// Returns immediately (no-op) when cache is disabled.
 func (c *Cache) Put(uid, acctTag, folder, masterPassword string, items []byte) error {
+	if c.Disabled {
+		return nil
+	}
 	// Generate random salt and IV
 	salt := make([]byte, cacheSaltLen)
 	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
@@ -103,8 +108,11 @@ func (c *Cache) Put(uid, acctTag, folder, masterPassword string, items []byte) e
 	return nil
 }
 
-// Get decrypts and returns items JSON, or (nil, nil) if cache miss/expired.
+// Get decrypts and returns items JSON, or (nil, nil) if cache miss/expired/disabled.
 func (c *Cache) Get(uid, acctTag, folder, masterPassword string) ([]byte, error) {
+	if c.Disabled {
+		return nil, nil // cache disabled — treat as miss
+	}
 	path := c.CacheFile(uid, acctTag, folder)
 	fi, err := os.Stat(path)
 	if os.IsNotExist(err) {

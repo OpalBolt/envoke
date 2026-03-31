@@ -56,7 +56,7 @@ func resolveCmd(noCache *bool) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cache := secrets.NewCache()
 			if *noCache {
-				cache.MaxAge = 0
+				cache.Disabled = true // bypass both Put and Get — no secrets touch disk
 			}
 			bwClient := &secrets.BWClient{Cache: cache}
 			vaultClient := &secrets.VaultClient{}

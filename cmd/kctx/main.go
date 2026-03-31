@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/eficode/secure-handling-of-secrets/internal/kubeconfig"
 	"github.com/eficode/secure-handling-of-secrets/internal/secrets"
@@ -19,7 +20,7 @@ func main() {
 
 func rootCmd() *cobra.Command {
 	root := &cobra.Command{
-		Use:   "kctx-bin",
+		Use:   "kctx",
 		Short: "Ephemeral kubeconfig switcher via Vault or Bitwarden",
 	}
 	root.AddCommand(
@@ -85,7 +86,7 @@ func switchCmd() *cobra.Command {
 			}
 
 			fmt.Printf("export KUBECONFIG=%s\n", path)
-			fmt.Printf("trap 'kctx-bin clear' EXIT\n")
+			fmt.Printf("trap 'kctx clear' EXIT\n")
 			return nil
 		},
 	}
@@ -94,16 +95,27 @@ func switchCmd() *cobra.Command {
 func clearCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "clear",
-		Short: "Unset KUBECONFIG and remove tmpfile",
+		Short: "Unset KUBECONFIG and remove tmpfile (only if created by kctx)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			kubeconfigPath := os.Getenv("KUBECONFIG")
-			if kubeconfigPath != "" {
+			if kubeconfigPath != "" && isManagedKubeconfig(kubeconfigPath) {
 				_ = os.Remove(kubeconfigPath)
 			}
 			fmt.Println("unset KUBECONFIG")
 			return nil
 		},
 	}
+}
+
+// isManagedKubeconfig returns true if the path looks like a kctx-created tmpfile.
+// Only files under /dev/shm or /tmp with the "kctx-" prefix are considered managed.
+func isManagedKubeconfig(path string) bool {
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+	if dir != "/dev/shm" && dir != "/tmp" {
+		return false
+	}
+	return len(base) > 5 && base[:5] == "kctx-"
 }
 
 func statusCmd() *cobra.Command {
@@ -157,18 +169,18 @@ func shellInitCmd() *cobra.Command {
 func kctxShellSnippet() string {
 	return `
 # kctx shell integration — source this into your shell
-# Usage: source <(kctx-bin shell-init)
+# Usage: source <(kctx shell-init)
 
 kctx() {
   case "$1" in
     clear)
-      eval "$(kctx-bin clear)"
+      eval "$(command kctx clear)"
       ;;
     status)
-      kctx-bin status
+      command kctx status
       ;;
     *)
-      eval "$(kctx-bin switch "$@")"
+      eval "$(command kctx switch "$@")"
       ;;
   esac
 }
