@@ -51,13 +51,14 @@ go install github.com/eficode/secure-handling-of-secrets/cmd/kctx@latest
 ## Quick start
 
 ```bash
-# Shell integration
-source <(renv shell-init)
-source <(kctx-bin shell-init)
-
 # Use secret references in .env
 echo 'DB_PASS=bw://prod/database/password' > .env
-resolve_env_file .env   # exports DB_PASS, registers EXIT unload trap
+
+# Resolve and load into your shell
+eval "$(renv resolve .env)"
+
+# With direnv — add to .envrc:
+echo 'eval "$(renv resolve .env)"' >> .envrc
 ```
 
 ## URI formats

@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"golang.org/x/term"
 )
@@ -48,7 +50,7 @@ func (c *BWClient) AccountTag() (string, error) {
 }
 
 // Session returns an active BW session token.
-// Precedence: BW_SESSION env var → RENV_BW_PASSWORD env var → prompt on /dev/tty
+// Precedence: BW_SESSION env var → RENV_BW_PASSWORD env var → stored session file → prompt on /dev/tty
 func (c *BWClient) Session() (string, error) {
 	if c.session != "" {
 		return c.session, nil
@@ -66,7 +68,14 @@ func (c *BWClient) Session() (string, error) {
 		pw = c.MasterPassword
 	}
 	if pw == "" {
-		// 3. Prompt on /dev/tty — no echo using x/term
+		// 3. Stored session from a previous process invocation (e.g. direnv re-entry)
+		if stored := c.loadStoredSession(); stored != "" {
+			c.session = stored
+			c.sessionFromEnv = false
+			return c.session, nil
+		}
+
+		// 4. Prompt on /dev/tty — no echo using x/term
 		tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 		if err != nil {
 			return "", fmt.Errorf("opening /dev/tty: %w", err)
@@ -99,11 +108,60 @@ func (c *BWClient) Session() (string, error) {
 	}
 	c.session = token
 	c.sessionFromEnv = false
+	// Persist for future process invocations (e.g. direnv re-entry into the same folder)
+	c.saveSession(token)
 	// Clear master password
 	zeroString(&c.MasterPassword)
 	pwCopy := pw
 	zeroString(&pwCopy)
 	return c.session, nil
+}
+
+// sessionStorePath returns the path where the BW session token is persisted between process invocations.
+// Prefers /dev/shm (memory-backed, cleared on reboot) over /tmp for security.
+func sessionStorePath(uid string) string {
+	dir := "/tmp"
+	if fi, err := os.Stat("/dev/shm"); err == nil && fi.IsDir() {
+		dir = "/dev/shm"
+	}
+	return filepath.Join(dir, "renv-bw-session-"+uid)
+}
+
+// loadStoredSession reads a previously saved BW session token from disk.
+// Returns "" if no valid session is found (missing, expired, or unreadable).
+func (c *BWClient) loadStoredSession() string {
+	uid := fmt.Sprintf("%d", os.Getuid())
+	path := sessionStorePath(uid)
+	fi, err := os.Stat(path)
+	if err != nil {
+		return ""
+	}
+	if time.Since(fi.ModTime()) > 8*time.Hour {
+		os.Remove(path)
+		return ""
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+// saveSession persists the BW session token to disk (chmod 600).
+// The file is placed in /dev/shm when available (memory-backed, cleared on reboot).
+func (c *BWClient) saveSession(token string) {
+	uid := fmt.Sprintf("%d", os.Getuid())
+	path := sessionStorePath(uid)
+	_ = os.WriteFile(path, []byte(token), 0600)
+}
+
+// ClearStoredSession removes the persisted BW session file for the given uid.
+func ClearStoredSession(uid string) error {
+	path := sessionStorePath(uid)
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("clearing session: %w", err)
+	}
+	return nil
 }
 
 // FolderItems fetches all items in the given BW folder.
@@ -390,6 +448,10 @@ func (c *BWClient) masterPasswordForCache() string {
 	// Use the already-obtained session token (only if it's non-trivial length — not NUL-zeroed)
 	if len(c.session) > 0 && c.session[0] != 0 {
 		return c.session
+	}
+	// Try session stored from a previous process invocation
+	if stored := c.loadStoredSession(); stored != "" {
+		return stored
 	}
 	// No material available — caller must skip cache to avoid encrypting with a hardcoded key.
 	return ""

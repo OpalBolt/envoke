@@ -40,7 +40,6 @@ func rootCmd() *cobra.Command {
 		clearCacheCmd(),
 		statusCmd(),
 		versionCmd(),
-		shellInitCmd(),
 		unloadCmd(),
 	)
 	return root
@@ -51,9 +50,22 @@ func resolveCmd(noCache *bool) *cobra.Command {
 	var shell string
 
 	cmd := &cobra.Command{
-		Use:   "resolve",
+		Use:   "resolve [file]",
 		Short: "Resolve .env file secret references and emit shell exports",
+		Long: `Resolve secret references in a .env file and print shell export statements.
+
+The output must be evaluated by your shell to set the variables:
+
+  eval "$(renv resolve .env)"
+
+With direnv, add this to your .envrc:
+
+  eval "$(renv resolve .env)"`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) > 0 {
+				file = args[0]
+			}
 			cache := secrets.NewCache()
 			if *noCache {
 				cache.Disabled = true // bypass both Put and Get — no secrets touch disk
@@ -134,12 +146,15 @@ func yamlCmd() *cobra.Command {
 func clearCacheCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "clear-cache",
-		Short: "Remove all renv cache files",
+		Short: "Remove all renv cache files and stored session",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cache := secrets.NewCache()
 			uid := fmt.Sprintf("%d", os.Getuid())
 			if err := cache.Clear(uid); err != nil {
 				return fmt.Errorf("clearing cache: %w", err)
+			}
+			if err := secrets.ClearStoredSession(uid); err != nil {
+				return fmt.Errorf("clearing session: %w", err)
 			}
 			fmt.Fprintln(os.Stderr, "renv: cache cleared")
 			return nil
@@ -175,16 +190,6 @@ func versionCmd() *cobra.Command {
 		Short: "Print version",
 		Run: func(cmd *cobra.Command, args []string) {
 			fmt.Printf("renv %s\n", version)
-		},
-	}
-}
-
-func shellInitCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "shell-init",
-		Short: "Emit shell integration functions",
-		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Print(env.ShellIntegrationSnippet())
 		},
 	}
 }

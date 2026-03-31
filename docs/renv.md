@@ -10,20 +10,23 @@ go install github.com/eficode/secure-handling-of-secrets/cmd/renv@latest
 
 ## Usage
 
-### Shell integration
+### Evaluating exports
 
-Add to your shell profile:
-
-```bash
-source <(renv shell-init)
-```
-
-Then use:
+`renv resolve` prints `export KEY=value` statements to stdout. Your shell must evaluate them to set the variables:
 
 ```bash
-resolve_env_file .env     # sources exports, registers EXIT trap
-unload_env                 # unsets all exported variables
+eval "$(renv resolve .env)"
 ```
+
+### direnv integration
+
+Add to your `.envrc`:
+
+```bash
+eval "$(renv resolve .env)"
+```
+
+direnv will source this on folder entry. The first run prompts for your Bitwarden master password; subsequent re-entries (within 8 hours) reuse the stored session and hit the encrypted cache — no re-prompt.
 
 ### .env file format
 
@@ -37,10 +40,10 @@ API_KEY=vault://secret/myapp#api_key
 
 | Command | Description |
 |---------|-------------|
-| `renv resolve --file .env` | Resolve and emit exports |
+| `renv resolve [file]` | Resolve and emit exports (default file: `.env`) |
 | `renv yaml config.yaml` | Resolve YAML file |
 | `renv yaml config.yaml --key database.password` | Extract single value |
-| `renv clear-cache` | Remove all cache files |
+| `renv clear-cache` | Remove all cache files and stored BW session |
 | `renv status` | Show cache status |
 | `renv version` | Print version |
 

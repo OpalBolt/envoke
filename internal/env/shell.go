@@ -27,7 +27,6 @@ func EmitExports(w io.Writer, entries []EnvEntry) error {
 }
 
 // EmitUnload writes "unset KEY" lines to w for each entry.
-// Validates keys against the same POSIX pattern as EmitExports to prevent shell injection.
 func EmitUnload(w io.Writer, entries []EnvEntry) error {
 	for _, e := range entries {
 		if !validEnvKey.MatchString(e.Key) {
@@ -38,27 +37,6 @@ func EmitUnload(w io.Writer, entries []EnvEntry) error {
 		}
 	}
 	return nil
-}
-
-// ShellIntegrationSnippet returns shell function source for users to source into their shell.
-func ShellIntegrationSnippet() string {
-	return `
-# renv shell integration — source this into your shell
-# Usage: source <(renv shell-init)
-
-resolve_env_file() {
-  local file="${1:-.env}"
-  local exports
-  exports="$(renv resolve --file "$file")" || return 1
-  eval "$exports"
-  # Register EXIT trap to unload variables
-  trap 'unload_env' EXIT
-}
-
-unload_env() {
-  eval "$(renv unload)"
-}
-`
 }
 
 // shellQuote returns s wrapped in single quotes, with internal single quotes escaped.
