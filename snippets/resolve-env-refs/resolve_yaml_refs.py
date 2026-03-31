@@ -23,7 +23,7 @@ Import usage
 
     # Resolve a single reference string:
     from resolve_yaml_refs import resolve_value
-    secret = resolve_value("bw://prod-db/password")
+    secret = resolve_value("bw://production/prod-db/password")
 
 ─────────────────────────────────────────────────────────────────────────────
 CLI usage
@@ -41,12 +41,15 @@ CLI usage
 Reference formats
 ─────────────────────────────────────────────────────────────────────────────
 
-    bw://item-name              → Bitwarden password field (default)
-    bw://item-name/password     → Bitwarden password field
-    bw://item-name/username     → Bitwarden username field
-    bw://item-name/note         → Bitwarden notes field
-    bw://item-name/field:fname  → Bitwarden custom field named "fname"
-    vault://secret/path#field   → Vault KV v2 single field
+    bw://folder/item-name              → Bitwarden password field (default)
+    bw://folder/item-name/password     → Bitwarden password field
+    bw://folder/item-name/username     → Bitwarden username field
+    bw://folder/item-name/note         → Bitwarden notes field
+    bw://folder/item-name/field:fname  → Bitwarden custom field named "fname"
+    vault://secret/path#field          → Vault KV v2 single field
+
+    The folder segment is REQUIRED. It scopes the Bitwarden item fetch to a
+    single folder, avoiding pulling the entire vault into process memory.
 
 ─────────────────────────────────────────────────────────────────────────────
 Prerequisites
@@ -54,14 +57,17 @@ Prerequisites
 
     pip install pyyaml
 
-    bw://  references: bw CLI installed; BW_SESSION exported
-        export BW_SESSION=$(bw unlock --raw)   # or set BW_PASSWORD for non-interactive
+    bw:// references: bw CLI installed; logged in (bw login).
+        Authentication (choose one):
+          export BW_SESSION=$(bw unlock --raw)
+          export RENV_BW_PASSWORD=<master-password>   # non-interactive
 
     vault:// references: vault CLI installed; VAULT_ADDR and VAULT_TOKEN set
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -79,6 +85,12 @@ except ImportError:
 _BW_PREFIX = "bw://"
 _VAULT_PREFIX = "vault://"
 
+# Process-level cache: (account_fingerprint, folder_name) → list of BW item dicts.
+# Keyed by account fingerprint to prevent cross-account cache collisions in
+# long-lived processes (e.g. servers) where BW credentials may change.
+_bw_folder_cache: dict[tuple[str, str], list[dict[str, Any]]] = {}
+_bw_account_tag: str = ""  # cached account fingerprint; cleared by clear_bw_cache()
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -92,7 +104,7 @@ def _redact_cmd(cmd: tuple[str, ...]) -> str:
         if skip_next:
             redacted.append("[REDACTED]")
             skip_next = False
-        elif arg in ("--session", "--token", "--password"):
+        elif arg in ("--session", "--token", "--password", "--passwordenv"):
             redacted.append(arg)
             skip_next = True
         else:
@@ -105,8 +117,7 @@ def _run(*cmd: str, env: dict[str, str] | None = None) -> str:
 
     Raises:
         RuntimeError: Command not found (binary missing) or non-zero exit.
-            Sensitive arguments (--session, --token, --password) are redacted
-            in error messages to prevent credential leakage in logs.
+            Sensitive arguments are redacted in error messages.
     """
     try:
         result = subprocess.run(
@@ -124,50 +135,127 @@ def _run(*cmd: str, env: dict[str, str] | None = None) -> str:
             f"Command failed: {_redact_cmd(cmd)}\n"
             f"stderr: {result.stderr.strip()}"
         )
-    # Remove exactly one trailing newline (CLI convention) — do NOT strip
-    # leading/trailing whitespace, which could silently corrupt secret values.
     output = result.stdout
     if output.endswith("\n"):
         output = output[:-1]
     return output
 
 
+def _bw_account_tag_get() -> str:
+    """Return an 8-char fingerprint of the active BW account (email + serverUrl).
+
+    Uses ``bw status`` which works even when the vault is locked.  Cached at
+    module level; call ``clear_bw_cache()`` to reset if the account changes.
+    Falls back to "unknown" if bw is unavailable (non-fatal degradation).
+    """
+    global _bw_account_tag
+    if _bw_account_tag:
+        return _bw_account_tag
+    try:
+        status_json = _run("bw", "status")
+        status = json.loads(status_json)
+        identity = (status.get("userEmail", "") + ":" + status.get("serverUrl", ""))
+        _bw_account_tag = hashlib.sha256(identity.encode()).hexdigest()[:8]
+    except Exception:
+        _bw_account_tag = "unknown"
+    return _bw_account_tag
+
+
 def _bw_session() -> str:
-    """Return the active BW_SESSION, raising EnvironmentError if not set."""
+    """Return an active BW session token.
+
+    Precedence:
+      1. BW_SESSION env var (already unlocked externally)
+      2. RENV_BW_PASSWORD env var → unlock non-interactively
+      3. Raise EnvironmentError with instructions
+    """
     session = os.environ.get("BW_SESSION", "")
-    if not session:
-        raise EnvironmentError(
-            "BW_SESSION is not set.\n"
-            "Run: export BW_SESSION=$(bw unlock --raw)\n"
-            "Or set BW_PASSWORD and call: export BW_SESSION=$(bw unlock --passwordenv BW_PASSWORD --raw)"
+    if session:
+        return session
+
+    password = os.environ.get("RENV_BW_PASSWORD", "")
+    if password:
+        env_var = "_RENV_PY_PW"
+        session = _run(
+            "bw", "unlock", "--passwordenv", env_var, "--raw",
+            env={env_var: password},
         )
-    return session
+        if not session:
+            raise RuntimeError("bw unlock returned an empty session token.")
+        return session
+
+    raise EnvironmentError(
+        "No Bitwarden session available.\n"
+        "Options:\n"
+        "  export BW_SESSION=$(bw unlock --raw)\n"
+        "  export RENV_BW_PASSWORD=<master-password>  # non-interactive"
+    )
 
 
-def _resolve_bw(item_name: str, field_spec: str = "password") -> str:
-    """Resolve a Bitwarden reference using the bw CLI."""
+def _bw_folder_items(folder_name: str) -> list[dict[str, Any]]:
+    """Return all Bitwarden items in the given folder (process-level cache).
+
+    Cache is scoped by (account_fingerprint, folder_name) to prevent returning
+    stale secrets when the active Bitwarden account changes within a process.
+    """
+    cache_key = (_bw_account_tag_get(), folder_name)
+    if cache_key in _bw_folder_cache:
+        return _bw_folder_cache[cache_key]
+
     session = _bw_session()
 
+    # Resolve folder name → BW UUID (exact match after --search pre-filter)
+    folders_json = _run("bw", "list", "folders", "--search", folder_name, "--session", session)
+    folders: list[dict[str, Any]] = json.loads(folders_json)
+    folder_id = next(
+        (f["id"] for f in folders if f.get("name") == folder_name),
+        None,
+    )
+    if folder_id is None:
+        raise KeyError(
+            f"Bitwarden folder not found: {folder_name!r}\n"
+            f"Verify the folder name (case-sensitive). "
+            f"List folders with: bw list folders | jq -r '.[].name'"
+        )
+
+    # Fetch only items in this folder
+    items_json = _run("bw", "list", "items", "--folderid", folder_id, "--session", session)
+    items: list[dict[str, Any]] = json.loads(items_json)
+
+    _bw_folder_cache[cache_key] = items
+    return items
+
+
+def _resolve_bw(folder: str, item_name: str, field_spec: str = "password") -> str:
+    """Resolve a Bitwarden reference using folder-scoped item lookup."""
+    items = _bw_folder_items(folder)
+
+    item = next((i for i in items if i.get("name") == item_name), None)
+    if item is None:
+        raise KeyError(
+            f"Bitwarden item {item_name!r} not found in folder {folder!r}"
+        )
+
     if field_spec in ("password", ""):
-        return _run("bw", "get", "password", item_name, "--session", session)
+        return item.get("login", {}).get("password") or ""
     elif field_spec == "username":
-        return _run("bw", "get", "username", item_name, "--session", session)
+        return item.get("login", {}).get("username") or ""
     elif field_spec in ("note", "notes"):
-        return _run("bw", "get", "notes", item_name, "--session", session)
+        return item.get("notes") or ""
+    elif field_spec == "totp":
+        return item.get("login", {}).get("totp") or ""
     elif field_spec.startswith("field:"):
         fname = field_spec[len("field:"):]
-        item_json = _run("bw", "get", "item", item_name, "--session", session)
-        item = json.loads(item_json)
         for f in item.get("fields", []):
             if f.get("name") == fname:
-                return f["value"]
+                return f.get("value") or ""
         raise KeyError(
-            f"Custom field '{fname}' not found in Bitwarden item '{item_name}'"
+            f"Custom field {fname!r} not found in Bitwarden item {item_name!r}"
         )
     else:
         raise ValueError(
-            f"Unknown bw field spec '{field_spec}'. "
-            "Use: password, username, note, field:<name>"
+            f"Unknown bw field spec {field_spec!r}. "
+            "Use: password, username, note, totp, field:<name>"
         )
 
 
@@ -192,25 +280,36 @@ def resolve_value(value: str) -> str:
     unchanged, so it is safe to call this on any YAML scalar.
 
     Args:
-        value: A reference string such as "bw://myitem/password" or
+        value: A reference string such as "bw://production/myitem/password" or
                "vault://secret/myapp#db_password", or any plain string.
 
     Returns:
         The resolved secret value, or the original string if not a reference.
 
     Raises:
-        EnvironmentError: Missing BW_SESSION or VAULT_ADDR.
+        EnvironmentError: Missing BW_SESSION / RENV_BW_PASSWORD or VAULT_ADDR.
         RuntimeError: bw/vault CLI call failed.
-        KeyError: Bitwarden custom field not found.
-        ValueError: Unsupported reference format (e.g. vault:// without #field).
+        KeyError: Bitwarden folder or item not found, or custom field missing.
+        ValueError: Unsupported reference format.
     """
     if value.startswith(_BW_PREFIX):
         ref = value[len(_BW_PREFIX):]
-        if "/" in ref:
-            item_name, field_spec = ref.split("/", 1)
+        if "/" not in ref:
+            raise ValueError(
+                f"Invalid bw:// reference: {value!r}\n"
+                f"Format is: bw://folder/item-name[/field]\n"
+                f"Example:   bw://production/db-password"
+            )
+        folder, rest = ref.split("/", 1)
+        if "/" in rest:
+            item_name, field_spec = rest.split("/", 1)
         else:
-            item_name, field_spec = ref, "password"
-        return _resolve_bw(item_name, field_spec)
+            item_name, field_spec = rest, "password"
+        if not folder or not item_name:
+            raise ValueError(
+                f"bw:// folder and item name must not be empty: {value!r}"
+            )
+        return _resolve_bw(folder, item_name, field_spec)
 
     if value.startswith(_VAULT_PREFIX):
         ref = value[len(_VAULT_PREFIX):]
@@ -276,6 +375,18 @@ def load_yaml_string(yaml_str: str) -> Any:
     """
     data = yaml.safe_load(yaml_str)
     return resolve_data(data)
+
+
+def clear_bw_cache() -> None:
+    """Clear the process-level Bitwarden folder cache and account fingerprint.
+
+    Call this when the active Bitwarden account or session changes within a
+    long-lived process (e.g. a server that handles requests for multiple users).
+    The next bw:// reference will re-authenticate and re-fetch folder items.
+    """
+    global _bw_account_tag
+    _bw_folder_cache.clear()
+    _bw_account_tag = ""
 
 
 def _get_nested(data: Any, key_path: str) -> Any:
