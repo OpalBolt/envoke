@@ -93,7 +93,28 @@ The script checks `bw status` before the (slow) `bw list items` call, so you get
 
 ## Security
 
-- `bw list items` is called **once** and cached in `$_RENV_BW_ITEMS` for the shell session — subsequent refs in the same `.env` are free.
+### RAM cache
+After the first `bw list items` call, results are encrypted and written to `/dev/shm/renv-<id>.enc` (Linux tmpfs RAM). Subsequent shells sharing the same `BW_SESSION` read from the cache instead of calling Bitwarden again — making cold start essentially instant.
+
+The cache file is:
+- Named by the first 16 hex chars of `SHA-256(BW_SESSION)` — unique per session, no collisions between concurrent logins
+- Encrypted with AES-256-CBC + PBKDF2, key derived from `SHA-256(BW_SESSION)`
+- `chmod 600` — inaccessible to other users
+- Discarded automatically after 8 hours (`_RENV_CACHE_MAX_AGE`)
+- Deleted by `unload_env` / the EXIT trap
+
+### What the encryption actually protects
+| Threat | Protected? |
+|--------|-----------|
+| Other non-root users reading `/dev/shm` | ✅ file permissions + encryption |
+| Attacker without `BW_SESSION` who reads the file | ✅ AES-256 ciphertext is useless without the key |
+| Root | ❌ root can read `/dev/shm` and `/proc/<pid>/environ` |
+| Kernel swap | ❌ decrypted JSON lives in bash variables; those pages can be swapped to disk if swap is enabled (inherent bash limitation) |
+| SIGKILL / OOM kill | ❌ EXIT trap does not fire; encrypted file stays in RAM until reboot (harmless — it is encrypted and `/dev/shm` clears on reboot) |
+| macOS | ⚠️ no `/dev/shm`; falls back to `/tmp` which is **disk-backed** |
+
+### Other security properties
+- `bw list items` is called **once** and cached — all subsequent refs in the same `.env` are free.
 - All tracked vars are unset on shell EXIT via `trap unload_env EXIT`.
 - Use `source <(resolve_env_file .env)` — never `eval "$(…)"`.
 - Variable names are validated against `[A-Za-z_][A-Za-z0-9_]*` before emission.

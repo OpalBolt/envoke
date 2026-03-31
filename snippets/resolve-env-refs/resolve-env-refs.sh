@@ -40,6 +40,10 @@
 _RENV_BW_SESSION=""    # cached bw session token
 _RENV_BW_ITEMS=""      # cached JSON from: bw list items
 _RENV_VARS=()          # names of vars we exported (for cleanup)
+_RENV_CACHE_FILE=""    # path to the encrypted on-RAM cache file we own
+
+# Max age of a RAM cache file before it is discarded and re-fetched (seconds).
+_RENV_CACHE_MAX_AGE=28800  # 8 hours
 
 # ── BW session ────────────────────────────────────────────────────────────────
 
@@ -96,15 +100,93 @@ _renv_bw_session() {
   return 1
 }
 
-# ── BW item cache ─────────────────────────────────────────────────────────────
+# ── BW item cache (RAM-backed, AES-256 encrypted) ─────────────────────────────
+#
+# Cache file lives in /dev/shm (tmpfs RAM) so it survives across sourcing the
+# same .env in multiple shells without a second bw list items round-trip.
+#
+# Naming:  /dev/shm/renv-<first16 of SHA-256(BW_SESSION)>.enc
+#   - Unique per session token → no collision between concurrent logins
+#   - Shared across shells with the *same* BW_SESSION → only one slow fetch
+#
+# Security notes:
+#   - Encrypted with AES-256-CBC + PBKDF2 (openssl enc); key derived from
+#     SHA-256(BW_SESSION) so the file is useless without the session token.
+#   - chmod 600: inaccessible to other users on a shared machine.
+#   - /dev/shm is RAM-only on Linux; never written to a physical disk.
+#   - macOS has no /dev/shm — falls back to /tmp (disk-backed); note in README.
+#   - Root and SIGKILL bypass all of this (inherent bash/shell limitation).
+#   - Files older than _RENV_CACHE_MAX_AGE are discarded and re-fetched.
+
+_renv_cache_dir() {
+  if [[ -d /dev/shm && -w /dev/shm ]]; then
+    printf '/dev/shm'
+  else
+    printf '/tmp'
+  fi
+}
+
+_renv_cache_file() {
+  local session="$1"
+  local id
+  id=$(printf '%s' "$session" | sha256sum 2>/dev/null | cut -c1-16) \
+    || id=$(printf '%s' "$session" | openssl dgst -sha256 2>/dev/null | awk '{print substr($NF,1,16)}')
+  printf '%s/renv-%s.enc' "$(_renv_cache_dir)" "$id"
+}
+
+_renv_cache_key() {
+  local session="$1"
+  # Full SHA-256 hex string used as passphrase; openssl PBKDF2 derives the key.
+  printf '%s' "$session" | sha256sum 2>/dev/null | awk '{print $1}' \
+    || printf '%s' "$session" | openssl dgst -sha256 2>/dev/null | awk '{print $NF}'
+}
+
+_renv_cache_stale() {
+  local file="$1"
+  local now age mtime
+  now=$(date +%s)
+  # stat is not portable; try both Linux and macOS forms.
+  mtime=$(stat -c '%Y' "$file" 2>/dev/null) \
+    || mtime=$(stat -f '%m' "$file" 2>/dev/null) \
+    || { printf 'resolve-env-refs: cannot stat cache file\n' >&2; return 0; }
+  age=$(( now - mtime ))
+  (( age > _RENV_CACHE_MAX_AGE ))
+}
 
 _renv_bw_items() {
   if [[ -z "$_RENV_BW_ITEMS" ]]; then
     local session
     session=$(_renv_bw_session) || return 1
 
-    # Sanity-check login/lock state before the (slow) list call.
+    local cache_file cache_key
+    cache_file=$(_renv_cache_file "$session")
+    cache_key=$(_renv_cache_key  "$session")
+
+    # ── Try the RAM cache first ───────────────────────────────────────────────
+    if [[ -f "$cache_file" ]]; then
+      if _renv_cache_stale "$cache_file"; then
+        printf 'resolve-env-refs: RAM cache expired, re-fetching from Bitwarden...\n' >&2
+        rm -f "$cache_file"
+      else
+        local decrypted
+        decrypted=$(openssl enc -d -aes-256-cbc -pbkdf2 \
+          -pass "pass:${cache_key}" -in "$cache_file" 2>/dev/null) || {
+          printf 'resolve-env-refs: cache decrypt failed (stale session?), re-fetching...\n' >&2
+          rm -f "$cache_file"
+          decrypted=""
+        }
+        if [[ -n "$decrypted" ]]; then
+          _RENV_BW_ITEMS="$decrypted"
+          _RENV_CACHE_FILE="$cache_file"
+          printf '%s' "$_RENV_BW_ITEMS"
+          return 0
+        fi
+      fi
+    fi
+
+    # ── Cache miss: fetch from Bitwarden ─────────────────────────────────────
     _renv_bw_check || return 1
+    printf 'resolve-env-refs: fetching items from Bitwarden (this happens once)...\n' >&2
 
     _RENV_BW_ITEMS=$(bw list items --session "$session" 2>/dev/null) || {
       printf 'resolve-env-refs: bw list items failed\n' >&2
@@ -116,7 +198,16 @@ _renv_bw_items() {
       _RENV_BW_ITEMS=""
       return 1
     fi
+
+    # ── Encrypt and write to RAM ──────────────────────────────────────────────
+    printf '%s' "$_RENV_BW_ITEMS" \
+      | openssl enc -aes-256-cbc -pbkdf2 \
+          -pass "pass:${cache_key}" -out "$cache_file" 2>/dev/null \
+      && chmod 600 "$cache_file" \
+      && _RENV_CACHE_FILE="$cache_file" \
+      || printf 'resolve-env-refs: warning: could not write RAM cache (%s)\n' "$cache_file" >&2
   fi
+
   printf '%s' "$_RENV_BW_ITEMS"
 }
 
@@ -271,4 +362,8 @@ unload_env() {
   _RENV_VARS=()
   _RENV_BW_ITEMS=""
   _RENV_BW_SESSION=""
+  if [[ -n "$_RENV_CACHE_FILE" && -f "$_RENV_CACHE_FILE" ]]; then
+    rm -f "$_RENV_CACHE_FILE"
+  fi
+  _RENV_CACHE_FILE=""
 }
