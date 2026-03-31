@@ -2,6 +2,7 @@ BINDIR := bin
 RENV   := $(BINDIR)/renv
 KCTX   := $(BINDIR)/kctx
 GOFLAGS := -trimpath
+export CGO_ENABLED=0
 
 .PHONY: build build-renv build-kctx test test-race test-cover lint fmt tidy clean install release
 
