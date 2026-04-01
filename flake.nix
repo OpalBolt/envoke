@@ -124,7 +124,7 @@
             gopls
             go-tools  # staticcheck
             goreleaser
-          ];
+          ] ++ [ renv kctx ];
 
           shellHook = ''
             export CGO_ENABLED=0

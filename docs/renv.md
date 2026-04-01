@@ -10,12 +10,43 @@ go install github.com/eficode/secure-handling-of-secrets/cmd/renv@latest
 
 ## Usage
 
-### Evaluating exports
+### Zero-eval setup (recommended for interactive use)
 
-`renv resolve` prints `export KEY=value` statements to stdout. Your shell must evaluate them to set the variables:
+Add this **once** to your shell config — then `renv resolve .env` just works, no eval needed:
+
+```bash
+# ~/.bashrc or ~/.zshrc
+eval "$(renv init)"
+
+# fish: ~/.config/fish/config.fish
+renv init --shell fish | source
+```
+
+After that, simply:
+
+```bash
+renv resolve .env      # loads variables into your shell
+renv unload            # unloads them when done
+```
+
+### Run a command with secrets injected (no eval, no shell function)
+
+```bash
+renv exec -- myprogram --flag value
+renv exec --env secrets.env -- myprogram
+```
+
+`renv exec` resolves the `.env` file and runs the given command with those variables
+set in its environment. The current shell is **not** modified. This is ideal for
+scripts, CI pipelines, and one-off commands.
+
+### Manual eval (original behaviour)
+
+If you prefer not to use `renv init`, you can always eval explicitly:
 
 ```bash
 eval "$(renv resolve .env)"
+eval "$(renv unload)"
 ```
 
 ### direnv integration
@@ -82,7 +113,9 @@ API_KEY=vault://secret/myapp#api_key
 
 | Command | Description |
 |---------|-------------|
+| `renv init [--shell bash\|zsh\|fish]` | Print shell function so resolve/unload work without eval |
 | `renv resolve [file]` | Resolve and emit exports (default file: `.env`) |
+| `renv exec [--env file] -- cmd [args]` | Run command with resolved vars injected (no eval) |
 | `renv unload` | Emit unset commands for all tracked variables |
 | `renv yaml config.yaml` | Resolve YAML file |
 | `renv yaml config.yaml --key database.password` | Extract single value |

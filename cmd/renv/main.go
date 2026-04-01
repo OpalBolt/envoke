@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
+	"syscall"
 
 	"github.com/eficode/secure-handling-of-secrets/internal/config"
 	"github.com/eficode/secure-handling-of-secrets/internal/env"
@@ -63,6 +65,8 @@ func rootCmd() *cobra.Command {
 
 	root.AddCommand(
 		resolveCmd(&noCache, &cfg),
+		execCmd(&noCache, &cfg),
+		initCmd(),
 		yamlCmd(&cfg),
 		clearCacheCmd(),
 		statusCmd(),
@@ -162,6 +166,108 @@ Then in .envrc:
 	}
 	cmd.Flags().StringVarP(&file, "file", "f", ".env", "Path to .env file")
 	cmd.Flags().StringVar(&shell, "shell", "bash", "Shell type (bash|fish|zsh)")
+	return cmd
+}
+
+func execCmd(noCache *bool, cfg *config.Config) *cobra.Command {
+	var file string
+
+	cmd := &cobra.Command{
+		Use:   "exec -- command [args...]",
+		Short: "Run a command with resolved env vars injected (no eval needed)",
+		Long: `Resolve secret references from a .env file and execute a command with those
+variables set in its environment. No eval required.
+
+  renv exec -- myprogram --flag value
+  renv exec --env secrets.env -- myprogram
+
+The -- separator is required to distinguish renv flags from the command's args.
+The resolved variables override any same-named variables already in the environment.`,
+		Args: cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			slog.Debug("running exec", "file", file, "command", args[0])
+			_, bwClient, vaultClient := newClients(*noCache, cfg)
+
+			entries, err := env.ResolveDotEnv(file, bwClient, vaultClient)
+			if err != nil {
+				return fmt.Errorf("resolving %s: %w", file, err)
+			}
+
+			// Build env: start with current environment, then append resolved vars.
+			// Appending after means the resolved vars win on conflict.
+			environ := os.Environ()
+			for _, e := range entries {
+				environ = append(environ, e.Key+"="+e.Value)
+			}
+
+			bin, err := exec.LookPath(args[0])
+			if err != nil {
+				return fmt.Errorf("%s: command not found", args[0])
+			}
+
+			// Replace the current process with the target command.
+			return syscall.Exec(bin, args, environ)
+		},
+	}
+	cmd.Flags().StringVarP(&file, "env", "e", ".env", "Path to .env file")
+	return cmd
+}
+
+// bashInitScript is the shell function emitted by `renv init` for bash/zsh.
+// It wraps `resolve` and `unload` with eval so the user never has to type it.
+const bashInitScript = `renv() {
+  case "$1" in
+    resolve|unload)
+      eval "$(command renv "$@")"
+      ;;
+    *)
+      command renv "$@"
+      ;;
+  esac
+}
+`
+
+// fishInitScript is the shell function emitted by `renv init --shell fish`.
+const fishInitScript = `function renv
+  switch $argv[1]
+    case resolve unload
+      command renv $argv | source
+    case '*'
+      command renv $argv
+  end
+end
+`
+
+func initCmd() *cobra.Command {
+	var shell string
+
+	cmd := &cobra.Command{
+		Use:   "init",
+		Short: "Print shell function definition so renv resolve works without eval",
+		Long: `Print a shell function definition that wraps renv resolve and renv unload
+with eval, so you never have to type it yourself.
+
+Add to your shell config once:
+
+  # bash / zsh (~/.bashrc or ~/.zshrc)
+  eval "$(renv init)"
+
+  # fish (~/.config/fish/config.fish)
+  renv init --shell fish | source
+
+After that, renv resolve .env and renv unload work without explicit eval.
+All other renv subcommands (exec, yaml, status, …) pass through unchanged.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			switch shell {
+			case "fish":
+				fmt.Print(fishInitScript)
+			default:
+				fmt.Print(bashInitScript)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&shell, "shell", "bash", "Shell type: bash, zsh, fish")
 	return cmd
 }
 

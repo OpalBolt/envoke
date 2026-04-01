@@ -54,13 +54,16 @@ go install github.com/eficode/secure-handling-of-secrets/cmd/kctx@latest
 # Use secret references in .env
 echo 'DB_PASS=bw://prod/database/password' > .env
 
-# Resolve and load into your shell
-eval "$(renv resolve .env)"
+# Option 1 — zero-eval shell setup (add once to ~/.bashrc or ~/.zshrc)
+eval "$(renv init)"
+renv resolve .env   # loads vars into your shell, no eval needed
+renv unload         # unloads them when done
 
-# Unload when done
-eval "$(renv unload)"
+# Option 2 — run a single command with secrets injected (no shell changes)
+renv exec -- myprogram --flag value
 
-# With direnv — add use_renv to ~/.config/direnv/direnvrc:
+# Option 3 — direnv (auto-load/unload on directory enter/exit)
+# Add use_renv to ~/.config/direnv/direnvrc:
 cat >> ~/.config/direnv/direnvrc << 'EOF'
 use_renv() {
   local file="${1:-.env}"
