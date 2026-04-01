@@ -87,12 +87,24 @@ With direnv, add this to your .envrc:
 				return err
 			}
 
-			// Emit EXIT trap
-			switch shell {
-			case "fish":
-				fmt.Println("# Fish shell trap not supported via eval; use renv clear-cache manually")
-			default:
-				fmt.Println("trap 'renv clear-cache' EXIT")
+			// Persist the exported key names so renv unload can emit the correct unset commands.
+			uid := fmt.Sprintf("%d", os.Getuid())
+			names := make([]string, len(entries))
+			for i, e := range entries {
+				names[i] = e.Key
+			}
+			_ = secrets.SaveVarNames(uid, names) // best-effort; don't fail resolve if state can't be saved
+
+			// Emit EXIT trap — skip inside direnv because direnv handles env cleanup when
+			// leaving the directory, and the trap would otherwise fire the moment direnv's
+			// subprocess exits (immediately after loading), clearing the cache right away.
+			if os.Getenv("DIRENV_DIR") == "" {
+				switch shell {
+				case "fish":
+					fmt.Println("# Fish shell trap not supported via eval; use renv clear-cache manually")
+				default:
+					fmt.Println("trap 'renv clear-cache' EXIT")
+				}
 			}
 			return nil
 		},
@@ -161,6 +173,9 @@ func clearCacheCmd() *cobra.Command {
 			if err := secrets.ClearStoredSession(uid); err != nil {
 				return fmt.Errorf("clearing session: %w", err)
 			}
+			if err := secrets.ClearVarNames(uid); err != nil {
+				return fmt.Errorf("clearing vars state: %w", err)
+			}
 			fmt.Fprintln(os.Stderr, "renv: cache cleared")
 			return nil
 		},
@@ -203,10 +218,29 @@ func unloadCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "unload",
 		Short: "Emit unset commands for all tracked variables",
+		Long: `Emit shell unset commands for all variables exported by renv resolve.
+
+The output must be evaluated by your shell:
+
+  eval "$(renv unload)"`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// In a real implementation, this would read the tracked env vars from a state file.
-			// For now, emit a no-op.
-			fmt.Println("# renv: no tracked variables to unload")
+			uid := fmt.Sprintf("%d", os.Getuid())
+			names, err := secrets.LoadVarNames(uid)
+			if err != nil {
+				return err
+			}
+			if len(names) == 0 {
+				fmt.Fprintln(os.Stderr, "renv: no tracked variables to unload")
+				return nil
+			}
+			entries := make([]env.EnvEntry, len(names))
+			for i, name := range names {
+				entries[i] = env.EnvEntry{Key: name}
+			}
+			if err := env.EmitUnload(os.Stdout, entries); err != nil {
+				return err
+			}
+			_ = secrets.ClearVarNames(uid)
 			return nil
 		},
 	}
