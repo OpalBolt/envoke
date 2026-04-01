@@ -59,9 +59,19 @@ The output must be evaluated by your shell to set the variables:
 
   eval "$(renv resolve .env)"
 
-With direnv, add this to your .envrc:
+With direnv, use a use_renv helper so direnv fully owns the load/unload lifecycle.
+Add to ~/.config/direnv/direnvrc:
 
-  eval "$(renv resolve .env)"`,
+  use_renv() {
+    local file="${1:-.env}"
+    watch_file "$file"
+    eval "$(renv unload 2>/dev/null || true)"
+    eval "$(renv resolve "$file")"
+  }
+
+Then in .envrc:
+
+  use renv .env`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
@@ -95,10 +105,14 @@ With direnv, add this to your .envrc:
 			}
 			_ = secrets.SaveVarNames(uid, names) // best-effort; don't fail resolve if state can't be saved
 
-			// Emit EXIT trap — skip inside direnv because direnv handles env cleanup when
-			// leaving the directory, and the trap would otherwise fire the moment direnv's
-			// subprocess exits (immediately after loading), clearing the cache right away.
-			if os.Getenv("DIRENV_DIR") == "" {
+			// Emit EXIT trap — skip inside direnv (and inside nix dev-shells spawned by
+			// direnv's use_flake) because the process exits immediately after .envrc is
+			// evaluated, which would fire the trap and clear the cache before the user
+			// ever gets to use the loaded variables.
+			inManagedEnv := os.Getenv("DIRENV_DIR") != "" ||
+				os.Getenv("DIRENV_FILE") != "" ||
+				os.Getenv("IN_NIX_SHELL") != ""
+			if !inManagedEnv {
 				switch shell {
 				case "fish":
 					fmt.Println("# Fish shell trap not supported via eval; use renv clear-cache manually")
@@ -164,6 +178,11 @@ func clearCacheCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "clear-cache",
 		Short: "Remove all renv cache files and stored session",
+		Long: `Remove the encrypted secret cache and stored Bitwarden session.
+
+Variable name tracking (used by renv unload) is intentionally preserved so that
+renv unload continues to work after a cache clear — for example when the EXIT
+trap fires inside a direnv subprocess.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cache := secrets.NewCache()
 			uid := fmt.Sprintf("%d", os.Getuid())
@@ -173,9 +192,9 @@ func clearCacheCmd() *cobra.Command {
 			if err := secrets.ClearStoredSession(uid); err != nil {
 				return fmt.Errorf("clearing session: %w", err)
 			}
-			if err := secrets.ClearVarNames(uid); err != nil {
-				return fmt.Errorf("clearing vars state: %w", err)
-			}
+			// Var-name tracking is not cleared here — that is renv unload's job.
+			// Keeping the names file intact ensures renv unload remains functional
+			// even when clear-cache is triggered by the shell EXIT trap.
 			fmt.Fprintln(os.Stderr, "renv: cache cleared")
 			return nil
 		},

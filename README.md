@@ -57,9 +57,25 @@ echo 'DB_PASS=bw://prod/database/password' > .env
 # Resolve and load into your shell
 eval "$(renv resolve .env)"
 
-# With direnv — add to .envrc:
-echo 'eval "$(renv resolve .env)"' >> .envrc
+# Unload when done
+eval "$(renv unload)"
+
+# With direnv — add use_renv to ~/.config/direnv/direnvrc:
+cat >> ~/.config/direnv/direnvrc << 'EOF'
+use_renv() {
+  local file="${1:-.env}"
+  watch_file "$file"
+  eval "$(renv unload 2>/dev/null || true)"
+  eval "$(renv resolve "$file")"
+}
+EOF
+
+# Then in your project's .envrc:
+echo 'use renv .env' >> .envrc
+direnv allow
 ```
+
+See [docs/renv.md](docs/renv.md) for full details.
 
 ## URI formats
 
