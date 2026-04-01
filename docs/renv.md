@@ -83,6 +83,22 @@ The first run prompts for your Bitwarden master password; subsequent re-entries
 > `renv unload` is not needed in the normal direnv workflow.  Use it only when
 > loading secrets manually (without direnv) via `eval "$(renv resolve .env)"`.
 
+#### Logging with direnv
+
+Because `renv` runs as a subprocess of direnv, `--log-level` and `--verbose` flags
+cannot be passed directly. Enable debug output by setting `RENV_LOG_LEVEL` in your
+`.envrc` **before** the `use renv` call — direnv exports it into the subprocess
+environment:
+
+```bash
+# .envrc
+export RENV_LOG_LEVEL=debug   # remove or set to 'warn' when done
+use renv .env
+```
+
+All log output goes to stderr, so it appears in the terminal but never pollutes the
+exported variables.
+
 ### Manual load / unload (without direnv)
 
 When not using direnv, load secrets into your current shell with `eval`:
@@ -131,10 +147,65 @@ API_KEY=vault://secret/myapp#api_key
 | Bitwarden collection | `bw://collection:name/item[/field]` | `bw://collection:prod/database` |
 | Vault KV v2 | `vault://path#field` | `vault://secret/myapp#api_key` |
 
+## Configuration
+
+`renv` loads settings from a YAML config file, environment variables, and CLI flags,
+in that order (CLI flags win).
+
+**Default config location:** `~/.config/renv/config.yaml`
+(respects `$XDG_CONFIG_HOME`; override with `--config /path/to/config.yaml`)
+
+Copy [`docs/config.yaml`](config.yaml) from this repository as a starting point — it
+contains every option with explanations and defaults.
+
+### Logging
+
+```yaml
+log:
+  level: warn    # debug | info | warn | error  (env: RENV_LOG_LEVEL)
+  format: text   # text | json                  (env: RENV_LOG_FORMAT)
+```
+
+- `warn` (default) — only warnings and errors
+- `info` — adds resolve counts and provider calls
+- `debug` — full detail; useful when troubleshooting a failing `bw://` or `vault://` reference
+
+Quick one-shot debug without editing the config:
+
+```bash
+renv resolve .env --log-level debug
+# or
+RENV_LOG_LEVEL=debug renv resolve .env
+```
+
+All log output goes to **stderr** and never pollutes the exported variables.
+
+### Cache and session lifetimes
+
+```yaml
+cache:
+  max_age: 8h          # how long fetched Bitwarden items are cached (env: RENV_CACHE_MAX_AGE)
+  session_max_age: 8h  # how long the stored BW session token is kept (env: RENV_SESSION_MAX_AGE)
+```
+
+### Timeouts
+
+```yaml
+timeouts:
+  bitwarden: 30s   # per bw subprocess call (env: RENV_TIMEOUT_BITWARDEN)
+  vault: 30s       # per vault subprocess call (env: RENV_TIMEOUT_VAULT)
+```
+
 ## Environment variables
 
 | Variable | Description |
 |----------|-------------|
+| `RENV_LOG_LEVEL` | Log level: `debug`, `info`, `warn`, `error` |
+| `RENV_LOG_FORMAT` | Log format: `text` (default) or `json` |
+| `RENV_CACHE_MAX_AGE` | Max age of cached Bitwarden items (Go duration, e.g. `4h`) |
+| `RENV_SESSION_MAX_AGE` | Max age of stored Bitwarden session (Go duration, e.g. `24h`) |
+| `RENV_TIMEOUT_BITWARDEN` | Timeout for `bw` subprocess calls (Go duration, e.g. `60s`) |
+| `RENV_TIMEOUT_VAULT` | Timeout for `vault` subprocess calls (Go duration, e.g. `60s`) |
 | `BW_SESSION` | Active Bitwarden session token |
 | `RENV_BW_PASSWORD` | Bitwarden master password (non-interactive) |
 | `VAULT_ADDR` | Vault server URL |

@@ -48,8 +48,15 @@ func (c *BWClient) sessionMaxAge() time.Duration {
 }
 
 // AccountTag returns an 8-char fingerprint of the active BW account.
+// It is used as a cache key discriminator to namespace cache entries per account.
+// Result is memoised for the lifetime of the client and persisted to disk so
+// subsequent runs can skip `bw status` entirely on cache-hit paths.
 func (c *BWClient) AccountTag() (string, error) {
 	if c.accountTag != "" {
+		return c.accountTag, nil
+	}
+	if stored := c.loadStoredAccountTag(); stored != "" {
+		c.accountTag = stored
 		return c.accountTag, nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), c.timeout())
@@ -70,6 +77,7 @@ func (c *BWClient) AccountTag() (string, error) {
 	}
 	h := bwSHA256Hex(status.UserEmail + status.ServerURL)
 	c.accountTag = h[:8]
+	c.saveAccountTag(c.accountTag)
 	return c.accountTag, nil
 }
 
@@ -156,6 +164,38 @@ func sessionStorePath(uid string) string {
 		dir = "/dev/shm"
 	}
 	return filepath.Join(dir, "renv-bw-session-"+uid)
+}
+
+// acctTagStorePath returns the path where the BW account tag is persisted between process invocations.
+func acctTagStorePath(uid string) string {
+	dir := "/tmp"
+	if fi, err := os.Stat("/dev/shm"); err == nil && fi.IsDir() {
+		dir = "/dev/shm"
+	}
+	return filepath.Join(dir, "renv-bw-acct-tag-"+uid)
+}
+
+// loadStoredAccountTag reads a previously saved BW account tag from disk.
+// Returns "" if not found or unreadable.
+func (c *BWClient) loadStoredAccountTag() string {
+	uid := fmt.Sprintf("%d", os.Getuid())
+	data, err := os.ReadFile(acctTagStorePath(uid))
+	if err != nil {
+		return ""
+	}
+	tag := strings.TrimSpace(string(data))
+	if len(tag) != 8 {
+		return ""
+	}
+	slog.Debug("loaded stored BW account tag", "path", acctTagStorePath(uid))
+	return tag
+}
+
+// saveAccountTag persists the BW account tag to disk (chmod 600).
+func (c *BWClient) saveAccountTag(tag string) {
+	uid := fmt.Sprintf("%d", os.Getuid())
+	path := acctTagStorePath(uid)
+	_ = os.WriteFile(path, []byte(tag), 0600)
 }
 
 // loadStoredSession reads a previously saved BW session token from disk.
