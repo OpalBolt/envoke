@@ -19,17 +19,29 @@ import (
 
 // BWClient wraps the bw CLI for secret fetching.
 // It does NOT use the Bitwarden SDK — subprocess only.
+//
+// Two-password model:
+//   - BWPassword: the Bitwarden master password, used only for `bw unlock`. Never
+//     persisted to disk. Only needed on a cache miss or first access to a folder.
+//   - LocalPassword: a local session password used to encrypt/decrypt the cache
+//     files in /dev/shm. Prompted once per invocation (or sourced from
+//     RENV_LOCAL_PASSWORD). Never sent to Bitwarden.
+//
+// Access flow:
+//  1. First access to a folder: prompt LocalPassword + BWPassword → fetch from BW
+//     → encrypt with LocalPassword → write to /dev/shm cache.
+//  2. Subsequent access within cache TTL: prompt LocalPassword only → decrypt
+//     cache. No Bitwarden contact.
+//  3. Access after cache TTL expires: prompt LocalPassword + BWPassword → re-fetch.
 type BWClient struct {
-	Cache          *Cache
-	MasterPassword string // cleared after first use
+	Cache         *Cache
+	BWPassword    string // cleared after bw unlock; used only for `bw unlock --raw`
+	LocalPassword string // used only for cache encryption; never sent to Bitwarden
 	// Timeout caps each bw subprocess call. Zero uses the 30 s default.
 	Timeout time.Duration
-	// SessionMaxAge controls how long a stored session token is considered valid.
-	// Zero uses the 8 h default.
-	SessionMaxAge time.Duration
 
 	accountTag     string // cached account tag
-	session        string // ephemeral session token
+	session        string // ephemeral in-process session token; never written to disk
 	sessionFromEnv bool   // true if session was sourced from BW_SESSION env var
 }
 
@@ -40,11 +52,29 @@ func (c *BWClient) timeout() time.Duration {
 	return 30 * time.Second
 }
 
-func (c *BWClient) sessionMaxAge() time.Duration {
-	if c.SessionMaxAge > 0 {
-		return c.SessionMaxAge
+// ensureLocalPassword populates c.LocalPassword from RENV_LOCAL_PASSWORD or by
+// prompting the user on /dev/tty. It is a no-op if LocalPassword is already set.
+func (c *BWClient) ensureLocalPassword() error {
+	if c.LocalPassword != "" {
+		return nil
 	}
-	return 8 * time.Hour
+	if pw := os.Getenv("RENV_LOCAL_PASSWORD"); pw != "" {
+		c.LocalPassword = pw
+		return nil
+	}
+	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if err != nil {
+		return fmt.Errorf("opening /dev/tty: %w", err)
+	}
+	defer tty.Close()
+	fmt.Fprintf(tty, "Local cache password: ")
+	pwBytes, err := term.ReadPassword(int(tty.Fd()))
+	if err != nil {
+		return fmt.Errorf("reading local cache password from tty: %w", err)
+	}
+	fmt.Fprintln(tty)
+	c.LocalPassword = string(pwBytes)
+	return nil
 }
 
 // AccountTag returns an 8-char fingerprint of the active BW account.
@@ -82,7 +112,11 @@ func (c *BWClient) AccountTag() (string, error) {
 }
 
 // Session returns an active BW session token.
-// Precedence: BW_SESSION env var → RENV_BW_PASSWORD env var → stored session file → prompt on /dev/tty
+// Precedence: BW_SESSION env var → RENV_BW_PASSWORD env var → BWPassword field → prompt on /dev/tty
+//
+// The session token is held in process memory only and is never written to disk.
+// Each invocation that requires Bitwarden access will prompt for BWPassword unless
+// BW_SESSION or RENV_BW_PASSWORD is set.
 func (c *BWClient) Session() (string, error) {
 	if c.session != "" {
 		return c.session, nil
@@ -98,18 +132,10 @@ func (c *BWClient) Session() (string, error) {
 	// 2. RENV_BW_PASSWORD → unlock
 	pw := os.Getenv("RENV_BW_PASSWORD")
 	if pw == "" {
-		pw = c.MasterPassword
+		pw = c.BWPassword
 	}
 	if pw == "" {
-		// 3. Stored session from a previous process invocation (e.g. direnv re-entry)
-		if stored := c.loadStoredSession(); stored != "" {
-			slog.Debug("using stored BW session")
-			c.session = stored
-			c.sessionFromEnv = false
-			return c.session, nil
-		}
-
-		// 4. Prompt on /dev/tty — no echo using x/term
+		// 3. Prompt on /dev/tty — no echo using x/term
 		slog.Debug("prompting for BW master password on /dev/tty")
 		tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 		if err != nil {
@@ -124,8 +150,8 @@ func (c *BWClient) Session() (string, error) {
 		fmt.Fprintln(tty) // newline after hidden input
 		defer zeroBytes(pwBytes) // zero the raw bytes before they go out of scope
 		pw = string(pwBytes)
-		// Store for cache key derivation — cleared after unlock below
-		c.MasterPassword = pw
+		// Store for the duration of this unlock call — cleared below
+		c.BWPassword = pw
 	}
 
 	// bw unlock --raw — pass password via stdin, NOT via argv (argv is world-readable via ps/proc)
@@ -144,20 +170,18 @@ func (c *BWClient) Session() (string, error) {
 	if token == "" {
 		return "", fmt.Errorf("bw unlock returned empty session token")
 	}
-	slog.Debug("BW unlock successful, saving session")
+	slog.Debug("BW unlock successful; session held in memory only")
 	c.session = token
 	c.sessionFromEnv = false
-	// Persist for future process invocations (e.g. direnv re-entry into the same folder)
-	c.saveSession(token)
-	// Clear master password
-	zeroString(&c.MasterPassword)
+	// Clear BW password immediately — it is no longer needed
+	zeroString(&c.BWPassword)
 	pwCopy := pw
 	zeroString(&pwCopy)
 	return c.session, nil
 }
 
-// sessionStorePath returns the path where the BW session token is persisted between process invocations.
-// Prefers /dev/shm (memory-backed, cleared on reboot) over /tmp for security.
+// sessionStorePath returns the path where a legacy plaintext BW session may exist.
+// Used only by ClearStoredSession to clean up files left by older versions.
 func sessionStorePath(uid string) string {
 	dir := "/tmp"
 	if fi, err := os.Stat("/dev/shm"); err == nil && fi.IsDir() {
@@ -198,37 +222,7 @@ func (c *BWClient) saveAccountTag(tag string) {
 	_ = os.WriteFile(path, []byte(tag), 0600)
 }
 
-// loadStoredSession reads a previously saved BW session token from disk.
-// Returns "" if no valid session is found (missing, expired, or unreadable).
-func (c *BWClient) loadStoredSession() string {
-	uid := fmt.Sprintf("%d", os.Getuid())
-	path := sessionStorePath(uid)
-	fi, err := os.Stat(path)
-	if err != nil {
-		return ""
-	}
-	if time.Since(fi.ModTime()) > c.sessionMaxAge() {
-		os.Remove(path)
-		return ""
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	slog.Debug("loaded stored bw session", "path", path)
-	return strings.TrimSpace(string(data))
-}
-
-// saveSession persists the BW session token to disk (chmod 600).
-// The file is placed in /dev/shm when available (memory-backed, cleared on reboot).
-func (c *BWClient) saveSession(token string) {
-	uid := fmt.Sprintf("%d", os.Getuid())
-	path := sessionStorePath(uid)
-	slog.Debug("saving BW session to disk", "path", path)
-	_ = os.WriteFile(path, []byte(token), 0600)
-}
-
-// ClearStoredSession removes the persisted BW session file for the given uid.
+// ClearStoredSession removes any legacy plaintext BW session file left by older versions.
 func ClearStoredSession(uid string) error {
 	path := sessionStorePath(uid)
 	slog.Debug("clearing stored BW session", "path", path)
@@ -239,7 +233,9 @@ func ClearStoredSession(uid string) error {
 }
 
 // FolderItems fetches all items in the given BW folder.
-// It ensures cache key material is available before any cache operation.
+//
+// On cache hit (local file exists and not expired): only LocalPassword is required.
+// On cache miss or expiry: LocalPassword + BWPassword (or BW_SESSION) are required.
 func (c *BWClient) FolderItems(folder string) ([]map[string]interface{}, error) {
 	uid := fmt.Sprintf("%d", os.Getuid())
 	acctTag, err := c.AccountTag()
@@ -247,37 +243,32 @@ func (c *BWClient) FolderItems(folder string) ([]map[string]interface{}, error) 
 		return nil, err
 	}
 
-	// Ensure we have a real password/key before cache operations.
-	// If only an interactive prompt would provide it, pre-call Session() so
-	// c.MasterPassword is populated before masterPasswordForCache() runs.
-	if c.MasterPassword == "" && os.Getenv("RENV_BW_PASSWORD") == "" && os.Getenv("BW_SESSION") == "" {
-		if _, err := c.Session(); err != nil {
+	// Prompt for local cache password (skipped when cache is disabled or env var set).
+	if !c.Cache.Disabled {
+		if err := c.ensureLocalPassword(); err != nil {
 			return nil, err
 		}
 	}
-	pw := c.masterPasswordForCache()
-	if pw == "" {
-		// No material to encrypt cache — skip cache and fetch directly.
-		return c.fetchFolderItemsDirect(folder)
-	}
+	pw := c.localPasswordForCache()
 
-	// Check cache
-	if cached, err := c.Cache.Get(uid, acctTag, folder, pw); err == nil && cached != nil {
-		slog.Debug("cache hit", "folder", folder)
-		var items []map[string]interface{}
-		if err := json.Unmarshal(cached, &items); err == nil {
-			return items, nil
+	// Check local encrypted cache — no BW contact needed on hit.
+	if pw != "" {
+		if cached, err := c.Cache.Get(uid, acctTag, folder, pw); err == nil && cached != nil {
+			slog.Debug("cache hit", "folder", folder)
+			var items []map[string]interface{}
+			if err := json.Unmarshal(cached, &items); err == nil {
+				return items, nil
+			}
 		}
+		slog.Debug("cache miss", "folder", folder)
 	}
-	slog.Debug("cache miss", "folder", folder)
 
-	// Fetch from BW
+	// Cache miss — contact Bitwarden (prompts BWPassword if needed).
 	session, err := c.Session()
 	if err != nil {
 		return nil, err
 	}
 
-	// Find folder ID
 	folderID, err := c.findFolderID(folder, session)
 	if err != nil {
 		return nil, err
@@ -293,35 +284,10 @@ func (c *BWClient) FolderItems(folder string) ([]map[string]interface{}, error) 
 		return nil, fmt.Errorf("bw list items failed: %w", err)
 	}
 
-	// Cache result
-	_ = c.Cache.Put(uid, acctTag, folder, pw, out)
+	if pw != "" {
+		_ = c.Cache.Put(uid, acctTag, folder, pw, out)
+	}
 
-	var items []map[string]interface{}
-	if err := json.Unmarshal(out, &items); err != nil {
-		return nil, fmt.Errorf("parsing bw list items output: %w", err)
-	}
-	return items, nil
-}
-
-// fetchFolderItemsDirect fetches folder items without cache (used when no encryption key available).
-func (c *BWClient) fetchFolderItemsDirect(folder string) ([]map[string]interface{}, error) {
-	session, err := c.Session()
-	if err != nil {
-		return nil, err
-	}
-	folderID, err := c.findFolderID(folder, session)
-	if err != nil {
-		return nil, err
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), c.timeout())
-	defer cancel()
-	slog.Debug("bw list items (direct)", "folder", folder, "timeout", c.timeout())
-	cmd := exec.CommandContext(ctx, "bw", "list", "items", "--folderid", folderID)
-	cmd.Env = append(os.Environ(), "BW_SESSION="+session)
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("bw list items failed: %w", err)
-	}
 	var items []map[string]interface{}
 	if err := json.Unmarshal(out, &items); err != nil {
 		return nil, fmt.Errorf("parsing bw list items output: %w", err)
@@ -331,6 +297,8 @@ func (c *BWClient) fetchFolderItemsDirect(folder string) ([]map[string]interface
 
 // CollectionItems fetches all items in the given BW collection.
 // URI format: bw://collection:<name>/item[/field]
+//
+// Follows the same two-password flow as FolderItems.
 func (c *BWClient) CollectionItems(collectionName string) ([]map[string]interface{}, error) {
 	uid := fmt.Sprintf("%d", os.Getuid())
 	acctTag, err := c.AccountTag()
@@ -338,12 +306,12 @@ func (c *BWClient) CollectionItems(collectionName string) ([]map[string]interfac
 		return nil, err
 	}
 
-	if c.MasterPassword == "" && os.Getenv("RENV_BW_PASSWORD") == "" && os.Getenv("BW_SESSION") == "" {
-		if _, err := c.Session(); err != nil {
+	if !c.Cache.Disabled {
+		if err := c.ensureLocalPassword(); err != nil {
 			return nil, err
 		}
 	}
-	pw := c.masterPasswordForCache()
+	pw := c.localPasswordForCache()
 	cacheKeyStr := "collection:" + collectionName
 
 	if pw != "" {
@@ -527,27 +495,15 @@ func extractField(item map[string]interface{}, fieldSpec string) (string, error)
 	}
 }
 
-// masterPasswordForCache returns the password to use for cache key derivation.
-// Returns empty string if no source is available — callers MUST skip cache in that case.
-func (c *BWClient) masterPasswordForCache() string {
-	if c.MasterPassword != "" {
-		return c.MasterPassword
+// localPasswordForCache returns the local session password used for cache encryption.
+// Returns empty string if not yet set — callers should call ensureLocalPassword first.
+func (c *BWClient) localPasswordForCache() string {
+	if c.LocalPassword != "" {
+		return c.LocalPassword
 	}
-	if pw := os.Getenv("RENV_BW_PASSWORD"); pw != "" {
+	if pw := os.Getenv("RENV_LOCAL_PASSWORD"); pw != "" {
 		return pw
 	}
-	if s := os.Getenv("BW_SESSION"); s != "" {
-		return s
-	}
-	// Use the already-obtained session token (only if it's non-trivial length — not NUL-zeroed)
-	if len(c.session) > 0 && c.session[0] != 0 {
-		return c.session
-	}
-	// Try session stored from a previous process invocation
-	if stored := c.loadStoredSession(); stored != "" {
-		return stored
-	}
-	// No material available — caller must skip cache to avoid encrypting with a hardcoded key.
 	return ""
 }
 

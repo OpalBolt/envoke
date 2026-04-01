@@ -99,9 +99,8 @@ func switchCmd(cfg *config.Config) *cobra.Command {
 				cache := secrets.NewCache()
 				cache.MaxAge = cfg.CacheMaxAge()
 				bwClient := &secrets.BWClient{
-					Cache:         cache,
-					Timeout:       cfg.BitwardenTimeout(),
-					SessionMaxAge: cfg.SessionMaxAge(),
+					Cache:   cache,
+					Timeout: cfg.BitwardenTimeout(),
 				}
 				val, bwerr := bwClient.Resolve(ref)
 				if bwerr != nil {

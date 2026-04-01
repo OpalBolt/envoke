@@ -7,6 +7,24 @@
 #
 # All settings can also be overridden by environment variables (see below).
 # CLI flags take final precedence over both the file and env vars.
+#
+# Two-password model
+# ------------------
+# renv uses two separate passwords:
+#
+#   RENV_LOCAL_PASSWORD  — the local cache password.  Used to encrypt/decrypt
+#                          the secret cache in /dev/shm.  Prompted once per
+#                          invocation when not set.  Never sent to Bitwarden.
+#
+#   RENV_BW_PASSWORD     — the Bitwarden master password.  Used only to run
+#                          `bw unlock --raw` on a cache miss or first access.
+#                          Cleared from memory immediately after unlock.
+#                          Never written to disk.
+#
+# Access flow:
+#   1. Cache hit  (file exists, not expired): only RENV_LOCAL_PASSWORD needed.
+#   2. Cache miss (first access, or TTL expired): both passwords needed.
+#   3. --no-cache: only RENV_BW_PASSWORD needed (local password not prompted).
 
 log:
   # Minimum log level written to stderr.
@@ -22,13 +40,11 @@ log:
 
 cache:
   # Maximum age of cached Bitwarden folder/collection items.
+  # After this TTL expires the local encrypted cache is discarded and Bitwarden
+  # is contacted again (requiring both the local cache password and the BW password).
   # Accepts Go duration strings: 1h30m, 4h, 24h, etc.
   # Env: RENV_CACHE_MAX_AGE
   max_age: 8h
-
-  # Maximum age of a stored Bitwarden session token.
-  # Env: RENV_SESSION_MAX_AGE
-  session_max_age: 8h
 
 timeouts:
   # Timeout for each Bitwarden CLI (bw) subprocess call.

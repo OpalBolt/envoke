@@ -50,7 +50,6 @@ func rootCmd() *cobra.Command {
 				"log_level", cfg.Log.Level,
 				"log_format", cfg.Log.Format,
 				"cache_max_age", cfg.Cache.MaxAge,
-				"session_max_age", cfg.Cache.SessionMaxAge,
 				"timeout_bitwarden", cfg.Timeouts.Bitwarden,
 				"timeout_vault", cfg.Timeouts.Vault,
 			)
@@ -83,9 +82,8 @@ func newClients(noCache bool, cfg *config.Config) (*secrets.Cache, *secrets.BWCl
 		cache.Disabled = true
 	}
 	bwClient := &secrets.BWClient{
-		Cache:         cache,
-		Timeout:       cfg.BitwardenTimeout(),
-		SessionMaxAge: cfg.SessionMaxAge(),
+		Cache:   cache,
+		Timeout: cfg.BitwardenTimeout(),
 	}
 	vaultClient := &secrets.VaultClient{Timeout: cfg.VaultTimeout()}
 	return cache, bwClient, vaultClient

@@ -35,8 +35,6 @@ type LogConfig struct {
 type CacheConfig struct {
 	// MaxAge is the maximum age of cached Bitwarden folder items (Go duration string).
 	MaxAge string `yaml:"max_age"`
-	// SessionMaxAge is the maximum age of a stored Bitwarden session token.
-	SessionMaxAge string `yaml:"session_max_age"`
 }
 
 // TimeoutConfig controls subprocess call timeouts.
@@ -55,8 +53,7 @@ func Defaults() Config {
 			Format: "text",
 		},
 		Cache: CacheConfig{
-			MaxAge:        "8h",
-			SessionMaxAge: "8h",
+			MaxAge: "8h",
 		},
 		Timeouts: TimeoutConfig{
 			Bitwarden: "30s",
@@ -112,9 +109,6 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("RENV_CACHE_MAX_AGE"); v != "" {
 		cfg.Cache.MaxAge = v
 	}
-	if v := os.Getenv("RENV_SESSION_MAX_AGE"); v != "" {
-		cfg.Cache.SessionMaxAge = v
-	}
 	if v := os.Getenv("RENV_TIMEOUT_BITWARDEN"); v != "" {
 		cfg.Timeouts.Bitwarden = v
 	}
@@ -126,11 +120,6 @@ func applyEnv(cfg *Config) {
 // CacheMaxAge parses and returns the cache max-age duration.
 func (c *Config) CacheMaxAge() time.Duration {
 	return parseDuration(c.Cache.MaxAge, 8*time.Hour)
-}
-
-// SessionMaxAge parses and returns the session max-age duration.
-func (c *Config) SessionMaxAge() time.Duration {
-	return parseDuration(c.Cache.SessionMaxAge, 8*time.Hour)
 }
 
 // BitwardenTimeout parses and returns the Bitwarden subprocess timeout.
