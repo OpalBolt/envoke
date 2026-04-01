@@ -1,14 +1,27 @@
 package secrets
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // VaultClient wraps the vault CLI for KV v2 fetching.
-type VaultClient struct{}
+type VaultClient struct {
+	// Timeout caps each vault subprocess call. Zero uses the 30 s default.
+	Timeout time.Duration
+}
+
+func (c *VaultClient) timeout() time.Duration {
+	if c.Timeout > 0 {
+		return c.Timeout
+	}
+	return 30 * time.Second
+}
 
 // Resolve runs `vault kv get -field=<field> <path>` and returns the value.
 // Requires VAULT_ADDR and VAULT_TOKEN to be set.
@@ -23,7 +36,12 @@ func (c *VaultClient) Resolve(ref VaultRef) (string, error) {
 	if _, err := exec.LookPath("vault"); err != nil {
 		return "", fmt.Errorf("vault CLI not found in PATH: %w", err)
 	}
-	cmd := exec.Command("vault", "kv", "get", "-field="+ref.Field, ref.Path)
+
+	ctx, cancel := context.WithTimeout(context.Background(), c.timeout())
+	defer cancel()
+
+	slog.Debug("vault kv get", "path", ref.Path, "field", ref.Field, "timeout", c.timeout())
+	cmd := exec.CommandContext(ctx, "vault", "kv", "get", "-field="+ref.Field, ref.Path)
 	cmd.Env = os.Environ()
 	out, err := cmd.Output()
 	if err != nil {

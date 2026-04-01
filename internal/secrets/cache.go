@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -91,6 +92,7 @@ func (c *Cache) Put(uid, acctTag, folder, masterPassword string, items []byte) e
 
 	// Write: [32-byte salt][16-byte IV][ciphertext]
 	path := c.CacheFile(uid, acctTag, folder)
+	slog.Debug("cache put", "path", path)
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, cacheFilePerms)
 	if err != nil {
 		return fmt.Errorf("cache: opening file: %w", err)
@@ -116,12 +118,14 @@ func (c *Cache) Get(uid, acctTag, folder, masterPassword string) ([]byte, error)
 	path := c.CacheFile(uid, acctTag, folder)
 	fi, err := os.Stat(path)
 	if os.IsNotExist(err) {
+		slog.Debug("cache miss (not found)", "path", path)
 		return nil, nil // cache miss
 	}
 	if err != nil {
 		return nil, fmt.Errorf("cache: stat: %w", err)
 	}
 	if time.Since(fi.ModTime()) > c.MaxAge {
+		slog.Debug("cache expired", "path", path, "age", time.Since(fi.ModTime()).Round(time.Second))
 		os.Remove(path)
 		return nil, nil // expired
 	}

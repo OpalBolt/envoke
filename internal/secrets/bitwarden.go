@@ -2,10 +2,12 @@ package secrets
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,10 +22,29 @@ import (
 type BWClient struct {
 	Cache          *Cache
 	MasterPassword string // cleared after first use
+	// Timeout caps each bw subprocess call. Zero uses the 30 s default.
+	Timeout time.Duration
+	// SessionMaxAge controls how long a stored session token is considered valid.
+	// Zero uses the 8 h default.
+	SessionMaxAge time.Duration
 
 	accountTag     string // cached account tag
 	session        string // ephemeral session token
 	sessionFromEnv bool   // true if session was sourced from BW_SESSION env var
+}
+
+func (c *BWClient) timeout() time.Duration {
+	if c.Timeout > 0 {
+		return c.Timeout
+	}
+	return 30 * time.Second
+}
+
+func (c *BWClient) sessionMaxAge() time.Duration {
+	if c.SessionMaxAge > 0 {
+		return c.SessionMaxAge
+	}
+	return 8 * time.Hour
 }
 
 // AccountTag returns an 8-char fingerprint of the active BW account.
@@ -31,7 +52,10 @@ func (c *BWClient) AccountTag() (string, error) {
 	if c.accountTag != "" {
 		return c.accountTag, nil
 	}
-	cmd := exec.Command("bw", "status")
+	ctx, cancel := context.WithTimeout(context.Background(), c.timeout())
+	defer cancel()
+	slog.Debug("bw status", "timeout", c.timeout())
+	cmd := exec.CommandContext(ctx, "bw", "status")
 	cmd.Env = os.Environ()
 	out, err := cmd.Output()
 	if err != nil {
@@ -94,7 +118,10 @@ func (c *BWClient) Session() (string, error) {
 	}
 
 	// bw unlock --raw — pass password via stdin, NOT via argv (argv is world-readable via ps/proc)
-	cmd := exec.Command("bw", "unlock", "--raw")
+	ctx, cancel := context.WithTimeout(context.Background(), c.timeout())
+	defer cancel()
+	slog.Debug("bw unlock", "timeout", c.timeout())
+	cmd := exec.CommandContext(ctx, "bw", "unlock", "--raw")
 	cmd.Env = os.Environ()
 	cmd.Stdin = bytes.NewBufferString(pw + "\n")
 	cmd.Stderr = os.Stderr
@@ -136,7 +163,7 @@ func (c *BWClient) loadStoredSession() string {
 	if err != nil {
 		return ""
 	}
-	if time.Since(fi.ModTime()) > 8*time.Hour {
+	if time.Since(fi.ModTime()) > c.sessionMaxAge() {
 		os.Remove(path)
 		return ""
 	}
@@ -144,6 +171,7 @@ func (c *BWClient) loadStoredSession() string {
 	if err != nil {
 		return ""
 	}
+	slog.Debug("loaded stored bw session", "path", path)
 	return strings.TrimSpace(string(data))
 }
 
@@ -189,11 +217,13 @@ func (c *BWClient) FolderItems(folder string) ([]map[string]interface{}, error) 
 
 	// Check cache
 	if cached, err := c.Cache.Get(uid, acctTag, folder, pw); err == nil && cached != nil {
+		slog.Debug("cache hit", "folder", folder)
 		var items []map[string]interface{}
 		if err := json.Unmarshal(cached, &items); err == nil {
 			return items, nil
 		}
 	}
+	slog.Debug("cache miss", "folder", folder)
 
 	// Fetch from BW
 	session, err := c.Session()
@@ -207,7 +237,10 @@ func (c *BWClient) FolderItems(folder string) ([]map[string]interface{}, error) 
 		return nil, err
 	}
 
-	cmd := exec.Command("bw", "list", "items", "--folderid", folderID)
+	ctx, cancel := context.WithTimeout(context.Background(), c.timeout())
+	defer cancel()
+	slog.Debug("bw list items", "folder", folder, "timeout", c.timeout())
+	cmd := exec.CommandContext(ctx, "bw", "list", "items", "--folderid", folderID)
 	cmd.Env = append(os.Environ(), "BW_SESSION="+session)
 	out, err := cmd.Output()
 	if err != nil {
@@ -234,7 +267,10 @@ func (c *BWClient) fetchFolderItemsDirect(folder string) ([]map[string]interface
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.Command("bw", "list", "items", "--folderid", folderID)
+	ctx, cancel := context.WithTimeout(context.Background(), c.timeout())
+	defer cancel()
+	slog.Debug("bw list items (direct)", "folder", folder, "timeout", c.timeout())
+	cmd := exec.CommandContext(ctx, "bw", "list", "items", "--folderid", folderID)
 	cmd.Env = append(os.Environ(), "BW_SESSION="+session)
 	out, err := cmd.Output()
 	if err != nil {
@@ -266,11 +302,13 @@ func (c *BWClient) CollectionItems(collectionName string) ([]map[string]interfac
 
 	if pw != "" {
 		if cached, err := c.Cache.Get(uid, acctTag, cacheKeyStr, pw); err == nil && cached != nil {
+			slog.Debug("cache hit", "collection", collectionName)
 			var items []map[string]interface{}
 			if err := json.Unmarshal(cached, &items); err == nil {
 				return items, nil
 			}
 		}
+		slog.Debug("cache miss", "collection", collectionName)
 	}
 
 	session, err := c.Session()
@@ -283,7 +321,10 @@ func (c *BWClient) CollectionItems(collectionName string) ([]map[string]interfac
 		return nil, err
 	}
 
-	cmd := exec.Command("bw", "list", "items", "--collectionid", collID)
+	ctx, cancel := context.WithTimeout(context.Background(), c.timeout())
+	defer cancel()
+	slog.Debug("bw list items (collection)", "collection", collectionName, "timeout", c.timeout())
+	cmd := exec.CommandContext(ctx, "bw", "list", "items", "--collectionid", collID)
 	cmd.Env = append(os.Environ(), "BW_SESSION="+session)
 	out, err := cmd.Output()
 	if err != nil {
@@ -315,7 +356,10 @@ func (c *BWClient) Close() {
 
 // findFolderID returns the Bitwarden folder ID for the given folder name.
 func (c *BWClient) findFolderID(folder, session string) (string, error) {
-	cmd := exec.Command("bw", "list", "folders")
+	ctx, cancel := context.WithTimeout(context.Background(), c.timeout())
+	defer cancel()
+	slog.Debug("bw list folders", "folder", folder)
+	cmd := exec.CommandContext(ctx, "bw", "list", "folders")
 	cmd.Env = append(os.Environ(), "BW_SESSION="+session)
 	out, err := cmd.Output()
 	if err != nil {
@@ -337,7 +381,10 @@ func (c *BWClient) findFolderID(folder, session string) (string, error) {
 
 // findCollectionID returns the Bitwarden collection ID for the given collection name.
 func (c *BWClient) findCollectionID(name, session string) (string, error) {
-	cmd := exec.Command("bw", "list", "collections")
+	ctx, cancel := context.WithTimeout(context.Background(), c.timeout())
+	defer cancel()
+	slog.Debug("bw list collections", "collection", name)
+	cmd := exec.CommandContext(ctx, "bw", "list", "collections")
 	cmd.Env = append(os.Environ(), "BW_SESSION="+session)
 	out, err := cmd.Output()
 	if err != nil {

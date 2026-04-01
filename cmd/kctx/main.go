@@ -5,12 +5,13 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/eficode/secure-handling-of-secrets/internal/config"
 	"github.com/eficode/secure-handling-of-secrets/internal/kubeconfig"
+	"github.com/eficode/secure-handling-of-secrets/internal/logger"
 	"github.com/eficode/secure-handling-of-secrets/internal/secrets"
+	"github.com/eficode/secure-handling-of-secrets/internal/version"
 	"github.com/spf13/cobra"
 )
-
-var version = "dev"
 
 func main() {
 	if err := rootCmd().Execute(); err != nil {
@@ -19,12 +20,37 @@ func main() {
 }
 
 func rootCmd() *cobra.Command {
+	var verbose bool
+	var cfgFile string
+	var logLevel string
+	var cfg config.Config
+
 	root := &cobra.Command{
 		Use:   "kctx",
 		Short: "Ephemeral kubeconfig switcher via Vault or Bitwarden",
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			var err error
+			cfg, err = config.Load(cfgFile)
+			if err != nil {
+				return err
+			}
+			if cmd.Root().PersistentFlags().Changed("log-level") {
+				cfg.Log.Level = logLevel
+			}
+			if verbose {
+				cfg.Log.Level = "debug"
+			}
+			logger.Init(cfg.Log.Level, cfg.Log.Format)
+			return nil
+		},
 	}
+
+	root.PersistentFlags().BoolVar(&verbose, "verbose", false, "Enable debug logging (shorthand for --log-level=debug)")
+	root.PersistentFlags().StringVar(&cfgFile, "config", "", "Config file path (default: $XDG_CONFIG_HOME/renv/config.yaml)")
+	root.PersistentFlags().StringVar(&logLevel, "log-level", "", "Log level: debug, info, warn, error")
+
 	root.AddCommand(
-		switchCmd(),
+		switchCmd(&cfg),
 		clearCmd(),
 		statusCmd(),
 		cacheClearCmd(),
@@ -34,7 +60,7 @@ func rootCmd() *cobra.Command {
 	return root
 }
 
-func switchCmd() *cobra.Command {
+func switchCmd(cfg *config.Config) *cobra.Command {
 	return &cobra.Command{
 		Use:   "switch <env> [vault-path|bw://item]",
 		Short: "Fetch kubeconfig, write to tmpfile, print KUBECONFIG export",
@@ -51,7 +77,7 @@ func switchCmd() *cobra.Command {
 			if source == "" || source == env {
 				// Default: try vault path based on env name
 				vaultRef := secrets.VaultRef{Path: "secret/kubeconfig/" + env, Field: "kubeconfig"}
-				vc := &secrets.VaultClient{}
+				vc := &secrets.VaultClient{Timeout: cfg.VaultTimeout()}
 				val, verr := vc.Resolve(vaultRef)
 				if verr != nil {
 					return fmt.Errorf("fetching kubeconfig for %q: %w", env, verr)
@@ -63,7 +89,12 @@ func switchCmd() *cobra.Command {
 					return err
 				}
 				cache := secrets.NewCache()
-				bwClient := &secrets.BWClient{Cache: cache}
+				cache.MaxAge = cfg.CacheMaxAge()
+				bwClient := &secrets.BWClient{
+					Cache:         cache,
+					Timeout:       cfg.BitwardenTimeout(),
+					SessionMaxAge: cfg.SessionMaxAge(),
+				}
 				val, bwerr := bwClient.Resolve(ref)
 				if bwerr != nil {
 					return bwerr
@@ -72,7 +103,7 @@ func switchCmd() *cobra.Command {
 			} else {
 				// Treat as vault path
 				vaultRef := secrets.VaultRef{Path: source, Field: "kubeconfig"}
-				vc := &secrets.VaultClient{}
+				vc := &secrets.VaultClient{Timeout: cfg.VaultTimeout()}
 				val, verr := vc.Resolve(vaultRef)
 				if verr != nil {
 					return verr
@@ -151,7 +182,7 @@ func versionCmd() *cobra.Command {
 		Use:   "version",
 		Short: "Print version",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Printf("kctx %s\n", version)
+			fmt.Printf("kctx %s\n", version.String())
 		},
 	}
 }

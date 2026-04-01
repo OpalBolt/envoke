@@ -1,8 +1,17 @@
-BINDIR := bin
-RENV   := $(BINDIR)/renv
-KCTX   := $(BINDIR)/kctx
+BINDIR  := bin
+RENV    := $(BINDIR)/renv
+KCTX    := $(BINDIR)/kctx
 GOFLAGS := -trimpath
 export CGO_ENABLED=0
+
+VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || cat VERSION)
+COMMIT  := $(shell git rev-parse --short HEAD 2>/dev/null || echo "none")
+DATE    := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+PKG     := github.com/eficode/secure-handling-of-secrets/internal/version
+LDFLAGS := -s -w \
+	-X $(PKG).Version=$(VERSION) \
+	-X $(PKG).Commit=$(COMMIT) \
+	-X $(PKG).BuildDate=$(DATE)
 
 .PHONY: build build-renv build-kctx test test-race test-cover lint fmt tidy clean install release
 
@@ -10,11 +19,11 @@ build: build-renv build-kctx
 
 build-renv:
 	@mkdir -p $(BINDIR)
-	go build $(GOFLAGS) -o $(RENV) ./cmd/renv
+	go build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(RENV) ./cmd/renv
 
 build-kctx:
 	@mkdir -p $(BINDIR)
-	go build $(GOFLAGS) -o $(KCTX) ./cmd/kctx
+	go build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(KCTX) ./cmd/kctx
 
 test:
 	go test ./...
@@ -38,7 +47,7 @@ clean:
 	rm -rf $(BINDIR) coverage.out coverage.html
 
 install:
-	go install ./cmd/renv ./cmd/kctx
+	go install -ldflags "$(LDFLAGS)" ./cmd/renv ./cmd/kctx
 
 release:
 	goreleaser build --snapshot --clean

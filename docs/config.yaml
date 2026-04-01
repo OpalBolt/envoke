@@ -1,0 +1,42 @@
+# renv / kctx configuration file
+#
+# Default location: $XDG_CONFIG_HOME/renv/config.yaml
+#                   (~/.config/renv/config.yaml if XDG_CONFIG_HOME is unset)
+#
+# Override path with: --config /path/to/config.yaml
+#
+# All settings can also be overridden by environment variables (see below).
+# CLI flags take final precedence over both the file and env vars.
+
+log:
+  # Minimum log level written to stderr.
+  # Values: debug | info | warn | error
+  # Env: RENV_LOG_LEVEL
+  # CLI: --log-level, --verbose (shorthand for debug)
+  level: warn
+
+  # Log output format.
+  # Values: text | json
+  # Env: RENV_LOG_FORMAT
+  format: text
+
+cache:
+  # Maximum age of cached Bitwarden folder/collection items.
+  # Accepts Go duration strings: 1h30m, 4h, 24h, etc.
+  # Env: RENV_CACHE_MAX_AGE
+  max_age: 8h
+
+  # Maximum age of a stored Bitwarden session token.
+  # Env: RENV_SESSION_MAX_AGE
+  session_max_age: 8h
+
+timeouts:
+  # Timeout for each Bitwarden CLI (bw) subprocess call.
+  # Applies to: bw status, bw unlock, bw list folders/items/collections.
+  # Env: RENV_TIMEOUT_BITWARDEN
+  bitwarden: 30s
+
+  # Timeout for each Vault CLI (vault) subprocess call.
+  # Applies to: vault kv get.
+  # Env: RENV_TIMEOUT_VAULT
+  vault: 30s

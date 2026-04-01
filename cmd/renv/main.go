@@ -4,13 +4,14 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/eficode/secure-handling-of-secrets/internal/config"
 	"github.com/eficode/secure-handling-of-secrets/internal/env"
+	"github.com/eficode/secure-handling-of-secrets/internal/logger"
 	"github.com/eficode/secure-handling-of-secrets/internal/secrets"
+	"github.com/eficode/secure-handling-of-secrets/internal/version"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
-
-var version = "dev"
 
 func main() {
 	if err := rootCmd().Execute(); err != nil {
@@ -21,23 +22,39 @@ func main() {
 func rootCmd() *cobra.Command {
 	var verbose bool
 	var noCache bool
+	var cfgFile string
+	var logLevel string
+	var cfg config.Config
 
 	root := &cobra.Command{
 		Use:   "renv",
 		Short: "Resolve secret references in .env and YAML files",
-		PersistentPreRun: func(cmd *cobra.Command, args []string) {
-			if verbose {
-				_ = verbose // TODO: wire to logger
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			var err error
+			cfg, err = config.Load(cfgFile)
+			if err != nil {
+				return err
 			}
+			// CLI flags override config/env
+			if cmd.Flags().Changed("log-level") || cmd.Root().PersistentFlags().Changed("log-level") {
+				cfg.Log.Level = logLevel
+			}
+			if verbose {
+				cfg.Log.Level = "debug"
+			}
+			logger.Init(cfg.Log.Level, cfg.Log.Format)
+			return nil
 		},
 	}
 
-	root.PersistentFlags().BoolVar(&verbose, "verbose", false, "Enable verbose output")
+	root.PersistentFlags().BoolVar(&verbose, "verbose", false, "Enable debug logging (shorthand for --log-level=debug)")
 	root.PersistentFlags().BoolVar(&noCache, "no-cache", false, "Disable encrypted cache")
+	root.PersistentFlags().StringVar(&cfgFile, "config", "", "Config file path (default: $XDG_CONFIG_HOME/renv/config.yaml)")
+	root.PersistentFlags().StringVar(&logLevel, "log-level", "", "Log level: debug, info, warn, error")
 
 	root.AddCommand(
-		resolveCmd(&noCache),
-		yamlCmd(),
+		resolveCmd(&noCache, &cfg),
+		yamlCmd(&cfg),
 		clearCacheCmd(),
 		statusCmd(),
 		versionCmd(),
@@ -46,7 +63,22 @@ func rootCmd() *cobra.Command {
 	return root
 }
 
-func resolveCmd(noCache *bool) *cobra.Command {
+func newClients(noCache bool, cfg *config.Config) (*secrets.Cache, *secrets.BWClient, *secrets.VaultClient) {
+	cache := secrets.NewCache()
+	cache.MaxAge = cfg.CacheMaxAge()
+	if noCache {
+		cache.Disabled = true
+	}
+	bwClient := &secrets.BWClient{
+		Cache:         cache,
+		Timeout:       cfg.BitwardenTimeout(),
+		SessionMaxAge: cfg.SessionMaxAge(),
+	}
+	vaultClient := &secrets.VaultClient{Timeout: cfg.VaultTimeout()}
+	return cache, bwClient, vaultClient
+}
+
+func resolveCmd(noCache *bool, cfg *config.Config) *cobra.Command {
 	var file string
 	var shell string
 
@@ -81,12 +113,7 @@ Then in .envrc:
 				fmt.Fprintln(os.Stderr, "renv: warning: stdout is a terminal — output will not be set as env vars.")
 				fmt.Fprintln(os.Stderr, "renv: use: eval \"$(renv resolve .env)\"")
 			}
-			cache := secrets.NewCache()
-			if *noCache {
-				cache.Disabled = true // bypass both Put and Get — no secrets touch disk
-			}
-			bwClient := &secrets.BWClient{Cache: cache}
-			vaultClient := &secrets.VaultClient{}
+			_, bwClient, vaultClient := newClients(*noCache, cfg)
 
 			entries, err := env.ResolveDotEnv(file, bwClient, vaultClient)
 			if err != nil {
@@ -128,7 +155,7 @@ Then in .envrc:
 	return cmd
 }
 
-func yamlCmd() *cobra.Command {
+func yamlCmd(cfg *config.Config) *cobra.Command {
 	var file string
 	var key string
 
@@ -143,9 +170,7 @@ func yamlCmd() *cobra.Command {
 			if file == "" {
 				return fmt.Errorf("--file or positional argument required")
 			}
-			cache := secrets.NewCache()
-			bwClient := &secrets.BWClient{Cache: cache}
-			vaultClient := &secrets.VaultClient{}
+			_, bwClient, vaultClient := newClients(false, cfg)
 
 			data, err := env.ResolveYAML(file, bwClient, vaultClient)
 			if err != nil {
@@ -228,7 +253,7 @@ func versionCmd() *cobra.Command {
 		Use:   "version",
 		Short: "Print version",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Printf("renv %s\n", version)
+			fmt.Printf("renv %s\n", version.String())
 		},
 	}
 }

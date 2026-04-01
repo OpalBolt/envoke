@@ -18,10 +18,10 @@
           in
           { type = "app"; program = "${drv}/bin/${name}"; };
 
-        # Shared build attributes — dependencies are fetched by Nix (vendor/ is
-        # not committed).  CGO_ENABLED=0 is enforced via devShell; buildGoModule
-        # pure-Go builds don't link C so CGO is irrelevant at the Nix derivation
-        # level.  trimpath is true by default in nixpkgs buildGoModule.
+        # Single source of truth for the version number — kept in sync with git tags.
+        # `git tag v0.2.0 && echo -n 0.2.0 > VERSION` is the release workflow.
+        releaseVersion = builtins.replaceStrings [ "\n" " " ] [ "" "" ] (builtins.readFile ./VERSION);
+        versionPkg = "github.com/eficode/secure-handling-of-secrets/internal/version";
         common = {
           src = ./.;
           vendorHash = "sha256-toMUBMJ/Ky7HglGwhhLVHN+FzUWihwNfKS/XnGIe9aE=";
@@ -29,21 +29,39 @@
 
         renv = pkgs.buildGoModule (common // {
           pname = "renv";
-          version = "0.1.0";
+          version = releaseVersion;
           subPackages = [ "cmd/renv" ];
+          ldflags = [
+            "-s" "-w"
+            "-X ${versionPkg}.Version=${releaseVersion}"
+            "-X ${versionPkg}.Commit=nix-build"
+            "-X ${versionPkg}.BuildDate=unknown"
+          ];
         });
 
         kctx = pkgs.buildGoModule (common // {
           pname = "kctx";
-          version = "0.1.0";
+          version = releaseVersion;
           subPackages = [ "cmd/kctx" ];
+          ldflags = [
+            "-s" "-w"
+            "-X ${versionPkg}.Version=${releaseVersion}"
+            "-X ${versionPkg}.Commit=nix-build"
+            "-X ${versionPkg}.BuildDate=unknown"
+          ];
         });
 
         # Default package builds both binaries
         all = pkgs.buildGoModule (common // {
           pname = "secure-handling-of-secrets";
-          version = "0.1.0";
+          version = releaseVersion;
           subPackages = [ "cmd/renv" "cmd/kctx" ];
+          ldflags = [
+            "-s" "-w"
+            "-X ${versionPkg}.Version=${releaseVersion}"
+            "-X ${versionPkg}.Commit=nix-build"
+            "-X ${versionPkg}.BuildDate=unknown"
+          ];
         });
       in
       {
