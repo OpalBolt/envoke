@@ -2,6 +2,7 @@ package kubeconfig
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 )
@@ -18,6 +19,7 @@ func NewTempFile(prefix string) (*os.File, error) {
 			dir = "/dev/shm"
 		}
 	}
+	slog.Debug("creating temp file", "dir", dir, "prefix", prefix)
 
 	f, err := os.CreateTemp(dir, prefix+"-*.tmp")
 	if err != nil {
@@ -28,5 +30,6 @@ func NewTempFile(prefix string) (*os.File, error) {
 		os.Remove(f.Name())
 		return nil, fmt.Errorf("chmod 600 %s: %w", f.Name(), err)
 	}
+	slog.Debug("created temp file", "path", f.Name())
 	return f, nil
 }

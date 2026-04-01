@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 
@@ -41,6 +42,12 @@ func rootCmd() *cobra.Command {
 				cfg.Log.Level = "debug"
 			}
 			logger.Init(cfg.Log.Level, cfg.Log.Format)
+			slog.Debug("config loaded",
+				"log_level", cfg.Log.Level,
+				"log_format", cfg.Log.Format,
+				"timeout_vault", cfg.Timeouts.Vault,
+				"timeout_bitwarden", cfg.Timeouts.Bitwarden,
+			)
 			return nil
 		},
 	}
@@ -71,6 +78,7 @@ func switchCmd(cfg *config.Config) *cobra.Command {
 			if len(args) > 1 {
 				source = args[1]
 			}
+			slog.Debug("switching kubeconfig", "env", env, "source", source)
 
 			var kubeconfigData []byte
 
@@ -129,6 +137,7 @@ func clearCmd() *cobra.Command {
 		Short: "Unset KUBECONFIG and remove tmpfile (only if created by kctx)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			kubeconfigPath := os.Getenv("KUBECONFIG")
+			slog.Debug("clearing kubeconfig", "path", kubeconfigPath)
 			if kubeconfigPath != "" && isManagedKubeconfig(kubeconfigPath) {
 				_ = os.Remove(kubeconfigPath)
 			}

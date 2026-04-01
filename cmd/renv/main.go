@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/eficode/secure-handling-of-secrets/internal/config"
@@ -43,6 +44,14 @@ func rootCmd() *cobra.Command {
 				cfg.Log.Level = "debug"
 			}
 			logger.Init(cfg.Log.Level, cfg.Log.Format)
+			slog.Debug("config loaded",
+				"log_level", cfg.Log.Level,
+				"log_format", cfg.Log.Format,
+				"cache_max_age", cfg.Cache.MaxAge,
+				"session_max_age", cfg.Cache.SessionMaxAge,
+				"timeout_bitwarden", cfg.Timeouts.Bitwarden,
+				"timeout_vault", cfg.Timeouts.Vault,
+			)
 			return nil
 		},
 	}
@@ -109,6 +118,7 @@ Then in .envrc:
 			if len(args) > 0 {
 				file = args[0]
 			}
+			slog.Debug("running resolve", "file", file, "shell", shell)
 			if term.IsTerminal(int(os.Stdout.Fd())) {
 				fmt.Fprintln(os.Stderr, "renv: warning: stdout is a terminal — output will not be set as env vars.")
 				fmt.Fprintln(os.Stderr, "renv: use: eval \"$(renv resolve .env)\"")
@@ -170,6 +180,7 @@ func yamlCmd(cfg *config.Config) *cobra.Command {
 			if file == "" {
 				return fmt.Errorf("--file or positional argument required")
 			}
+			slog.Debug("running yaml resolve", "file", file, "key", key)
 			_, bwClient, vaultClient := newClients(false, cfg)
 
 			data, err := env.ResolveYAML(file, bwClient, vaultClient)
@@ -211,6 +222,7 @@ trap fires inside a direnv subprocess.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cache := secrets.NewCache()
 			uid := fmt.Sprintf("%d", os.Getuid())
+			slog.Debug("clearing cache and session", "uid", uid)
 			if err := cache.Clear(uid); err != nil {
 				return fmt.Errorf("clearing cache: %w", err)
 			}
@@ -269,6 +281,7 @@ The output must be evaluated by your shell:
   eval "$(renv unload)"`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			uid := fmt.Sprintf("%d", os.Getuid())
+			slog.Debug("unloading tracked variables", "uid", uid)
 			names, err := secrets.LoadVarNames(uid)
 			if err != nil {
 				return err

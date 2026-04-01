@@ -81,6 +81,7 @@ func (c *BWClient) Session() (string, error) {
 	}
 	// 1. BW_SESSION env var
 	if s := os.Getenv("BW_SESSION"); s != "" {
+		slog.Debug("using BW session from environment")
 		c.session = s
 		c.sessionFromEnv = true
 		return c.session, nil
@@ -94,12 +95,14 @@ func (c *BWClient) Session() (string, error) {
 	if pw == "" {
 		// 3. Stored session from a previous process invocation (e.g. direnv re-entry)
 		if stored := c.loadStoredSession(); stored != "" {
+			slog.Debug("using stored BW session")
 			c.session = stored
 			c.sessionFromEnv = false
 			return c.session, nil
 		}
 
 		// 4. Prompt on /dev/tty — no echo using x/term
+		slog.Debug("prompting for BW master password on /dev/tty")
 		tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 		if err != nil {
 			return "", fmt.Errorf("opening /dev/tty: %w", err)
@@ -133,6 +136,7 @@ func (c *BWClient) Session() (string, error) {
 	if token == "" {
 		return "", fmt.Errorf("bw unlock returned empty session token")
 	}
+	slog.Debug("BW unlock successful, saving session")
 	c.session = token
 	c.sessionFromEnv = false
 	// Persist for future process invocations (e.g. direnv re-entry into the same folder)
@@ -180,12 +184,14 @@ func (c *BWClient) loadStoredSession() string {
 func (c *BWClient) saveSession(token string) {
 	uid := fmt.Sprintf("%d", os.Getuid())
 	path := sessionStorePath(uid)
+	slog.Debug("saving BW session to disk", "path", path)
 	_ = os.WriteFile(path, []byte(token), 0600)
 }
 
 // ClearStoredSession removes the persisted BW session file for the given uid.
 func ClearStoredSession(uid string) error {
 	path := sessionStorePath(uid)
+	slog.Debug("clearing stored BW session", "path", path)
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("clearing session: %w", err)
 	}
@@ -346,6 +352,7 @@ func (c *BWClient) CollectionItems(collectionName string) ([]map[string]interfac
 // It only unsets BW_SESSION if we did not read it from the environment.
 func (c *BWClient) Close() {
 	if c.session != "" {
+		slog.Debug("closing BW client, zeroing session token")
 		zeroString(&c.session)
 		c.session = "" // explicitly empty after zeroing NUL-bytes
 	}

@@ -3,6 +3,7 @@ package env
 import (
 	"fmt"
 	"io"
+	"log/slog"
 	"regexp"
 	"strings"
 )
@@ -14,8 +15,10 @@ var validEnvKey = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // Values are shell-quoted (single-quote escaped).
 // Returns an error if any key contains characters that would break shell eval safety.
 func EmitExports(w io.Writer, entries []EnvEntry) error {
+	slog.Debug("emitting shell exports", "count", len(entries))
 	for _, e := range entries {
 		if !validEnvKey.MatchString(e.Key) {
+			slog.Warn("skipping invalid env key", "key", e.Key)
 			return fmt.Errorf("invalid env key %q: must match [A-Za-z_][A-Za-z0-9_]*", e.Key)
 		}
 		quoted := shellQuote(e.Value)
@@ -28,6 +31,7 @@ func EmitExports(w io.Writer, entries []EnvEntry) error {
 
 // EmitUnload writes "unset KEY" lines to w for each entry.
 func EmitUnload(w io.Writer, entries []EnvEntry) error {
+	slog.Debug("emitting shell unsets", "count", len(entries))
 	for _, e := range entries {
 		if !validEnvKey.MatchString(e.Key) {
 			return fmt.Errorf("invalid env key %q: must match [A-Za-z_][A-Za-z0-9_]*", e.Key)

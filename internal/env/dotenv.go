@@ -3,6 +3,7 @@ package env
 import (
 	"bufio"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 
@@ -19,10 +20,12 @@ type EnvEntry struct {
 // ResolveDotEnv reads a .env file, batch-fetches needed BW folders,
 // and returns resolved entries.
 func ResolveDotEnv(path string, bwClient *secrets.BWClient, vaultClient *secrets.VaultClient) ([]EnvEntry, error) {
+	slog.Debug("parsing .env file", "path", path)
 	lines, err := parseDotEnv(path)
 	if err != nil {
 		return nil, fmt.Errorf("parsing %s: %w", path, err)
 	}
+	slog.Debug("parsed .env file", "path", path, "entries", len(lines))
 
 	// Pass 1: collect unique bw:// folder/collection names for batch pre-fetch
 	bwFolders := map[string]bool{}
@@ -42,12 +45,14 @@ func ResolveDotEnv(path string, bwClient *secrets.BWClient, vaultClient *secrets
 
 	// Pre-fetch all BW folders (batch fetch — one unlock)
 	for folder := range bwFolders {
+		slog.Debug("pre-fetching BW folder", "folder", folder)
 		if _, err := bwClient.FolderItems(folder); err != nil {
 			return nil, fmt.Errorf("pre-fetching BW folder %q: %w", folder, err)
 		}
 	}
 	// Pre-fetch all BW collections
 	for col := range bwCollections {
+		slog.Debug("pre-fetching BW collection", "collection", col)
 		if _, err := bwClient.CollectionItems(col); err != nil {
 			return nil, fmt.Errorf("pre-fetching BW collection %q: %w", col, err)
 		}
@@ -57,18 +62,22 @@ func ResolveDotEnv(path string, bwClient *secrets.BWClient, vaultClient *secrets
 
 	// Pass 2: resolve all entries
 	resolved := make([]EnvEntry, 0, len(lines))
+	refCount := 0
 	for _, e := range lines {
 		entry := EnvEntry{Key: e.Key, Value: e.Value}
 		if secrets.IsSecretRef(e.Value) {
+			slog.Debug("resolving secret ref", "key", e.Key, "ref", e.Value)
 			val, err := resolveRef(e.Value, bwClient, vaultClient)
 			if err != nil {
 				return nil, fmt.Errorf("resolving %s=%q: %w", e.Key, e.Value, err)
 			}
 			entry.Value = val
 			entry.IsRef = true
+			refCount++
 		}
 		resolved = append(resolved, entry)
 	}
+	slog.Info("resolved .env file", "path", path, "entries", len(resolved), "secrets", refCount)
 	return resolved, nil
 }
 

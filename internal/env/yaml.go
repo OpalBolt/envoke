@@ -2,6 +2,7 @@ package env
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -13,11 +14,17 @@ import (
 // ResolveYAML reads a YAML file, walks all scalar string values, resolves
 // any bw:// or vault:// references, and returns the resolved data structure.
 func ResolveYAML(path string, bwClient *secrets.BWClient, vaultClient *secrets.VaultClient) (interface{}, error) {
+	slog.Debug("reading YAML file", "path", path)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", path, err)
 	}
-	return ResolveYAMLString(string(data), bwClient, vaultClient)
+	result, err := ResolveYAMLString(string(data), bwClient, vaultClient)
+	if err != nil {
+		return nil, err
+	}
+	slog.Info("resolved YAML file", "path", path)
+	return result, nil
 }
 
 // ResolveYAMLString resolves a YAML string.
@@ -56,6 +63,7 @@ func walkAndResolve(v interface{}, bwClient *secrets.BWClient, vaultClient *secr
 		return val, nil
 	case string:
 		if secrets.IsSecretRef(val) {
+			slog.Debug("resolving YAML secret ref", "ref", val)
 			if strings.HasPrefix(val, "bw://") {
 				ref, err := secrets.ParseBWRef(val)
 				if err != nil {

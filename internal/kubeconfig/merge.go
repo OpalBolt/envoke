@@ -2,6 +2,7 @@ package kubeconfig
 
 import (
 	"fmt"
+	"log/slog"
 	"strings"
 )
 
@@ -15,6 +16,7 @@ func ValidateKubeconfig(content []byte) error {
 
 // WriteKubeconfig writes content to a tmpfile and returns the path.
 func WriteKubeconfig(content []byte) (string, error) {
+	slog.Debug("validating kubeconfig content", "bytes", len(content))
 	if err := ValidateKubeconfig(content); err != nil {
 		return "", err
 	}
@@ -26,5 +28,6 @@ func WriteKubeconfig(content []byte) (string, error) {
 	if _, err := f.Write(content); err != nil {
 		return "", fmt.Errorf("writing kubeconfig: %w", err)
 	}
+	slog.Info("wrote kubeconfig to tmpfile", "path", f.Name())
 	return f.Name(), nil
 }

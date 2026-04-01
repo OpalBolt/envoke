@@ -2,6 +2,7 @@ package secrets
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,6 +22,7 @@ func varsFilePath(uid string) string {
 // renv unload can emit the correct unset commands later.
 func SaveVarNames(uid string, names []string) error {
 	path := varsFilePath(uid)
+	slog.Debug("saving tracked var names", "path", path, "count", len(names))
 	content := strings.Join(names, "\n")
 	if len(names) > 0 {
 		content += "\n"
@@ -34,6 +36,7 @@ func LoadVarNames(uid string) ([]string, error) {
 	path := varsFilePath(uid)
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
+		slog.Debug("no tracked var names found", "path", path)
 		return nil, nil
 	}
 	if err != nil {
@@ -45,12 +48,14 @@ func LoadVarNames(uid string) ([]string, error) {
 			names = append(names, line)
 		}
 	}
+	slog.Debug("loaded tracked var names", "path", path, "count", len(names))
 	return names, nil
 }
 
 // ClearVarNames removes the tracked-vars state file for uid.
 func ClearVarNames(uid string) error {
 	path := varsFilePath(uid)
+	slog.Debug("clearing tracked var names", "path", path)
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("clearing vars state: %w", err)
 	}
