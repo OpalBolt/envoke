@@ -252,15 +252,25 @@ func (c *BWClient) FolderItems(folder string) ([]map[string]interface{}, error) 
 	pw := c.localPasswordForCache()
 
 	// Check local encrypted cache — no BW contact needed on hit.
-	if pw != "" {
-		if cached, err := c.Cache.Get(uid, acctTag, folder, pw); err == nil && cached != nil {
-			slog.Debug("cache hit", "folder", folder)
+	if pw == "" {
+		slog.Debug("skipping cache (no local password set)", "folder", folder)
+	} else {
+		cached, cacheErr := c.Cache.Get(uid, acctTag, folder, pw)
+		if cacheErr != nil {
+			slog.Warn("cache decryption failed; falling back to Bitwarden (wrong local password?)",
+				"folder", folder, "error", cacheErr)
+		} else if cached != nil {
 			var items []map[string]interface{}
-			if err := json.Unmarshal(cached, &items); err == nil {
+			if jsonErr := json.Unmarshal(cached, &items); jsonErr != nil {
+				slog.Warn("cached data is not valid JSON; falling back to Bitwarden",
+					"folder", folder, "error", jsonErr)
+			} else {
+				slog.Debug("cache hit", "folder", folder)
 				return items, nil
 			}
+		} else {
+			slog.Debug("cache miss", "folder", folder)
 		}
-		slog.Debug("cache miss", "folder", folder)
 	}
 
 	// Cache miss — contact Bitwarden (prompts BWPassword if needed).
@@ -314,15 +324,25 @@ func (c *BWClient) CollectionItems(collectionName string) ([]map[string]interfac
 	pw := c.localPasswordForCache()
 	cacheKeyStr := "collection:" + collectionName
 
-	if pw != "" {
-		if cached, err := c.Cache.Get(uid, acctTag, cacheKeyStr, pw); err == nil && cached != nil {
-			slog.Debug("cache hit", "collection", collectionName)
+	if pw == "" {
+		slog.Debug("skipping cache (no local password set)", "collection", collectionName)
+	} else {
+		cached, cacheErr := c.Cache.Get(uid, acctTag, cacheKeyStr, pw)
+		if cacheErr != nil {
+			slog.Warn("cache decryption failed; falling back to Bitwarden (wrong local password?)",
+				"collection", collectionName, "error", cacheErr)
+		} else if cached != nil {
 			var items []map[string]interface{}
-			if err := json.Unmarshal(cached, &items); err == nil {
+			if jsonErr := json.Unmarshal(cached, &items); jsonErr != nil {
+				slog.Warn("cached data is not valid JSON; falling back to Bitwarden",
+					"collection", collectionName, "error", jsonErr)
+			} else {
+				slog.Debug("cache hit", "collection", collectionName)
 				return items, nil
 			}
+		} else {
+			slog.Debug("cache miss", "collection", collectionName)
 		}
-		slog.Debug("cache miss", "collection", collectionName)
 	}
 
 	session, err := c.Session()

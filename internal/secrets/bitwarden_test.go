@@ -32,6 +32,64 @@ func mockBWBin(t *testing.T, responses map[string]string) func() {
 	return func() { os.Setenv("PATH", origPath) }
 }
 
+// TestFolderItemsCacheWrongPassword verifies that a wrong local password causes a
+// WARN log (not a silent miss) and then falls back to Bitwarden.
+func TestFolderItemsCacheWrongPassword(t *testing.T) {
+	dir := t.TempDir()
+	cache := &Cache{Dir: dir, MaxAge: 8 * time.Hour}
+
+	const folderName = "myfolder"
+	const folderID = "fid1"
+
+	items := []map[string]interface{}{
+		{"name": "item1", "login": map[string]interface{}{"password": "pw1"}},
+	}
+	folders := []map[string]interface{}{{"id": folderID, "name": folderName}}
+	itemsJSON, _ := json.Marshal(items)
+	foldersJSON, _ := json.Marshal(folders)
+	statusJSON := `{"userEmail":"u@example.com","serverUrl":"https://bitwarden.com"}`
+	_ = statusJSON
+
+	// Seed the cache with the correct password.
+	if err := cache.Put("1000", "acct1", folderName, "correct-pw", itemsJSON); err != nil {
+		t.Fatalf("seed cache: %v", err)
+	}
+
+	// Write a script that dispatches on the full arg list.
+	scriptDir := t.TempDir()
+	script := "#!/bin/sh\n"
+	script += "case \"$*\" in\n"
+	script += "  'list folders') echo '" + string(foldersJSON) + "' ;;\n"
+	script += "  'list items --folderid " + folderID + "') echo '" + string(itemsJSON) + "' ;;\n"
+	script += "  unlock*) echo 'tok' ;;\n"
+	script += "  status) echo '{\"userEmail\":\"u@example.com\",\"serverUrl\":\"https://bitwarden.com\"}' ;;\n"
+	script += "  *) echo \"unexpected: $*\" >&2; exit 1 ;;\n"
+	script += "esac\n"
+	bwPath := scriptDir + "/bw"
+	if err := os.WriteFile(bwPath, []byte(script), 0755); err != nil {
+		t.Fatalf("writing mock bw: %v", err)
+	}
+	origPath := os.Getenv("PATH")
+	os.Setenv("PATH", scriptDir+":"+origPath)
+	defer os.Setenv("PATH", origPath)
+
+	client := &BWClient{
+		Cache:         cache,
+		LocalPassword: "wrong-pw",
+		BWPassword:    "bw-master",
+	}
+	client.accountTag = "acct1"
+
+	// With wrong password, Get returns an error. The client should log WARN and fall through to BW.
+	got, err := client.FolderItems(folderName)
+	if err != nil {
+		t.Fatalf("FolderItems with wrong cache pw should fall back to BW, got error: %v", err)
+	}
+	if len(got) == 0 {
+		t.Error("expected items from BW fallback, got none")
+	}
+}
+
 func TestBWClientResolvePassword(t *testing.T) {
 	items := []map[string]interface{}{
 		{
