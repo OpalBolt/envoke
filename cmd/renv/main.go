@@ -5,10 +5,8 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
-	"os/signal"
 	"syscall"
 
-	"github.com/eficode/secure-handling-of-secrets/internal/cleanup"
 	"github.com/eficode/secure-handling-of-secrets/internal/config"
 	"github.com/eficode/secure-handling-of-secrets/internal/env"
 	"github.com/eficode/secure-handling-of-secrets/internal/logger"
@@ -85,7 +83,6 @@ func rootCmd() *cobra.Command {
 		statusCmd(),
 		versionCmd(),
 		unloadCmd(),
-		watchCmd(),
 	)
 	return root
 }
@@ -230,26 +227,16 @@ The resolved variables override any same-named variables already in the environm
 
 // bashInitScript is the shell function emitted by `renv shell-init` for bash/zsh.
 // It wraps `resolve` and `unload` with eval so the user never has to type it.
-// It also starts a background watcher that clears the cache on sleep/lock.
 const bashInitScript = `renv() {
   case "$1" in
     resolve|unload)
-      # Strip the standalone EXIT trap emitted by resolve — the shell-init
-      # trap below covers cache clear and watcher shutdown together.
-      eval "$(command renv "$@" | grep -v '^trap ')"
+      eval "$(command renv "$@")"
       ;;
     *)
       command renv "$@"
       ;;
   esac
 }
-
-# Start the sleep/lock watcher once per shell session.
-if [ -z "${_RENV_WATCH_PID:-}" ]; then
-  command renv watch &
-  _RENV_WATCH_PID=$!
-  trap 'kill "${_RENV_WATCH_PID:-}" 2>/dev/null; command renv clear-cache 2>/dev/null' EXIT
-fi
 `
 
 // fishInitScript is the shell function emitted by `renv shell-init --shell fish`.
@@ -260,12 +247,6 @@ const fishInitScript = `function renv
     case '*'
       command renv $argv
   end
-end
-
-# Start the sleep/lock watcher once per shell session.
-if not set -q _RENV_WATCH_PID
-  command renv watch &
-  set -gx _RENV_WATCH_PID $last_pid
 end
 `
 
@@ -438,44 +419,6 @@ The output must be evaluated by your shell:
 				return err
 			}
 			_ = secrets.ClearVarNames(uid)
-			return nil
-		},
-	}
-}
-
-func watchCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "watch",
-		Short: "Watch for sleep/lock events and clear cache (run in background by shell-init)",
-		Long: `Run in the background to clear the secret cache when the system
-sleeps or the screen is locked. Normally started automatically by shell-init.
-
-On Linux, sleep and screen-lock events are detected via D-Bus (systemd-logind).
-On macOS, sleep is detected via timer drift; screen lock requires a launchd agent.
-On Windows, event hooks are not yet implemented.
-
-Start manually:
-  renv watch &`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			uid := fmt.Sprintf("%d", os.Getuid())
-			slog.Debug("starting renv watcher", "uid", uid)
-
-			hook := cleanup.New()
-			if err := hook.Register(func() error {
-				slog.Debug("cleanup: clearing renv cache and session")
-				cache := secrets.NewCache()
-				_ = cache.Clear(uid)
-				_ = secrets.ClearStoredSession(uid)
-				_ = secrets.ClearStoredLocalPassword(uid)
-				return nil
-			}); err != nil {
-				return fmt.Errorf("registering cleanup hook: %w", err)
-			}
-			defer hook.Unregister()
-
-			sigCh := make(chan os.Signal, 1)
-			signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
-			<-sigCh
 			return nil
 		},
 	}

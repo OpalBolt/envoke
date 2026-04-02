@@ -3,7 +3,7 @@
 package cleanup
 
 import (
-	"log/slog"
+	"log"
 
 	"github.com/godbus/dbus/v5"
 )
@@ -23,7 +23,7 @@ func (h *linuxHook) Register(fns ...CleanupFunc) error {
 	conn, err := dbus.ConnectSystemBus()
 	if err != nil {
 		// Non-fatal: log and continue without hooks
-		slog.Warn("cleanup: cannot connect to D-Bus system bus", "error", err)
+		log.Printf("cleanup: cannot connect to D-Bus system bus: %v", err)
 		return nil
 	}
 	h.conn = conn
@@ -33,7 +33,7 @@ func (h *linuxHook) Register(fns ...CleanupFunc) error {
 		dbus.WithMatchInterface("org.freedesktop.login1.Manager"),
 		dbus.WithMatchMember("PrepareForSleep"),
 	); err != nil {
-		slog.Warn("cleanup: cannot subscribe to PrepareForSleep", "error", err)
+		log.Printf("cleanup: cannot subscribe to PrepareForSleep: %v", err)
 	}
 
 	// Subscribe to Lock signal
@@ -41,7 +41,7 @@ func (h *linuxHook) Register(fns ...CleanupFunc) error {
 		dbus.WithMatchInterface("org.freedesktop.login1.Session"),
 		dbus.WithMatchMember("Lock"),
 	); err != nil {
-		slog.Warn("cleanup: cannot subscribe to Lock", "error", err)
+		log.Printf("cleanup: cannot subscribe to Lock: %v", err)
 	}
 
 	go h.listen()
@@ -76,7 +76,7 @@ func (h *linuxHook) listen() {
 func (h *linuxHook) runAll() {
 	for _, fn := range h.fns {
 		if err := fn(); err != nil {
-			slog.Warn("cleanup: hook error", "error", err)
+			log.Printf("cleanup: hook error: %v", err)
 		}
 	}
 }

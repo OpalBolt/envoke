@@ -33,18 +33,3 @@ func NewTempFile(prefix string) (*os.File, error) {
 	slog.Debug("created temp file", "path", f.Name())
 	return f, nil
 }
-
-// ClearManaged removes all kctx-managed kubeconfig tmpfiles from /dev/shm and /tmp.
-// Only files with the "kctx-" prefix are removed.
-func ClearManaged() {
-	for _, dir := range []string{"/dev/shm", "/tmp"} {
-		matches, err := filepath.Glob(filepath.Join(dir, "kctx-*.tmp"))
-		if err != nil {
-			continue
-		}
-		for _, path := range matches {
-			slog.Debug("cleanup: removing managed kubeconfig", "path", path)
-			os.Remove(path)
-		}
-	}
-}

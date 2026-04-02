@@ -4,11 +4,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"os/signal"
 	"path/filepath"
-	"syscall"
 
-	"github.com/eficode/secure-handling-of-secrets/internal/cleanup"
 	"github.com/eficode/secure-handling-of-secrets/internal/config"
 	"github.com/eficode/secure-handling-of-secrets/internal/kubeconfig"
 	"github.com/eficode/secure-handling-of-secrets/internal/logger"
@@ -66,7 +63,6 @@ func rootCmd() *cobra.Command {
 		clearCacheCmd(),
 		versionCmd(),
 		shellInitCmd(),
-		watchCmd(&cfg),
 	)
 	return root
 }
@@ -212,7 +208,7 @@ func shellInitCmd() *cobra.Command {
 func kctxShellSnippet() string {
 	return `
 # kctx shell integration — source this into your shell
-# Usage: eval "$(kctx shell-init)"
+# Usage: source <(kctx shell-init)
 
 kctx() {
   case "$1" in
@@ -227,47 +223,5 @@ kctx() {
       ;;
   esac
 }
-
-# Start the sleep/lock watcher once per shell session.
-if [ -z "${_KCTX_WATCH_PID:-}" ]; then
-  command kctx watch &
-  _KCTX_WATCH_PID=$!
-  trap 'kill "${_KCTX_WATCH_PID:-}" 2>/dev/null' EXIT
-fi
 `
-}
-
-func watchCmd(cfg *config.Config) *cobra.Command {
-	return &cobra.Command{
-		Use:   "watch",
-		Short: "Watch for sleep/lock events and clear cache (run in background by shell-init)",
-		Long: `Run in the background to clear the kubeconfig tmpfile and secret cache
-when the system sleeps or the screen is locked. Normally started automatically
-by shell-init.
-
-On Linux, sleep and screen-lock events are detected via D-Bus (systemd-logind).
-On macOS, sleep is detected via timer drift; screen lock requires a launchd agent.
-On Windows, event hooks are not yet implemented.`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			uid := fmt.Sprintf("%d", os.Getuid())
-			slog.Debug("starting kctx watcher", "uid", uid)
-
-			hook := cleanup.New()
-			if err := hook.Register(func() error {
-				slog.Debug("cleanup: clearing kctx cache and managed kubeconfigs")
-				cache := secrets.NewCache()
-				_ = cache.Clear(uid)
-				kubeconfig.ClearManaged()
-				return nil
-			}); err != nil {
-				return fmt.Errorf("registering cleanup hook: %w", err)
-			}
-			defer hook.Unregister()
-
-			sigCh := make(chan os.Signal, 1)
-			signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
-			<-sigCh
-			return nil
-		},
-	}
 }
