@@ -9,7 +9,7 @@ jobs:
   ci:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # Install Nix with flakes enabled. All tooling (Go, shellcheck, etc.) is
       # provided by the flake — nothing is installed directly on the runner.
@@ -21,7 +21,7 @@ jobs:
       # Cache the Nix store between runs, keyed on flake.lock so the cache is
       # invalidated whenever dependencies change. The restore prefix allows a
       # partial hit (e.g. after a dep bump) rather than a cold build every time.
-      - uses: nix-community/cache-nix-action@v6
+      - uses: nix-community/cache-nix-action@v7
         with:
           primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock') }}
           restore-prefixes-first-match: nix-${{ runner.os }}-

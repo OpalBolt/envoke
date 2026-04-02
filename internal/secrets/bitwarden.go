@@ -252,7 +252,7 @@ func (c *BWClient) Session() (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("reading password from tty: %w", err)
 		}
-		fmt.Fprintln(tty) // newline after hidden input
+		fmt.Fprintln(tty)        // newline after hidden input
 		defer zeroBytes(pwBytes) // zero the raw bytes before they go out of scope
 		pw = string(pwBytes)
 		// Store for the duration of this unlock call — cleared below
