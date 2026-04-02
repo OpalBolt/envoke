@@ -2,7 +2,7 @@
 
 package cleanup
 
-import "log"
+import "log/slog"
 
 // TODO: Implement using WTS session change events / Windows power events.
 
@@ -15,7 +15,7 @@ func newHook() Hook {
 }
 
 func (h *windowsHook) Register(fns ...CleanupFunc) error {
-	log.Println("cleanup: hooks not yet implemented on Windows; secrets will not be cleared on sleep/lock")
+	slog.Warn("cleanup: hooks not yet implemented on Windows; secrets will not be cleared on sleep/lock")
 	h.fns = append(h.fns, fns...)
 	return nil
 }
