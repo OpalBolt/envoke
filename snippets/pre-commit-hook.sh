@@ -67,7 +67,7 @@ for FILE in "${STAGED_FILES[@]}"; do
 
   # Skip known safe files
   case "$FILE" in
-    *.md|*.txt|*.lock|go.sum|package-lock.json|yarn.lock)
+    *.md|*.txt|*.lock|go.sum|package-lock.json)
       continue
       ;;
   esac

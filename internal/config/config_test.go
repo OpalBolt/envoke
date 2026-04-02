@@ -111,13 +111,13 @@ func TestLoad_EmptyPathUsesDefault(t *testing.T) {
 func TestApplyEnv(t *testing.T) {
 	// Isolate env var changes to this test.
 	vars := map[string]string{
-		"RENV_LOG_LEVEL":            "debug",
-		"RENV_LOG_FORMAT":           "json",
-		"RENV_CACHE_MAX_AGE":        "4h",
-		"RENV_ISOLATED":             "true",
+		"RENV_LOG_LEVEL":             "debug",
+		"RENV_LOG_FORMAT":            "json",
+		"RENV_CACHE_MAX_AGE":         "4h",
+		"RENV_ISOLATED":              "true",
 		"RENV_PASSWORD_GRACE_PERIOD": "5m",
-		"RENV_TIMEOUT_BITWARDEN":    "10s",
-		"RENV_TIMEOUT_VAULT":        "15s",
+		"RENV_TIMEOUT_BITWARDEN":     "10s",
+		"RENV_TIMEOUT_VAULT":         "15s",
 	}
 	for k, v := range vars {
 		t.Setenv(k, v)
@@ -203,8 +203,8 @@ func TestCachePasswordGracePeriod(t *testing.T) {
 		want  time.Duration
 	}{
 		{"5m", 5 * time.Minute},
-		{"", 0},        // fallback is 0
-		{"bad", 0},     // fallback on parse error
+		{"", 0},    // fallback is 0
+		{"bad", 0}, // fallback on parse error
 	}
 	for _, tt := range tests {
 		cfg := Defaults()
