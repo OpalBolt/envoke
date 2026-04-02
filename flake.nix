@@ -101,6 +101,19 @@
             gofmt -w .
           '';
 
+          fmt-check = mkApp "fmt-check" [ pkgs.go ] ''
+            unformatted=$(gofmt -l .)
+            if [ -n "$unformatted" ]; then
+              echo "The following files need formatting:"
+              echo "$unformatted"
+              exit 1
+            fi
+          '';
+
+          shellcheck = mkApp "shellcheck" [ pkgs.shellcheck ] ''
+            find snippets -name '*.sh' -print0 | xargs -0 shellcheck --severity=warning
+          '';
+
           tidy = mkApp "tidy" [ pkgs.go ] ''
             export CGO_ENABLED=0
             go mod tidy
