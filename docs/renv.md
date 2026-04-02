@@ -184,9 +184,40 @@ All log output goes to **stderr** and never pollutes the exported variables.
 
 ```yaml
 cache:
-  max_age: 8h          # how long fetched Bitwarden items are cached (env: RENV_CACHE_MAX_AGE)
-  session_max_age: 8h  # how long the stored BW session token is kept (env: RENV_SESSION_MAX_AGE)
+  max_age: 8h               # how long fetched Bitwarden items are cached (env: RENV_CACHE_MAX_AGE)
+  session_max_age: 8h       # how long the stored BW session token is kept (env: RENV_SESSION_MAX_AGE)
+  isolated: false           # set to true to require local password in each terminal (env: RENV_ISOLATED)
+  password_grace_period: 0  # re-prompt window; see below (env: RENV_PASSWORD_GRACE_PERIOD)
 ```
+
+By default (`isolated: false`, `password_grace_period: 0`) the local cache password is saved to `/dev/shm`
+after the first prompt. Subsequent terminals can decrypt the shared encrypted cache without being
+prompted — so a second terminal just works if the cache is still warm.
+
+Set `isolated: true` (or `--isolated` / `RENV_ISOLATED=true`) to revert to per-terminal authentication:
+every invocation must provide the local password.
+
+#### Password grace period
+
+`password_grace_period` offers a middle ground between always-shared and always-isolated:
+
+```yaml
+cache:
+  password_grace_period: 1m   # re-prompt after 1 minute of inactivity
+```
+
+When set to a non-zero Go duration (e.g. `1m`, `5m`, `30m`):
+
+- The local password store is **keyed per terminal session** (by the parent shell PID). Each new
+  terminal must authenticate at least once — Terminal 2 always prompts even if Terminal 1 is
+  still within its grace period.
+- Within the grace period, the **same** terminal can unload and reload secrets without re-typing
+  the password.
+- After the grace period the stored key is deleted and the prompt reappears.
+- The **encrypted cache files** (the secrets themselves) are still shared across all terminals; only
+  the local-password access layer becomes per-terminal.
+
+`renv clear-cache` always removes both the shared password file and all per-terminal session files.
 
 ### Timeouts
 
@@ -204,9 +235,12 @@ timeouts:
 | `RENV_LOG_FORMAT` | Log format: `text` (default) or `json` |
 | `RENV_CACHE_MAX_AGE` | Max age of cached Bitwarden items (Go duration, e.g. `4h`) |
 | `RENV_SESSION_MAX_AGE` | Max age of stored Bitwarden session (Go duration, e.g. `24h`) |
+| `RENV_ISOLATED` | Set to `true` to require local password in each terminal; disables cross-terminal cache sharing |
+| `RENV_PASSWORD_GRACE_PERIOD` | Grace period before re-prompting for local password (Go duration, e.g. `1m`). When set, each terminal authenticates independently. |
 | `RENV_TIMEOUT_BITWARDEN` | Timeout for `bw` subprocess calls (Go duration, e.g. `60s`) |
 | `RENV_TIMEOUT_VAULT` | Timeout for `vault` subprocess calls (Go duration, e.g. `60s`) |
 | `BW_SESSION` | Active Bitwarden session token |
 | `RENV_BW_PASSWORD` | Bitwarden master password (non-interactive) |
+| `RENV_LOCAL_PASSWORD` | Local cache encryption password (non-interactive) |
 | `VAULT_ADDR` | Vault server URL |
 | `VAULT_TOKEN` | Vault authentication token |

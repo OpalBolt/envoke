@@ -46,6 +46,33 @@ cache:
   # Env: RENV_CACHE_MAX_AGE
   max_age: 8h
 
+  # When false (default), the local cache password is saved to /dev/shm after the
+  # first prompt so that all terminal sessions of the same user can decrypt the
+  # shared encrypted cache without being prompted again.
+  # When true, every invocation prompts for the local password independently.
+  # Env: RENV_ISOLATED
+  # CLI: --isolated
+  isolated: false
+
+  # Grace period before re-prompting for the local cache password within the same
+  # terminal session.  When set to a non-zero duration:
+  #
+  #   • The password store is keyed per terminal (by parent shell PID), so each
+  #     new terminal must authenticate at least once — even if another terminal
+  #     authenticated recently.
+  #   • Within the same terminal, reloading secrets within the grace period skips
+  #     the prompt.  After the period expires the prompt reappears.
+  #   • The encrypted cache files (the secrets) are still shared across terminals;
+  #     only the local-password access is per-terminal.
+  #
+  # When 0 (the default), the old shared-store behaviour applies: isolated=false
+  # means all terminals share the stored password with no expiry.
+  #
+  # Accepts Go duration strings: 1m, 5m, 30m, 1h, etc.
+  # Env: RENV_PASSWORD_GRACE_PERIOD
+  # CLI: --password-grace-period
+  password_grace_period: 0
+
 timeouts:
   # Timeout for each Bitwarden CLI (bw) subprocess call.
   # Applies to: bw status, bw unlock, bw list folders/items/collections.
