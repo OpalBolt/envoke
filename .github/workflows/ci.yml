@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # Install Nix with flakes enabled. All tooling (Go, shellcheck, etc.) is
+      # provided by the flake — nothing is installed directly on the runner.
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      # Cache the Nix store between runs, keyed on flake.lock so the cache is
+      # invalidated whenever dependencies change. The restore prefix allows a
+      # partial hit (e.g. after a dep bump) rather than a cold build every time.
+      - uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+
+      # Each step runs a flake app defined in flake.nix via `nix run .#<name>`.
+      # Nix resolves the exact Go version and dependencies from the lock file,
+      # so the environment here is identical to a local `nix develop` shell.
+
+      # go test -race ./...
+      - name: Test
+        run: nix run .#test-race
+
+      # go vet ./...
+      - name: Lint
+        run: nix run .#lint
+
+      # gofmt -l . — fails if any files are not formatted, without modifying them
+      - name: Format check
+        run: nix run .#fmt-check
+
+      # shellcheck --severity=warning on all *.sh files under snippets/
+      - name: Shellcheck
+        run: nix run .#shellcheck

@@ -1,0 +1,425 @@
+package main
+
+import (
+	"fmt"
+	"log/slog"
+	"os"
+	"os/exec"
+	"syscall"
+
+	"github.com/eficode/secure-handling-of-secrets/internal/config"
+	"github.com/eficode/secure-handling-of-secrets/internal/env"
+	"github.com/eficode/secure-handling-of-secrets/internal/logger"
+	"github.com/eficode/secure-handling-of-secrets/internal/secrets"
+	"github.com/eficode/secure-handling-of-secrets/internal/version"
+	"github.com/spf13/cobra"
+	"golang.org/x/term"
+)
+
+func main() {
+	if err := rootCmd().Execute(); err != nil {
+		os.Exit(1)
+	}
+}
+
+func rootCmd() *cobra.Command {
+	var verbose bool
+	var noCache bool
+	var isolated bool
+	var passwordGracePeriod string
+	var cfgFile string
+	var logLevel string
+	var cfg config.Config
+
+	root := &cobra.Command{
+		Use:   "renv",
+		Short: "Resolve secret references in .env and YAML files",
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			var err error
+			cfg, err = config.Load(cfgFile)
+			if err != nil {
+				return err
+			}
+			// CLI flags override config/env
+			if cmd.Flags().Changed("log-level") || cmd.Root().PersistentFlags().Changed("log-level") {
+				cfg.Log.Level = logLevel
+			}
+			if verbose {
+				cfg.Log.Level = "debug"
+			}
+			if cmd.Root().PersistentFlags().Changed("isolated") {
+				cfg.Cache.Isolated = isolated
+			}
+			if cmd.Root().PersistentFlags().Changed("password-grace-period") {
+				cfg.Cache.PasswordGracePeriod = passwordGracePeriod
+			}
+			logger.Init(cfg.Log.Level, cfg.Log.Format)
+			slog.Debug("config loaded",
+				"log_level", cfg.Log.Level,
+				"log_format", cfg.Log.Format,
+				"cache_max_age", cfg.Cache.MaxAge,
+				"cache_isolated", cfg.Cache.Isolated,
+				"cache_password_grace_period", cfg.Cache.PasswordGracePeriod,
+				"timeout_bitwarden", cfg.Timeouts.Bitwarden,
+				"timeout_vault", cfg.Timeouts.Vault,
+			)
+			return nil
+		},
+	}
+
+	root.PersistentFlags().BoolVar(&verbose, "verbose", false, "Enable debug logging (shorthand for --log-level=debug)")
+	root.PersistentFlags().BoolVar(&noCache, "no-cache", false, "Disable encrypted cache")
+	root.PersistentFlags().BoolVar(&isolated, "isolated", false, "Require local password in each terminal (disable cross-terminal sharing)")
+	root.PersistentFlags().StringVar(&passwordGracePeriod, "password-grace-period", "", "Grace period before re-prompting for local password (e.g. 1m, 5m, 1h). When set, each terminal authenticates independently; re-prompt is skipped within the period.")
+	root.PersistentFlags().StringVar(&cfgFile, "config", "", "Config file path (default: $XDG_CONFIG_HOME/renv/config.yaml)")
+	root.PersistentFlags().StringVar(&logLevel, "log-level", "", "Log level: debug, info, warn, error")
+
+	root.AddCommand(
+		resolveCmd(&noCache, &cfg),
+		execCmd(&noCache, &cfg),
+		initCmd(),
+		yamlCmd(&cfg),
+		clearCacheCmd(),
+		statusCmd(),
+		versionCmd(),
+		unloadCmd(),
+	)
+	return root
+}
+
+func newClients(noCache bool, cfg *config.Config) (*secrets.Cache, *secrets.BWClient, *secrets.VaultClient) {
+	cache := secrets.NewCache()
+	cache.MaxAge = cfg.CacheMaxAge()
+	if noCache {
+		cache.Disabled = true
+	}
+	bwClient := &secrets.BWClient{
+		Cache:               cache,
+		Timeout:             cfg.BitwardenTimeout(),
+		Isolated:            cfg.Cache.Isolated,
+		PasswordGracePeriod: cfg.CachePasswordGracePeriod(),
+	}
+	vaultClient := &secrets.VaultClient{Timeout: cfg.VaultTimeout()}
+	return cache, bwClient, vaultClient
+}
+
+func resolveCmd(noCache *bool, cfg *config.Config) *cobra.Command {
+	var file string
+	var shell string
+
+	cmd := &cobra.Command{
+		Use:   "resolve [file]",
+		Short: "Resolve .env file secret references and emit shell exports",
+		Long: `Resolve secret references in a .env file and print shell export statements.
+
+The output must be evaluated by your shell to set the variables:
+
+  eval "$(renv resolve .env)"
+
+With direnv, use a use_renv helper so direnv fully owns the load/unload lifecycle.
+Add to ~/.config/direnv/direnvrc:
+
+  use_renv() {
+    local file="${1:-.env}"
+    watch_file "$file"
+    eval "$(renv unload 2>/dev/null || true)"
+    eval "$(renv resolve "$file")"
+  }
+
+Then in .envrc:
+
+  use renv .env`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) > 0 {
+				file = args[0]
+			}
+			slog.Debug("running resolve", "file", file, "shell", shell)
+			if term.IsTerminal(int(os.Stdout.Fd())) {
+				fmt.Fprintln(os.Stderr, "renv: warning: stdout is a terminal — output will not be set as env vars.")
+				fmt.Fprintln(os.Stderr, "renv: use: eval \"$(renv resolve .env)\"")
+			}
+			_, bwClient, vaultClient := newClients(*noCache, cfg)
+
+			entries, err := env.ResolveDotEnv(file, bwClient, vaultClient)
+			if err != nil {
+				return fmt.Errorf("resolving %s: %w", file, err)
+			}
+
+			if err := env.EmitExports(os.Stdout, entries); err != nil {
+				return err
+			}
+
+			// Persist the exported key names so renv unload can emit the correct unset commands.
+			uid := fmt.Sprintf("%d", os.Getuid())
+			names := make([]string, len(entries))
+			for i, e := range entries {
+				names[i] = e.Key
+			}
+			_ = secrets.SaveVarNames(uid, names) // best-effort; don't fail resolve if state can't be saved
+
+			// Emit EXIT trap — skip inside direnv (and inside nix dev-shells spawned by
+			// direnv's use_flake) because the process exits immediately after .envrc is
+			// evaluated, which would fire the trap and clear the cache before the user
+			// ever gets to use the loaded variables.
+			inManagedEnv := os.Getenv("DIRENV_DIR") != "" ||
+				os.Getenv("DIRENV_FILE") != "" ||
+				os.Getenv("IN_NIX_SHELL") != ""
+			if !inManagedEnv {
+				switch shell {
+				case "fish":
+					fmt.Println("# Fish shell trap not supported via eval; use renv clear-cache manually")
+				default:
+					fmt.Println("trap 'renv clear-cache' EXIT")
+				}
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVarP(&file, "file", "f", ".env", "Path to .env file")
+	cmd.Flags().StringVar(&shell, "shell", "bash", "Shell type (bash|fish|zsh)")
+	return cmd
+}
+
+func execCmd(noCache *bool, cfg *config.Config) *cobra.Command {
+	var file string
+
+	cmd := &cobra.Command{
+		Use:   "exec -- command [args...]",
+		Short: "Run a command with resolved env vars injected (no eval needed)",
+		Long: `Resolve secret references from a .env file and execute a command with those
+variables set in its environment. No eval required.
+
+  renv exec -- myprogram --flag value
+  renv exec --env secrets.env -- myprogram
+
+The -- separator is required to distinguish renv flags from the command's args.
+The resolved variables override any same-named variables already in the environment.`,
+		Args: cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			slog.Debug("running exec", "file", file, "command", args[0])
+			_, bwClient, vaultClient := newClients(*noCache, cfg)
+
+			entries, err := env.ResolveDotEnv(file, bwClient, vaultClient)
+			if err != nil {
+				return fmt.Errorf("resolving %s: %w", file, err)
+			}
+
+			// Build env: start with current environment, then append resolved vars.
+			// Appending after means the resolved vars win on conflict.
+			environ := os.Environ()
+			for _, e := range entries {
+				environ = append(environ, e.Key+"="+e.Value)
+			}
+
+			bin, err := exec.LookPath(args[0])
+			if err != nil {
+				return fmt.Errorf("%s: command not found", args[0])
+			}
+
+			// Replace the current process with the target command.
+			return syscall.Exec(bin, args, environ)
+		},
+	}
+	cmd.Flags().StringVarP(&file, "env", "e", ".env", "Path to .env file")
+	return cmd
+}
+
+// bashInitScript is the shell function emitted by `renv init` for bash/zsh.
+// It wraps `resolve` and `unload` with eval so the user never has to type it.
+const bashInitScript = `renv() {
+  case "$1" in
+    resolve|unload)
+      eval "$(command renv "$@")"
+      ;;
+    *)
+      command renv "$@"
+      ;;
+  esac
+}
+`
+
+// fishInitScript is the shell function emitted by `renv init --shell fish`.
+const fishInitScript = `function renv
+  switch $argv[1]
+    case resolve unload
+      command renv $argv | source
+    case '*'
+      command renv $argv
+  end
+end
+`
+
+func initCmd() *cobra.Command {
+	var shell string
+
+	cmd := &cobra.Command{
+		Use:   "init",
+		Short: "Print shell function definition so renv resolve works without eval",
+		Long: `Print a shell function definition that wraps renv resolve and renv unload
+with eval, so you never have to type it yourself.
+
+Add to your shell config once:
+
+  # bash / zsh (~/.bashrc or ~/.zshrc)
+  eval "$(renv init)"
+
+  # fish (~/.config/fish/config.fish)
+  renv init --shell fish | source
+
+After that, renv resolve .env and renv unload work without explicit eval.
+All other renv subcommands (exec, yaml, status, …) pass through unchanged.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			switch shell {
+			case "fish":
+				fmt.Print(fishInitScript)
+			default:
+				fmt.Print(bashInitScript)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&shell, "shell", "bash", "Shell type: bash, zsh, fish")
+	return cmd
+}
+
+func yamlCmd(cfg *config.Config) *cobra.Command {
+	var file string
+	var key string
+
+	cmd := &cobra.Command{
+		Use:   "yaml [file]",
+		Short: "Resolve secret references in a YAML file",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) > 0 {
+				file = args[0]
+			}
+			if file == "" {
+				return fmt.Errorf("--file or positional argument required")
+			}
+			slog.Debug("running yaml resolve", "file", file, "key", key)
+			_, bwClient, vaultClient := newClients(false, cfg)
+
+			data, err := env.ResolveYAML(file, bwClient, vaultClient)
+			if err != nil {
+				return err
+			}
+
+			if key != "" {
+				val, err := env.YAMLLookup(data, key)
+				if err != nil {
+					return err
+				}
+				fmt.Println(val)
+				return nil
+			}
+
+			out, err := env.MarshalYAML(data)
+			if err != nil {
+				return err
+			}
+			fmt.Print(string(out))
+			return nil
+		},
+	}
+	cmd.Flags().StringVarP(&file, "file", "f", "", "Path to YAML file")
+	cmd.Flags().StringVar(&key, "key", "", "Dot-notation key to extract (e.g. database.password)")
+	return cmd
+}
+
+func clearCacheCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "clear-cache",
+		Short: "Remove all renv cache files and stored session",
+		Long: `Remove the encrypted secret cache and stored Bitwarden session.
+
+Variable name tracking (used by renv unload) is intentionally preserved so that
+renv unload continues to work after a cache clear — for example when the EXIT
+trap fires inside a direnv subprocess.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cache := secrets.NewCache()
+			uid := fmt.Sprintf("%d", os.Getuid())
+			slog.Debug("clearing cache and session", "uid", uid)
+			if err := cache.Clear(uid); err != nil {
+				return fmt.Errorf("clearing cache: %w", err)
+			}
+			if err := secrets.ClearStoredSession(uid); err != nil {
+				return fmt.Errorf("clearing session: %w", err)
+			}
+			if err := secrets.ClearStoredLocalPassword(uid); err != nil {
+				return fmt.Errorf("clearing local password: %w", err)
+			}
+			// Var-name tracking is not cleared here — that is renv unload's job.
+			// Keeping the names file intact ensures renv unload remains functional
+			// even when clear-cache is triggered by the shell EXIT trap.
+			fmt.Fprintln(os.Stderr, "renv: cache cleared")
+			return nil
+		},
+	}
+}
+
+func statusCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "status",
+		Short: "Show cache status",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cache := secrets.NewCache()
+			files, ages, err := secrets.CacheStatus(cache)
+			if err != nil {
+				return err
+			}
+			if len(files) == 0 {
+				fmt.Println("No cache files found.")
+				return nil
+			}
+			for i, f := range files {
+				fmt.Printf("%s (age: %s)\n", f, ages[i])
+			}
+			return nil
+		},
+	}
+}
+
+func versionCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "version",
+		Short: "Print version",
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Printf("renv %s\n", version.String())
+		},
+	}
+}
+
+func unloadCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "unload",
+		Short: "Emit unset commands for all tracked variables",
+		Long: `Emit shell unset commands for all variables exported by renv resolve.
+
+The output must be evaluated by your shell:
+
+  eval "$(renv unload)"`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			uid := fmt.Sprintf("%d", os.Getuid())
+			slog.Debug("unloading tracked variables", "uid", uid)
+			names, err := secrets.LoadVarNames(uid)
+			if err != nil {
+				return err
+			}
+			if len(names) == 0 {
+				fmt.Fprintln(os.Stderr, "renv: no tracked variables to unload")
+				return nil
+			}
+			entries := make([]env.EnvEntry, len(names))
+			for i, name := range names {
+				entries[i] = env.EnvEntry{Key: name}
+			}
+			if err := env.EmitUnload(os.Stdout, entries); err != nil {
+				return err
+			}
+			_ = secrets.ClearVarNames(uid)
+			return nil
+		},
+	}
+}
