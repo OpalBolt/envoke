@@ -58,9 +58,9 @@ func rootCmd() *cobra.Command {
 
 	root.AddCommand(
 		switchCmd(&cfg),
-		clearCmd(),
+		unloadCmd(),
 		statusCmd(),
-		cacheClearCmd(),
+		clearCacheCmd(),
 		versionCmd(),
 		shellInitCmd(),
 	)
@@ -124,15 +124,15 @@ func switchCmd(cfg *config.Config) *cobra.Command {
 			}
 
 			fmt.Printf("export KUBECONFIG=%s\n", path)
-			fmt.Printf("trap 'kctx clear' EXIT\n")
+			fmt.Printf("trap 'kctx unload' EXIT\n")
 			return nil
 		},
 	}
 }
 
-func clearCmd() *cobra.Command {
+func unloadCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "clear",
+		Use:   "unload",
 		Short: "Unset KUBECONFIG and remove tmpfile (only if created by kctx)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			kubeconfigPath := os.Getenv("KUBECONFIG")
@@ -173,9 +173,9 @@ func statusCmd() *cobra.Command {
 	}
 }
 
-func cacheClearCmd() *cobra.Command {
+func clearCacheCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "cache-clear",
+		Use:   "clear-cache",
 		Short: "Remove all kctx cache files",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cache := secrets.NewCache()
@@ -212,8 +212,8 @@ func kctxShellSnippet() string {
 
 kctx() {
   case "$1" in
-    clear)
-      eval "$(command kctx clear)"
+    unload)
+      eval "$(command kctx unload)"
       ;;
     status)
       command kctx status

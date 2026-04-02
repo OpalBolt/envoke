@@ -77,7 +77,7 @@ func rootCmd() *cobra.Command {
 	root.AddCommand(
 		resolveCmd(&noCache, &cfg),
 		execCmd(&noCache, &cfg),
-		initCmd(),
+		shellInitCmd(),
 		yamlCmd(&cfg),
 		clearCacheCmd(),
 		statusCmd(),
@@ -225,7 +225,7 @@ The resolved variables override any same-named variables already in the environm
 	return cmd
 }
 
-// bashInitScript is the shell function emitted by `renv init` for bash/zsh.
+// bashInitScript is the shell function emitted by `renv shell-init` for bash/zsh.
 // It wraps `resolve` and `unload` with eval so the user never has to type it.
 const bashInitScript = `renv() {
   case "$1" in
@@ -239,7 +239,7 @@ const bashInitScript = `renv() {
 }
 `
 
-// fishInitScript is the shell function emitted by `renv init --shell fish`.
+// fishInitScript is the shell function emitted by `renv shell-init --shell fish`.
 const fishInitScript = `function renv
   switch $argv[1]
     case resolve unload
@@ -250,11 +250,11 @@ const fishInitScript = `function renv
 end
 `
 
-func initCmd() *cobra.Command {
+func shellInitCmd() *cobra.Command {
 	var shell string
 
 	cmd := &cobra.Command{
-		Use:   "init",
+		Use:   "shell-init",
 		Short: "Print shell function definition so renv resolve works without eval",
 		Long: `Print a shell function definition that wraps renv resolve and renv unload
 with eval, so you never have to type it yourself.
@@ -262,10 +262,10 @@ with eval, so you never have to type it yourself.
 Add to your shell config once:
 
   # bash / zsh (~/.bashrc or ~/.zshrc)
-  eval "$(renv init)"
+  eval "$(renv shell-init)"
 
   # fish (~/.config/fish/config.fish)
-  renv init --shell fish | source
+  renv shell-init --shell fish | source
 
 After that, renv resolve .env and renv unload work without explicit eval.
 All other renv subcommands (exec, yaml, status, …) pass through unchanged.`,
