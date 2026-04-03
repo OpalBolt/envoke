@@ -219,6 +219,20 @@ kctx() {
   esac
 }
 
+# Unset KUBECONFIG when the watcher signals that sleep/lock occurred.
+_kctx_check_unload() {
+  local f="/dev/shm/kctx-${UID}-unload-requested"
+  [ -f "$f" ] || f="/tmp/kctx-${UID}-unload-requested"
+  [ -f "$f" ] || return 0
+  rm -f "$f" 2>/dev/null
+  eval "$(command kctx unload 2>/dev/null)" 2>/dev/null || true
+}
+if [ -n "${ZSH_VERSION:-}" ]; then
+  autoload -Uz add-zsh-hook 2>/dev/null && add-zsh-hook precmd _kctx_check_unload
+else
+  PROMPT_COMMAND="_kctx_check_unload${PROMPT_COMMAND:+; $PROMPT_COMMAND}"
+fi
+
 # Start the sleep/lock watcher once per shell session.
 if [ -z "${_KCTX_WATCH_PID:-}" ]; then
   command kctx watch &
@@ -249,6 +263,8 @@ On Windows, event hooks are not yet implemented.`,
 				cache := secrets.NewCache()
 				_ = cache.Clear(uid)
 				kubeconfig.ClearManaged()
+				// Signal open shells to unset KUBECONFIG on their next prompt.
+				_ = kubeconfig.RequestUnload(uid)
 				return nil
 			}); err != nil {
 				return fmt.Errorf("registering cleanup hook: %w", err)

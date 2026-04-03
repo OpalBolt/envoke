@@ -3,6 +3,8 @@
 package cleanup
 
 import (
+	"os"
+
 	"log/slog"
 
 	"github.com/godbus/dbus/v5"
@@ -36,16 +38,35 @@ func (h *linuxHook) Register(fns ...CleanupFunc) error {
 		slog.Warn("cleanup: cannot subscribe to PrepareForSleep", "error", err)
 	}
 
-	// Subscribe to Lock signal
-	if err := conn.AddMatchSignal(
+	// Resolve the current session object path so we subscribe to Lock signals
+	// for exactly this session. Without the path, logind does not route the
+	// per-session signal to us.
+	sessionPath := h.currentSessionPath(conn)
+	lockOpts := []dbus.MatchOption{
 		dbus.WithMatchInterface("org.freedesktop.login1.Session"),
 		dbus.WithMatchMember("Lock"),
-	); err != nil {
+	}
+	if sessionPath != "" {
+		lockOpts = append(lockOpts, dbus.WithMatchObjectPath(sessionPath))
+	}
+	if err := conn.AddMatchSignal(lockOpts...); err != nil {
 		slog.Warn("cleanup: cannot subscribe to Lock", "error", err)
 	}
 
 	go h.listen()
 	return nil
+}
+
+// currentSessionPath returns the D-Bus object path of the current login session.
+func (h *linuxHook) currentSessionPath(conn *dbus.Conn) dbus.ObjectPath {
+	obj := conn.Object("org.freedesktop.login1", "/org/freedesktop/login1")
+	var path dbus.ObjectPath
+	if err := obj.Call("org.freedesktop.login1.Manager.GetSessionByPID", 0, uint32(os.Getpid())).Store(&path); err != nil {
+		slog.Debug("cleanup: cannot resolve session path, Lock match will be broad", "error", err)
+		return ""
+	}
+	slog.Debug("cleanup: resolved session path for Lock subscription", "path", path)
+	return path
 }
 
 func (h *linuxHook) listen() {

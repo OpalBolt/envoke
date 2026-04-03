@@ -61,3 +61,22 @@ func ClearVarNames(uid string) error {
 	}
 	return nil
 }
+
+// UnloadRequestFile returns the path of the sentinel file used to signal
+// shells to run renv unload on their next prompt draw.
+func UnloadRequestFile(uid string) string {
+	dir := "/tmp"
+	if fi, err := os.Stat("/dev/shm"); err == nil && fi.IsDir() {
+		dir = "/dev/shm"
+	}
+	return filepath.Join(dir, "renv-"+uid+"-unload-requested")
+}
+
+// RequestUnload creates the sentinel file. Shell PROMPT_COMMAND/precmd hooks
+// installed by renv shell-init check for this file and call renv unload when
+// they find it, clearing secret variables from the shell on the next prompt.
+func RequestUnload(uid string) error {
+	path := UnloadRequestFile(uid)
+	slog.Debug("requesting shell unload via sentinel", "path", path)
+	return os.WriteFile(path, []byte{}, 0600)
+}

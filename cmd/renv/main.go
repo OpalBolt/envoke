@@ -245,6 +245,20 @@ const bashInitScript = `renv() {
   esac
 }
 
+# Unload secret variables when the watcher signals that sleep/lock occurred.
+_renv_check_unload() {
+  local f="/dev/shm/renv-${UID}-unload-requested"
+  [ -f "$f" ] || f="/tmp/renv-${UID}-unload-requested"
+  [ -f "$f" ] || return 0
+  rm -f "$f" 2>/dev/null
+  eval "$(command renv unload 2>/dev/null)" 2>/dev/null || true
+}
+if [ -n "${ZSH_VERSION:-}" ]; then
+  autoload -Uz add-zsh-hook 2>/dev/null && add-zsh-hook precmd _renv_check_unload
+else
+  PROMPT_COMMAND="_renv_check_unload${PROMPT_COMMAND:+; $PROMPT_COMMAND}"
+fi
+
 # Start the sleep/lock watcher once per shell session.
 if [ -z "${_RENV_WATCH_PID:-}" ]; then
   command renv watch &
@@ -261,6 +275,15 @@ const fishInitScript = `function renv
     case '*'
       command renv $argv
   end
+end
+
+# Unload secret variables when the watcher signals that sleep/lock occurred.
+function _renv_check_unload --on-event fish_prompt
+  set -l f /dev/shm/renv-(id -u)-unload-requested
+  test -f $f; or set f /tmp/renv-(id -u)-unload-requested
+  test -f $f; or return
+  rm -f $f 2>/dev/null
+  command renv unload | source 2>/dev/null; or true
 end
 
 # Start the sleep/lock watcher once per shell session.
@@ -458,6 +481,8 @@ Start manually:
 				_ = cache.Clear(uid)
 				_ = secrets.ClearStoredSession(uid)
 				_ = secrets.ClearStoredLocalPassword(uid)
+				// Signal open shells to unload secret variables on their next prompt.
+				_ = secrets.RequestUnload(uid)
 				return nil
 			}); err != nil {
 				return fmt.Errorf("registering cleanup hook: %w", err)

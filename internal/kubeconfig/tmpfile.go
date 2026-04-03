@@ -48,3 +48,22 @@ func ClearManaged() {
 		}
 	}
 }
+
+// UnloadRequestFile returns the path of the sentinel file used to signal
+// shells to run kctx unload on their next prompt draw.
+func UnloadRequestFile(uid string) string {
+	dir := "/tmp"
+	if fi, err := os.Stat("/dev/shm"); err == nil && fi.IsDir() {
+		dir = "/dev/shm"
+	}
+	return filepath.Join(dir, "kctx-"+uid+"-unload-requested")
+}
+
+// RequestUnload creates the sentinel file. Shell PROMPT_COMMAND/precmd hooks
+// installed by kctx shell-init check for this file and call kctx unload when
+// they find it, unsetting KUBECONFIG from the shell on the next prompt.
+func RequestUnload(uid string) error {
+	path := UnloadRequestFile(uid)
+	slog.Debug("requesting kctx shell unload via sentinel", "path", path)
+	return os.WriteFile(path, []byte{}, 0600)
+}
