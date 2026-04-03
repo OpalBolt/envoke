@@ -27,8 +27,9 @@ func rootCmd() *cobra.Command {
 	var cfg config.Config
 
 	root := &cobra.Command{
-		Use:   "kctx",
-		Short: "Ephemeral kubeconfig switcher via Vault or Bitwarden",
+		Use:     "kctx",
+		Short:   "Ephemeral kubeconfig switcher via Vault or Bitwarden",
+		Version: version.String(),
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			var err error
 			cfg, err = config.Load(cfgFile)
@@ -55,13 +56,13 @@ func rootCmd() *cobra.Command {
 	root.PersistentFlags().BoolVar(&verbose, "verbose", false, "Enable debug logging (shorthand for --log-level=debug)")
 	root.PersistentFlags().StringVar(&cfgFile, "config", "", "Config file path (default: $XDG_CONFIG_HOME/renv/config.yaml)")
 	root.PersistentFlags().StringVar(&logLevel, "log-level", "", "Log level: debug, info, warn, error")
+	root.SetVersionTemplate("{{.Name}} {{.Version}}\n")
 
 	root.AddCommand(
 		switchCmd(&cfg),
 		unloadCmd(),
 		statusCmd(),
 		clearCacheCmd(),
-		versionCmd(),
 		shellInitCmd(),
 	)
 	return root
@@ -181,16 +182,6 @@ func clearCacheCmd() *cobra.Command {
 			cache := secrets.NewCache()
 			uid := fmt.Sprintf("%d", os.Getuid())
 			return cache.Clear(uid)
-		},
-	}
-}
-
-func versionCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "version",
-		Short: "Print version",
-		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Printf("kctx %s\n", version.String())
 		},
 	}
 }
