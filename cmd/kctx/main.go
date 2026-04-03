@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/eficode/secure-handling-of-secrets/internal/cleanup"
@@ -13,6 +15,7 @@ import (
 	"github.com/eficode/secure-handling-of-secrets/internal/kubeconfig"
 	"github.com/eficode/secure-handling-of-secrets/internal/logger"
 	"github.com/eficode/secure-handling-of-secrets/internal/secrets"
+	"github.com/eficode/secure-handling-of-secrets/internal/ui"
 	"github.com/eficode/secure-handling-of-secrets/internal/version"
 	"github.com/spf13/cobra"
 )
@@ -130,6 +133,10 @@ func switchCmd(cfg *config.Config) *cobra.Command {
 
 			fmt.Printf("export KUBECONFIG=%s\n", path)
 			fmt.Printf("trap 'kctx unload' EXIT\n")
+
+			// Feedback to stderr — stdout must stay clean for eval.
+			ui.Success(os.Stderr, fmt.Sprintf("Switched to kubeconfig: %s", ui.Bold(os.Stderr, env)))
+			ui.Item(os.Stderr, "KUBECONFIG", path)
 			return nil
 		},
 	}
@@ -146,6 +153,14 @@ func unloadCmd() *cobra.Command {
 				_ = os.Remove(kubeconfigPath)
 			}
 			fmt.Println("unset KUBECONFIG")
+
+			// Feedback to stderr — stdout must stay clean for eval.
+			if kubeconfigPath == "" {
+				ui.Warn(os.Stderr, "KUBECONFIG was not set")
+			} else {
+				ui.Success(os.Stderr, "Kubeconfig unloaded")
+				ui.Item(os.Stderr, "Removed", kubeconfigPath)
+			}
 			return nil
 		},
 	}
@@ -167,15 +182,41 @@ func statusCmd() *cobra.Command {
 		Use:   "status",
 		Short: "Show current KUBECONFIG and kubectl context",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			w := os.Stdout
+			ui.Header(w, "Kubeconfig")
+
 			kc := os.Getenv("KUBECONFIG")
 			if kc == "" {
-				fmt.Println("KUBECONFIG: (not set)")
+				ui.Item(w, "KUBECONFIG", ui.Gray(w, "not set"))
+				ui.Item(w, "Managed by kctx", ui.Gray(w, "no"))
 			} else {
-				fmt.Printf("KUBECONFIG: %s\n", kc)
+				ui.Item(w, "KUBECONFIG", ui.Green(w, kc))
+				managed := isManagedKubeconfig(kc)
+				if managed {
+					ui.Item(w, "Managed by kctx", ui.Green(w, "yes"))
+				} else {
+					ui.Item(w, "Managed by kctx", ui.Yellow(w, "no (external)"))
+				}
+
+				// Try to show current kubectl context.
+				if ctx := currentKubectlContext(); ctx != "" {
+					ui.Item(w, "Current context", ui.Bold(w, ctx))
+				}
 			}
 			return nil
 		},
 	}
+}
+
+// currentKubectlContext runs kubectl config current-context and returns the
+// result, or "" if kubectl is not available or the call fails.
+func currentKubectlContext() string {
+	out, err := exec.Command("kubectl", "config", "current-context").Output()
+	if err != nil {
+		return ""
+	}
+	ctx := strings.TrimSpace(string(out))
+	return ctx
 }
 
 func clearCacheCmd() *cobra.Command {
@@ -185,7 +226,11 @@ func clearCacheCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cache := secrets.NewCache()
 			uid := fmt.Sprintf("%d", os.Getuid())
-			return cache.Clear(uid)
+			if err := cache.Clear(uid); err != nil {
+				return err
+			}
+			ui.Success(os.Stderr, "Cache cleared")
+			return nil
 		},
 	}
 }

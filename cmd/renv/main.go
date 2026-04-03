@@ -8,12 +8,14 @@ import (
 	"os/exec"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/eficode/secure-handling-of-secrets/internal/cleanup"
 	"github.com/eficode/secure-handling-of-secrets/internal/config"
 	"github.com/eficode/secure-handling-of-secrets/internal/env"
 	"github.com/eficode/secure-handling-of-secrets/internal/logger"
 	"github.com/eficode/secure-handling-of-secrets/internal/secrets"
+	"github.com/eficode/secure-handling-of-secrets/internal/ui"
 	"github.com/eficode/secure-handling-of-secrets/internal/version"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -141,8 +143,8 @@ Then in .envrc:
 			}
 			slog.Debug("running resolve", "file", file, "shell", shell)
 			if term.IsTerminal(int(os.Stdout.Fd())) {
-				fmt.Fprintln(os.Stderr, "renv: warning: stdout is a terminal — output will not be set as env vars.")
-				fmt.Fprintln(os.Stderr, "renv: use: eval \"$(renv resolve .env)\"")
+				ui.Warn(os.Stderr, "stdout is a terminal — output will not be set as env vars.")
+				fmt.Fprintln(os.Stderr, "  use: eval \"$(renv resolve .env)\"")
 			}
 			_, bwClient, vaultClient := newClients(*noCache, cfg)
 
@@ -162,6 +164,12 @@ Then in .envrc:
 				names[i] = e.Key
 			}
 			_ = secrets.SaveVarNames(uid, names) // best-effort; don't fail resolve if state can't be saved
+
+			// Feedback to stderr — stdout must stay clean for eval.
+			ui.Success(os.Stderr, fmt.Sprintf("Loaded %s from %s",
+				ui.Bold(os.Stderr, pluralVars(len(entries))),
+				ui.Bold(os.Stderr, file)))
+			ui.List(os.Stderr, names)
 
 			// Emit EXIT trap — skip inside direnv (and inside nix dev-shells spawned by
 			// direnv's use_flake) because the process exits immediately after .envrc is
@@ -438,7 +446,7 @@ trap fires inside a direnv subprocess.`,
 			// Var-name tracking is not cleared here — that is renv unload's job.
 			// Keeping the names file intact ensures renv unload remains functional
 			// even when clear-cache is triggered by the shell EXIT trap.
-			fmt.Fprintln(os.Stderr, "renv: cache cleared")
+			ui.Success(os.Stderr, "Cache cleared")
 			return nil
 		},
 	}
@@ -447,20 +455,53 @@ trap fires inside a direnv subprocess.`,
 func statusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
-		Short: "Show cache status",
+		Short: "Show cache and loaded variable status",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			w := os.Stdout
+			uid := fmt.Sprintf("%d", os.Getuid())
+
+			// ── Tracked variables ────────────────────────────────────
+			ui.Header(w, "Tracked variables")
+			names, err := secrets.LoadVarNames(uid)
+			if err != nil {
+				return err
+			}
+			if len(names) == 0 {
+				ui.Item(w, "Status", ui.Gray(w, "none loaded"))
+			} else {
+				ui.Item(w, "Status", ui.Green(w, fmt.Sprintf("%d loaded", len(names))))
+				ui.List(w, names)
+			}
+			fmt.Fprintln(w)
+
+			// ── Cache files ──────────────────────────────────────────
+			ui.Header(w, "Cache")
 			cache := secrets.NewCache()
+			ui.Item(w, "Location", cache.Dir)
 			files, ages, err := secrets.CacheStatus(cache)
 			if err != nil {
 				return err
 			}
 			if len(files) == 0 {
-				fmt.Println("No cache files found.")
-				return nil
+				ui.Item(w, "Files", ui.Gray(w, "none"))
+			} else {
+				for i, f := range files {
+					age, err := time.ParseDuration(ages[i])
+					ageStr := colorAge(w, ages[i], age, err)
+					ui.Item(w, f, ageStr)
+				}
 			}
-			for i, f := range files {
-				fmt.Printf("%s (age: %s)\n", f, ages[i])
+
+			// Local password stored?
+			lp, _ := secrets.LoadStoredLocalPassword(uid)
+			lpStatus := ui.Gray(w, "not stored")
+			if lp != "" {
+				lpStatus = ui.Green(w, "stored")
 			}
+			fmt.Fprintln(w)
+			ui.Header(w, "Session")
+			ui.Item(w, "Local password", lpStatus)
+
 			return nil
 		},
 	}
@@ -483,7 +524,7 @@ The output must be evaluated by your shell:
 				return err
 			}
 			if len(names) == 0 {
-				fmt.Fprintln(os.Stderr, "renv: no tracked variables to unload")
+				ui.Warn(os.Stderr, "No tracked variables to unload")
 				return nil
 			}
 			entries := make([]env.EnvEntry, len(names))
@@ -494,6 +535,10 @@ The output must be evaluated by your shell:
 				return err
 			}
 			_ = secrets.ClearVarNames(uid)
+
+			// Feedback to stderr — stdout must stay clean for eval.
+			ui.Success(os.Stderr, fmt.Sprintf("Unloaded %s", ui.Bold(os.Stderr, pluralVars(len(names)))))
+			ui.List(os.Stderr, names)
 			return nil
 		},
 	}
@@ -575,5 +620,28 @@ Start manually:
 			<-sigCh
 			return nil
 		},
+	}
+}
+
+// pluralVars returns "1 variable" or "N variables".
+func pluralVars(n int) string {
+	if n == 1 {
+		return "1 variable"
+	}
+	return fmt.Sprintf("%d variables", n)
+}
+
+// colorAge colors an age string green (fresh), yellow (mid), or red (near expiry).
+func colorAge(w io.Writer, raw string, d time.Duration, parseErr error) string {
+	if parseErr != nil {
+		return raw
+	}
+	switch {
+	case d < 30*time.Minute:
+		return ui.Green(w, raw)
+	case d < 4*time.Hour:
+		return ui.Yellow(w, raw)
+	default:
+		return ui.Red(w, raw)
 	}
 }
