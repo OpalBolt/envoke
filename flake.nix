@@ -22,6 +22,14 @@
         # `git tag v0.2.0 && echo -n 0.2.0 > VERSION` is the release workflow.
         releaseVersion = builtins.replaceStrings [ "\n" " " ] [ "" "" ] (builtins.readFile ./VERSION);
         versionPkg = "github.com/eficode/secure-handling-of-secrets/internal/version";
+
+        # self.shortRev is the 7-char git commit hash; falls back to "dirty" when the
+        # working tree has uncommitted changes (Nix won't set rev on a dirty tree).
+        commitHash = self.shortRev or "dirty";
+        # Dev builds embed the commit so `renv version` shows e.g. "0.1.0-dev+aeda2e9".
+        # Goreleaser handles tagged release builds separately (see .goreleaser.yaml).
+        nixVersion = "${releaseVersion}-dev+${commitHash}";
+
         common = {
           src = ./.;
           vendorHash = "sha256-toMUBMJ/Ky7HglGwhhLVHN+FzUWihwNfKS/XnGIe9aE=";
@@ -33,8 +41,8 @@
           subPackages = [ "cmd/renv" ];
           ldflags = [
             "-s" "-w"
-            "-X ${versionPkg}.Version=${releaseVersion}"
-            "-X ${versionPkg}.Commit=nix-build"
+            "-X ${versionPkg}.Version=${nixVersion}"
+            "-X ${versionPkg}.Commit=${commitHash}"
             "-X ${versionPkg}.BuildDate=unknown"
           ];
         });
@@ -45,8 +53,8 @@
           subPackages = [ "cmd/kctx" ];
           ldflags = [
             "-s" "-w"
-            "-X ${versionPkg}.Version=${releaseVersion}"
-            "-X ${versionPkg}.Commit=nix-build"
+            "-X ${versionPkg}.Version=${nixVersion}"
+            "-X ${versionPkg}.Commit=${commitHash}"
             "-X ${versionPkg}.BuildDate=unknown"
           ];
         });
@@ -58,8 +66,8 @@
           subPackages = [ "cmd/renv" "cmd/kctx" ];
           ldflags = [
             "-s" "-w"
-            "-X ${versionPkg}.Version=${releaseVersion}"
-            "-X ${versionPkg}.Commit=nix-build"
+            "-X ${versionPkg}.Version=${nixVersion}"
+            "-X ${versionPkg}.Commit=${commitHash}"
             "-X ${versionPkg}.BuildDate=unknown"
           ];
         });
