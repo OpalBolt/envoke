@@ -494,6 +494,7 @@ On Windows, event hooks are not yet implemented.
 Start manually:
   renv watch &`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			detachFromTerminal()
 			uid := fmt.Sprintf("%d", os.Getuid())
 			slog.Debug("starting renv watcher", "uid", uid)
 

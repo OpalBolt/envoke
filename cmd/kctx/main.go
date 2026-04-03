@@ -261,6 +261,7 @@ On Linux, sleep and screen-lock events are detected via D-Bus (systemd-logind).
 On macOS, sleep is detected via timer drift; screen lock requires a launchd agent.
 On Windows, event hooks are not yet implemented.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			detachFromTerminal()
 			uid := fmt.Sprintf("%d", os.Getuid())
 			slog.Debug("starting kctx watcher", "uid", uid)
 
