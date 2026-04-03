@@ -465,6 +465,22 @@ func watchCmd() *cobra.Command {
 sleeps or the screen is locked. Normally started automatically by shell-init.
 
 On Linux, sleep and screen-lock events are detected via D-Bus (systemd-logind).
+The watcher listens for org.freedesktop.login1.Session.Lock and
+org.freedesktop.login1.Manager.PrepareForSleep signals.
+
+Wayland screen lockers (swaylock, waylock) must be triggered via
+'loginctl lock-session' for the Lock signal to reach renv. When the locker
+is invoked directly (e.g. 'exec swaylock') logind is not informed and the
+cache is NOT cleared. The recommended swayidle configuration is:
+
+  exec swayidle -w \
+      timeout 300 'loginctl lock-session' \
+      lock 'swaylock -f' \
+      before-sleep 'loginctl lock-session'
+
+  # sway keybind (e.g. in ~/.config/sway/config)
+  bindsym $mod+l exec loginctl lock-session
+
 On macOS, sleep is detected via timer drift; screen lock requires a launchd agent.
 On Windows, event hooks are not yet implemented.
 

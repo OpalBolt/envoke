@@ -227,6 +227,46 @@ timeouts:
   vault: 30s       # per vault subprocess call (env: RENV_TIMEOUT_VAULT)
 ```
 
+## Screen locker integration (Linux / Wayland)
+
+`renv watch` clears the secret cache whenever the system sleeps or the screen is
+locked. On Linux it listens for two D-Bus signals from systemd-logind:
+
+| Signal | Trigger |
+|--------|---------|
+| `org.freedesktop.login1.Manager.PrepareForSleep` | System suspend / hibernate |
+| `org.freedesktop.login1.Session.Lock` | Session lock (`loginctl lock-session`) |
+
+### swaylock / waylock
+
+Wayland screen lockers such as **swaylock** and **waylock** do **not** signal
+logind when invoked directly. The `Session.Lock` signal only fires when locking
+goes through `loginctl lock-session`. The recommended setup is to have
+**swayidle** call `loginctl lock-session` and then start the locker via swayidle's
+`lock` event:
+
+```bash
+# ~/.config/sway/config (or your Wayland compositor config)
+exec swayidle -w \
+    timeout 300 'loginctl lock-session' \
+    lock 'swaylock -f' \
+    before-sleep 'loginctl lock-session'
+
+# Lock keybind — must go through loginctl, not exec swaylock directly
+bindsym $mod+l exec loginctl lock-session
+```
+
+With this setup:
+1. `loginctl lock-session` causes logind to emit `Session.Lock`
+2. renv's watcher receives the signal and clears the cache immediately
+3. swayidle's `lock` event fires and starts swaylock/waylock
+
+For **waylock**, use the same pattern — replace `swaylock -f` with `waylock`.
+
+> **Note:** If you use `bindsym $mod+l exec swaylock` (direct invocation),
+> logind is not informed of the lock and the renv cache will **not** be cleared
+> until the next `before-sleep` event or until the shell exits.
+
 ## Environment variables
 
 | Variable | Description |
