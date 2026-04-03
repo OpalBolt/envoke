@@ -47,7 +47,7 @@ kctx() {
 
 `switch` and `unload` output shell statements (`export KUBECONFIG=…` / `unset KUBECONFIG`)
 that are `eval`'d so they take effect in the current shell. All other subcommands
-(`status`, `version`, `clear-cache`, …) run the binary directly.
+(`status`, `clear-cache`, …) run the binary directly.
 
 ## Usage
 
@@ -58,7 +58,7 @@ kctx switch prod bw://kube/prod-config   # fetch from Bitwarden (see below)
 kctx unload                              # unset KUBECONFIG and remove tmpfile
 kctx status                              # show current KUBECONFIG path
 kctx clear-cache                         # remove all kctx cache files
-kctx version                             # print version
+kctx --version                           # print version
 ```
 
 `kctx switch` automatically registers `trap 'kctx unload' EXIT` so the kubeconfig is

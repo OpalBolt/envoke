@@ -32,8 +32,9 @@ func rootCmd() *cobra.Command {
 	var cfg config.Config
 
 	root := &cobra.Command{
-		Use:   "renv",
-		Short: "Resolve secret references in .env and YAML files",
+		Use:     "renv",
+		Short:   "Resolve secret references in .env and YAML files",
+		Version: version.String(),
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			var err error
 			cfg, err = config.Load(cfgFile)
@@ -73,6 +74,7 @@ func rootCmd() *cobra.Command {
 	root.PersistentFlags().StringVar(&passwordGracePeriod, "password-grace-period", "", "Grace period before re-prompting for local password (e.g. 1m, 5m, 1h). When set, each terminal authenticates independently; re-prompt is skipped within the period.")
 	root.PersistentFlags().StringVar(&cfgFile, "config", "", "Config file path (default: $XDG_CONFIG_HOME/renv/config.yaml)")
 	root.PersistentFlags().StringVar(&logLevel, "log-level", "", "Log level: debug, info, warn, error")
+	root.SetVersionTemplate("{{.Name}} {{.Version}}\n")
 
 	root.AddCommand(
 		resolveCmd(&noCache, &cfg),
@@ -81,7 +83,6 @@ func rootCmd() *cobra.Command {
 		yamlCmd(&cfg),
 		clearCacheCmd(),
 		statusCmd(),
-		versionCmd(),
 		unloadCmd(),
 	)
 	return root
@@ -377,16 +378,6 @@ func statusCmd() *cobra.Command {
 				fmt.Printf("%s (age: %s)\n", f, ages[i])
 			}
 			return nil
-		},
-	}
-}
-
-func versionCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "version",
-		Short: "Print version",
-		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Printf("renv %s\n", version.String())
 		},
 	}
 }

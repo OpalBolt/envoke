@@ -137,7 +137,7 @@ API_KEY=vault://secret/myapp#api_key
 | `renv yaml config.yaml --key database.password` | Extract single value |
 | `renv clear-cache` | Remove cache files and stored BW session (preserves var tracking) |
 | `renv status` | Show cache status |
-| `renv version` | Print version |
+| `renv --version` | Print version |
 
 ## URI formats
 
