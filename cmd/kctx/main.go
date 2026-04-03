@@ -225,6 +225,7 @@ _kctx_unload_token() {
   local f="/dev/shm/kctx-${UID}-unload-requested"
   [ -f "$f" ] || f="/tmp/kctx-${UID}-unload-requested"
   [ -f "$f" ] || return 1
+  # -c is GNU/Linux (coreutils); -f is BSD/macOS (stat(1)).
   stat -c '%Y:%i:%s' "$f" 2>/dev/null || stat -f '%m:%i:%z' "$f" 2>/dev/null
 }
 

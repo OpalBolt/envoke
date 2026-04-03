@@ -253,6 +253,7 @@ _renv_unload_token() {
   local f="/dev/shm/renv-${UID}-unload-requested"
   [ -f "$f" ] || f="/tmp/renv-${UID}-unload-requested"
   [ -f "$f" ] || return 1
+  # -c is GNU/Linux (coreutils); -f is BSD/macOS (stat(1)).
   stat -c '%Y:%i:%s' "$f" 2>/dev/null || stat -f '%m:%i:%z' "$f" 2>/dev/null
 }
 
@@ -300,6 +301,7 @@ function _renv_unload_token
   set -l f /dev/shm/renv-(id -u)-unload-requested
   test -f $f; or set f /tmp/renv-(id -u)-unload-requested
   test -f $f; or return 1
+  # -c is GNU/Linux (coreutils); -f is BSD/macOS (stat(1)).
   stat -c '%Y:%i:%s' $f 2>/dev/null; or stat -f '%m:%i:%z' $f 2>/dev/null
 end
 

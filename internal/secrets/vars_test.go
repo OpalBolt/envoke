@@ -3,6 +3,7 @@ package secrets
 import (
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -99,12 +100,13 @@ func TestUnloadRequestFile(t *testing.T) {
 		t.Fatal("UnloadRequestFile returned empty string")
 	}
 	// Should reside in /dev/shm or /tmp.
-	if path[:8] != "/dev/shm" && path[:4] != "/tmp" {
+	if len(path) < 8 || (path[:8] != "/dev/shm" && path[:4] != "/tmp") {
 		t.Errorf("unexpected base dir in path %q", path)
 	}
 	// Should contain the uid.
-	if len(path) < 4 || (path[:8] != "/dev/shm" && path[:4] != "/tmp") {
-		t.Errorf("path %q does not start with expected dir", path)
+	const uid = "9999"
+	if !strings.Contains(path, uid) {
+		t.Errorf("path %q does not contain uid %q", path, uid)
 	}
 }
 

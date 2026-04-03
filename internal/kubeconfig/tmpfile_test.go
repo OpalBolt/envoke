@@ -11,7 +11,7 @@ func TestUnloadRequestFile(t *testing.T) {
 	if path == "" {
 		t.Fatal("UnloadRequestFile returned empty string")
 	}
-	if path[:8] != "/dev/shm" && path[:4] != "/tmp" {
+	if len(path) < 8 || (path[:8] != "/dev/shm" && path[:4] != "/tmp") {
 		t.Errorf("unexpected base dir in path %q", path)
 	}
 }
@@ -63,10 +63,7 @@ func TestRequestUnload_RejectsSymlink(t *testing.T) {
 
 func TestClearManaged(t *testing.T) {
 	// Create a few fake kctx-*.tmp files in /tmp.
-	dir := t.TempDir()
-
-	// We'll patch /tmp via the glob pattern by creating files with the right naming.
-	// Since ClearManaged searches /dev/shm and /tmp specifically, we create real files.
+	// ClearManaged searches /dev/shm and /tmp specifically.
 	paths := []string{
 		filepath.Join("/tmp", "kctx-test-clear-managed-1.tmp"),
 		filepath.Join("/tmp", "kctx-test-clear-managed-2.tmp"),
@@ -82,7 +79,6 @@ func TestClearManaged(t *testing.T) {
 			os.Remove(p)
 		}
 	})
-	_ = dir // used for t.TempDir() but actual files are in /tmp
 
 	// Verify the files exist before clearing.
 	for _, p := range paths {
