@@ -53,7 +53,7 @@ go install github.com/eficode/secure-handling-of-secrets/cmd/kctx@latest
 ### Shell setup (recommended — add once to `~/.bashrc` / `~/.zshrc`)
 
 ```bash
-eval "$(renv init)"
+eval "$(renv shell-init)"
 ```
 
 This installs a shell function so that `renv resolve` and `renv unload` modify the current shell without needing `eval` every time.
@@ -117,7 +117,7 @@ See [docs/renv.md](docs/renv.md) for the full reference including configuration,
 ### Shell setup (recommended — add once to `~/.bashrc` / `~/.zshrc`)
 
 ```bash
-source <(kctx shell-init)
+eval "$(kctx shell-init)"
 ```
 
 ### Usage

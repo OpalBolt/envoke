@@ -4,8 +4,11 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 
+	"github.com/eficode/secure-handling-of-secrets/internal/cleanup"
 	"github.com/eficode/secure-handling-of-secrets/internal/config"
 	"github.com/eficode/secure-handling-of-secrets/internal/kubeconfig"
 	"github.com/eficode/secure-handling-of-secrets/internal/logger"
@@ -64,6 +67,7 @@ func rootCmd() *cobra.Command {
 		statusCmd(),
 		clearCacheCmd(),
 		shellInitCmd(),
+		watchCmd(),
 	)
 	return root
 }
@@ -198,8 +202,8 @@ func shellInitCmd() *cobra.Command {
 
 func kctxShellSnippet() string {
 	return `
-# kctx shell integration — source this into your shell
-# Usage: source <(kctx shell-init)
+# kctx shell integration — add to ~/.bashrc or ~/.zshrc:
+# eval "$(kctx shell-init)"
 
 kctx() {
   case "$1" in
@@ -214,5 +218,100 @@ kctx() {
       ;;
   esac
 }
+
+# Derive an idempotent token for the current unload request so each shell can
+# observe the event once without consuming the shared sentinel.
+_kctx_unload_token() {
+  local f="/dev/shm/kctx-${UID}-unload-requested"
+  [ -f "$f" ] || f="/tmp/kctx-${UID}-unload-requested"
+  [ -f "$f" ] || return 1
+  # -c is GNU/Linux (coreutils); -f is BSD/macOS (stat(1)).
+  stat -c '%Y:%i:%s' "$f" 2>/dev/null || stat -f '%m:%i:%z' "$f" 2>/dev/null
+}
+
+# Unset KUBECONFIG when the watcher signals that sleep/lock occurred.
+# Each shell tracks the last token it acted on so only the first prompt after
+# the event triggers unload — subsequent prompts are no-ops until the next event.
+_kctx_check_unload() {
+  local token
+  token="$(_kctx_unload_token)" || return 0
+  [ "${_KCTX_LAST_UNLOAD_TOKEN:-}" = "$token" ] && return 0
+  _KCTX_LAST_UNLOAD_TOKEN="$token"
+  eval "$(command kctx unload 2>/dev/null)" 2>/dev/null || true
+}
+# Record the current sentinel state at init time so pre-existing sentinels from
+# a previous session do not trigger an immediate unload in new shells.
+_KCTX_LAST_UNLOAD_TOKEN="$(_kctx_unload_token 2>/dev/null || true)"
+if [ -n "${ZSH_VERSION:-}" ]; then
+  autoload -Uz add-zsh-hook 2>/dev/null && add-zsh-hook precmd _kctx_check_unload
+else
+  PROMPT_COMMAND="_kctx_check_unload${PROMPT_COMMAND:+; $PROMPT_COMMAND}"
+fi
+
+# Start the sleep/lock watcher once per shell session.
+if [ -z "${_KCTX_WATCH_PID:-}" ]; then
+  command kctx watch &
+  _KCTX_WATCH_PID=$!
+  trap 'kill "${_KCTX_WATCH_PID:-}" 2>/dev/null; command kctx clear-cache 2>/dev/null' EXIT
+fi
 `
+}
+
+func watchCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "watch",
+		Short: "Watch for sleep/lock events and manage kubeconfigs (run in background by shell-init)",
+		Long: `Run in the background to manage kubeconfig tmpfiles and the secret cache
+when the system sleeps or the screen is locked. Normally started automatically
+by shell-init.
+
+On lock: managed kubeconfig tmpfiles are removed and open shells are signalled
+to unset KUBECONFIG. The encrypted cache is kept so configs can be quickly
+re-resolved after unlock without re-entering passwords.
+
+On sleep: the encrypted cache is also cleared, requiring full re-authentication
+after wake.
+
+On Linux, sleep and screen-lock events are detected via D-Bus (systemd-logind).
+On macOS, sleep is detected via timer drift; screen lock requires a launchd agent.
+On Windows, event hooks are not yet implemented.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			detachFromTerminal()
+			uid := fmt.Sprintf("%d", os.Getuid())
+			slog.Debug("starting kctx watcher", "uid", uid)
+
+			hook := cleanup.New()
+
+			// On lock: remove managed kubeconfig tmpfiles and unload KUBECONFIG.
+			// The cache is kept so configs can be re-resolved after unlock
+			// without re-entering passwords.
+			if err := hook.RegisterLock(func() error {
+				slog.Debug("cleanup: clearing managed kubeconfigs on lock")
+				kubeconfig.ClearManaged()
+				_ = kubeconfig.RequestUnload(uid)
+				return nil
+			}); err != nil {
+				return fmt.Errorf("registering lock hook: %w", err)
+			}
+
+			// On sleep: clear the encrypted cache as well.
+			if err := hook.RegisterSleep(func() error {
+				slog.Debug("cleanup: clearing kctx cache and managed kubeconfigs on sleep")
+				cache := secrets.NewCache()
+				_ = cache.Clear(uid)
+				kubeconfig.ClearManaged()
+				_ = kubeconfig.RequestUnload(uid)
+				return nil
+			}); err != nil {
+				return fmt.Errorf("registering sleep hook: %w", err)
+			}
+
+			defer hook.Unregister()
+
+			sigCh := make(chan os.Signal, 1)
+			signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
+			<-sigCh
+			return nil
+		},
+	}
 }

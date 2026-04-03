@@ -16,10 +16,10 @@ Add this **once** to your shell config — then `renv resolve .env` just works, 
 
 ```bash
 # ~/.bashrc or ~/.zshrc
-eval "$(renv init)"
+eval "$(renv shell-init)"
 
 # fish: ~/.config/fish/config.fish
-renv init --shell fish | source
+renv shell-init --shell fish | source
 ```
 
 After that, simply:
@@ -42,7 +42,7 @@ scripts, CI pipelines, and one-off commands.
 
 ### Manual eval (original behaviour)
 
-If you prefer not to use `renv init`, you can always eval explicitly:
+If you prefer not to use `renv shell-init`, you can always eval explicitly:
 
 ```bash
 eval "$(renv resolve .env)"
@@ -129,7 +129,7 @@ API_KEY=vault://secret/myapp#api_key
 
 | Command | Description |
 |---------|-------------|
-| `renv init [--shell bash\|zsh\|fish]` | Print shell function so resolve/unload work without eval |
+| `renv shell-init [--shell bash\|zsh\|fish]` | Print shell function so resolve/unload work without eval |
 | `renv resolve [file]` | Resolve and emit exports (default file: `.env`) |
 | `renv exec [--env file] -- cmd [args]` | Run command with resolved vars injected (no eval) |
 | `renv unload` | Emit unset commands for all tracked variables |
@@ -226,6 +226,52 @@ timeouts:
   bitwarden: 30s   # per bw subprocess call (env: RENV_TIMEOUT_BITWARDEN)
   vault: 30s       # per vault subprocess call (env: RENV_TIMEOUT_VAULT)
 ```
+
+## Sleep and screen-lock integration (Linux)
+
+`renv watch` reacts differently to sleep and lock events:
+
+| Event | Action |
+|-------|--------|
+| Screen locked | Secret env vars unloaded from open shells. Cache kept — secrets re-resolve quickly after unlock without re-entering passwords. |
+| System suspend / hibernate | Encrypted cache, stored session, and local passwords cleared. Full re-authentication required after wake. |
+
+On Linux the watcher listens for two D-Bus signals emitted by **systemd-logind**:
+
+| D-Bus signal | Trigger |
+|--------------|---------|
+| `org.freedesktop.login1.Session.Lock` | Screen locked via `loginctl lock-session` |
+| `org.freedesktop.login1.Manager.PrepareForSleep` | System suspend / hibernate |
+
+### Requirement: lock via loginctl / D-Bus
+
+**The lock signal only reaches renv when the session is locked through
+`loginctl lock-session`** (or anything else that tells logind to emit
+`Session.Lock` on D-Bus). Lock the session with:
+
+```bash
+loginctl lock-session
+```
+
+For automatic locking after inactivity, wire your idle daemon to call
+`loginctl lock-session`. For example with **swayidle**:
+
+```bash
+exec swayidle -w \
+    timeout 300 'loginctl lock-session' \
+    before-sleep 'loginctl lock-session'
+```
+
+And for a manual keybind in your compositor (e.g. sway):
+
+```
+bindsym $mod+l exec loginctl lock-session
+```
+
+> **Note:** Invoking a screen locker directly (e.g. `exec swaylock` or
+> `exec waylock`) does **not** inform logind. renv will not receive the lock
+> signal and secret variables will remain in the shell until the system sleeps
+> or the shell exits.
 
 ## Environment variables
 

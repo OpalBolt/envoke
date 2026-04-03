@@ -3,6 +3,7 @@ package secrets
 import (
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -90,5 +91,66 @@ func TestVarsFilePath(t *testing.T) {
 	const uid = "1234"
 	if len(path) < len(uid) {
 		t.Errorf("path %q does not contain uid %q", path, uid)
+	}
+}
+
+func TestUnloadRequestFile(t *testing.T) {
+	path := UnloadRequestFile("9999")
+	if path == "" {
+		t.Fatal("UnloadRequestFile returned empty string")
+	}
+	// Should reside in /dev/shm or /tmp.
+	if len(path) < 8 || (path[:8] != "/dev/shm" && path[:4] != "/tmp") {
+		t.Errorf("unexpected base dir in path %q", path)
+	}
+	// Should contain the uid.
+	const uid = "9999"
+	if !strings.Contains(path, uid) {
+		t.Errorf("path %q does not contain uid %q", path, uid)
+	}
+}
+
+func TestRequestUnload(t *testing.T) {
+	uid := "test-unload-request"
+	path := UnloadRequestFile(uid)
+	t.Cleanup(func() { os.Remove(path) })
+
+	if err := RequestUnload(uid); err != nil {
+		t.Fatalf("RequestUnload: %v", err)
+	}
+
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("sentinel file not created: %v", err)
+	}
+	if fi.Mode().Perm() != 0600 {
+		t.Errorf("expected mode 0600, got %v", fi.Mode().Perm())
+	}
+}
+
+func TestRequestUnload_RejectsSymlink(t *testing.T) {
+	uid := "test-unload-symlink"
+	path := UnloadRequestFile(uid)
+
+	// Create a symlink at the sentinel path pointing to a temp file.
+	target := path + "-target"
+	if err := os.WriteFile(target, []byte("original"), 0600); err != nil {
+		t.Fatalf("creating symlink target: %v", err)
+	}
+	t.Cleanup(func() { os.Remove(target); os.Remove(path) })
+
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatalf("creating symlink: %v", err)
+	}
+
+	err := RequestUnload(uid)
+	if err == nil {
+		t.Fatal("expected error when path is a symlink, got nil")
+	}
+
+	// The symlink target should be unchanged — we must not have written through it.
+	data, _ := os.ReadFile(target)
+	if string(data) != "original" {
+		t.Errorf("symlink target was modified (symlink followed): got %q", data)
 	}
 }
