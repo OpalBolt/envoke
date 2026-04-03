@@ -10,7 +10,7 @@ VERSION       := $(shell \
 	tag=$$(git describe --tags --exact-match 2>/dev/null); \
 	dirty=$$(git status --porcelain 2>/dev/null); \
 	if [ -n "$$tag" ] && [ -z "$$dirty" ]; then \
-		echo "$$tag"; \
+		echo "$${tag#v}"; \
 	elif [ -n "$$dirty" ]; then \
 		echo "$(_BASE_VERSION)-dev+$(COMMIT)-dirty"; \
 	else \

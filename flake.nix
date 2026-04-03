@@ -26,9 +26,10 @@
         # self.shortRev is the 7-char git commit hash; falls back to "dirty" when the
         # working tree has uncommitted changes (Nix won't set rev on a dirty tree).
         commitHash = self.shortRev or "dirty";
-        # Dev builds embed the commit so `renv version` shows e.g. "0.1.0-dev+aeda2e9".
+        # Dev builds embed the commit so `renv --version` shows e.g. "0.1.0-dev+aeda2e9".
         # Goreleaser handles tagged release builds separately (see .goreleaser.yaml).
         nixVersion = "${releaseVersion}-dev+${commitHash}";
+        buildDate = self.lastModifiedDate or "unknown";
 
         common = {
           src = ./.;
@@ -43,7 +44,7 @@
             "-s" "-w"
             "-X ${versionPkg}.Version=${nixVersion}"
             "-X ${versionPkg}.Commit=${commitHash}"
-            "-X ${versionPkg}.BuildDate=unknown"
+            "-X ${versionPkg}.BuildDate=${buildDate}"
           ];
         });
 
@@ -55,7 +56,7 @@
             "-s" "-w"
             "-X ${versionPkg}.Version=${nixVersion}"
             "-X ${versionPkg}.Commit=${commitHash}"
-            "-X ${versionPkg}.BuildDate=unknown"
+            "-X ${versionPkg}.BuildDate=${buildDate}"
           ];
         });
 
@@ -68,7 +69,7 @@
             "-s" "-w"
             "-X ${versionPkg}.Version=${nixVersion}"
             "-X ${versionPkg}.Commit=${commitHash}"
-            "-X ${versionPkg}.BuildDate=unknown"
+            "-X ${versionPkg}.BuildDate=${buildDate}"
           ];
         });
       in
