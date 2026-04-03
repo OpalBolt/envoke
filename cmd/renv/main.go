@@ -460,9 +460,16 @@ The output must be evaluated by your shell:
 func watchCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "watch",
-		Short: "Watch for sleep/lock events and clear cache (run in background by shell-init)",
-		Long: `Run in the background to clear the secret cache when the system
-sleeps or the screen is locked. Normally started automatically by shell-init.
+		Short: "Watch for sleep/lock events and manage secrets (run in background by shell-init)",
+		Long: `Run in the background to manage secrets when the system sleeps or the screen
+is locked. Normally started automatically by shell-init.
+
+On lock: secret environment variables are unloaded from open shells. The
+encrypted cache is kept so secrets can be quickly re-resolved after unlock
+without re-entering passwords.
+
+On sleep: the encrypted cache, stored session, and local passwords are cleared,
+requiring full re-authentication after wake.
 
 On Linux, sleep and screen-lock events are detected via D-Bus (systemd-logind).
 The watcher listens for org.freedesktop.login1.Session.Lock and
@@ -491,18 +498,32 @@ Start manually:
 			slog.Debug("starting renv watcher", "uid", uid)
 
 			hook := cleanup.New()
-			if err := hook.Register(func() error {
-				slog.Debug("cleanup: clearing renv cache and session")
+
+			// On lock: unload secret variables from open shells.
+			// The cache is kept so secrets can be re-resolved after unlock
+			// without re-entering passwords.
+			if err := hook.RegisterLock(func() error {
+				slog.Debug("cleanup: unloading renv variables on lock")
+				_ = secrets.RequestUnload(uid)
+				return nil
+			}); err != nil {
+				return fmt.Errorf("registering lock hook: %w", err)
+			}
+
+			// On sleep: clear the encrypted cache and all stored credentials.
+			// This forces full re-authentication after wake.
+			if err := hook.RegisterSleep(func() error {
+				slog.Debug("cleanup: clearing renv cache and session on sleep")
 				cache := secrets.NewCache()
 				_ = cache.Clear(uid)
 				_ = secrets.ClearStoredSession(uid)
 				_ = secrets.ClearStoredLocalPassword(uid)
-				// Signal open shells to unload secret variables on their next prompt.
 				_ = secrets.RequestUnload(uid)
 				return nil
 			}); err != nil {
-				return fmt.Errorf("registering cleanup hook: %w", err)
+				return fmt.Errorf("registering sleep hook: %w", err)
 			}
+
 			defer hook.Unregister()
 
 			sigCh := make(chan os.Signal, 1)

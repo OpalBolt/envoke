@@ -6,17 +6,19 @@ import "log/slog"
 
 // TODO: Implement using WTS session change events / Windows power events.
 
-type windowsHook struct {
-	fns []CleanupFunc
-}
+type windowsHook struct{}
 
 func newHook() Hook {
 	return &windowsHook{}
 }
 
-func (h *windowsHook) Register(fns ...CleanupFunc) error {
-	slog.Warn("cleanup: hooks not yet implemented on Windows; secrets will not be cleared on sleep/lock")
-	h.fns = append(h.fns, fns...)
+func (h *windowsHook) RegisterLock(fns ...CleanupFunc) error {
+	slog.Warn("cleanup: hooks not yet implemented on Windows; secrets will not be cleared on lock")
+	return nil
+}
+
+func (h *windowsHook) RegisterSleep(fns ...CleanupFunc) error {
+	slog.Warn("cleanup: hooks not yet implemented on Windows; secrets will not be cleared on sleep")
 	return nil
 }
 

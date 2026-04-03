@@ -4,6 +4,7 @@ package cleanup
 
 import (
 	"os"
+	"sync"
 
 	"log/slog"
 
@@ -11,17 +12,41 @@ import (
 )
 
 type linuxHook struct {
-	conn *dbus.Conn
-	fns  []CleanupFunc
-	done chan struct{}
+	mu       sync.Mutex
+	conn     *dbus.Conn
+	lockFns  []CleanupFunc
+	sleepFns []CleanupFunc
+	done     chan struct{}
+	started  bool
 }
 
 func newHook() Hook {
 	return &linuxHook{done: make(chan struct{})}
 }
 
-func (h *linuxHook) Register(fns ...CleanupFunc) error {
-	h.fns = append(h.fns, fns...)
+func (h *linuxHook) RegisterLock(fns ...CleanupFunc) error {
+	h.mu.Lock()
+	h.lockFns = append(h.lockFns, fns...)
+	h.mu.Unlock()
+	return h.ensureStarted()
+}
+
+func (h *linuxHook) RegisterSleep(fns ...CleanupFunc) error {
+	h.mu.Lock()
+	h.sleepFns = append(h.sleepFns, fns...)
+	h.mu.Unlock()
+	return h.ensureStarted()
+}
+
+// ensureStarted connects to D-Bus and starts the listener goroutine once.
+func (h *linuxHook) ensureStarted() error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.started {
+		return nil
+	}
+	h.started = true
+
 	conn, err := dbus.ConnectSystemBus()
 	if err != nil {
 		// Non-fatal: log and continue without hooks
@@ -82,11 +107,11 @@ func (h *linuxHook) listen() {
 			if sig.Name == "org.freedesktop.login1.Manager.PrepareForSleep" {
 				if len(sig.Body) > 0 {
 					if going, ok := sig.Body[0].(bool); ok && going {
-						h.runAll()
+						h.runSleep()
 					}
 				}
 			} else if sig.Name == "org.freedesktop.login1.Session.Lock" {
-				h.runAll()
+				h.runLock()
 			}
 		case <-h.done:
 			return
@@ -94,10 +119,24 @@ func (h *linuxHook) listen() {
 	}
 }
 
-func (h *linuxHook) runAll() {
-	for _, fn := range h.fns {
+func (h *linuxHook) runLock() {
+	h.mu.Lock()
+	fns := append([]CleanupFunc(nil), h.lockFns...)
+	h.mu.Unlock()
+	for _, fn := range fns {
 		if err := fn(); err != nil {
-			slog.Warn("cleanup: hook error", "error", err)
+			slog.Warn("cleanup: lock hook error", "error", err)
+		}
+	}
+}
+
+func (h *linuxHook) runSleep() {
+	h.mu.Lock()
+	fns := append([]CleanupFunc(nil), h.sleepFns...)
+	h.mu.Unlock()
+	for _, fn := range fns {
+		if err := fn(); err != nil {
+			slog.Warn("cleanup: sleep hook error", "error", err)
 		}
 	}
 }
