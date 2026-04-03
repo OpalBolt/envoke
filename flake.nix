@@ -29,7 +29,12 @@
         # Dev builds embed the commit so `renv --version` shows e.g. "0.1.0-dev+aeda2e9".
         # Goreleaser handles tagged release builds separately (see .goreleaser.yaml).
         nixVersion = "${releaseVersion}-dev+${commitHash}";
-        buildDate = self.lastModifiedDate or "unknown";
+        # self.lastModifiedDate is "YYYYMMDDHHmmss"; reformat to ISO 8601 to match `make build` output.
+        buildDate =
+          let raw = self.lastModifiedDate or "unknown"; in
+          if raw == "unknown" then "unknown"
+          else
+            "${builtins.substring 0 4 raw}-${builtins.substring 4 2 raw}-${builtins.substring 6 2 raw}T${builtins.substring 8 2 raw}:${builtins.substring 10 2 raw}:${builtins.substring 12 2 raw}Z";
 
         common = {
           src = ./.;
