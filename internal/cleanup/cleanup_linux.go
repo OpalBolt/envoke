@@ -39,17 +39,20 @@ func (h *linuxHook) RegisterSleep(fns ...CleanupFunc) error {
 }
 
 // ensureStarted connects to D-Bus and starts the listener goroutine once.
+// started is only set to true after a successful connection so that transient
+// failures (e.g. D-Bus not yet available at boot) allow a retry on the next
+// RegisterLock/RegisterSleep call.
 func (h *linuxHook) ensureStarted() error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.started {
 		return nil
 	}
-	h.started = true
 
 	conn, err := dbus.ConnectSystemBus()
 	if err != nil {
-		// Non-fatal: log and continue without hooks
+		// Non-fatal: log and continue without hooks; leave started=false so
+		// the next registration call can retry the connection.
 		slog.Warn("cleanup: cannot connect to D-Bus system bus", "error", err)
 		return nil
 	}
@@ -79,6 +82,7 @@ func (h *linuxHook) ensureStarted() error {
 	}
 
 	go h.listen()
+	h.started = true
 	return nil
 }
 

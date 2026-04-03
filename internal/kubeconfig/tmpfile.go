@@ -65,5 +65,10 @@ func UnloadRequestFile(uid string) string {
 func RequestUnload(uid string) error {
 	path := UnloadRequestFile(uid)
 	slog.Debug("requesting kctx shell unload via sentinel", "path", path)
+	// Guard against symlink attacks: if the target path is already a symlink,
+	// refuse to write rather than following the link to an unintended file.
+	if fi, err := os.Lstat(path); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to write unload sentinel %q: path is a symlink", path)
+	}
 	return os.WriteFile(path, []byte{}, 0600)
 }

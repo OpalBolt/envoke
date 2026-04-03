@@ -67,7 +67,7 @@ func rootCmd() *cobra.Command {
 		statusCmd(),
 		clearCacheCmd(),
 		shellInitCmd(),
-		watchCmd(&cfg),
+		watchCmd(),
 	)
 	return root
 }
@@ -219,14 +219,28 @@ kctx() {
   esac
 }
 
-# Unset KUBECONFIG when the watcher signals that sleep/lock occurred.
-_kctx_check_unload() {
+# Derive an idempotent token for the current unload request so each shell can
+# observe the event once without consuming the shared sentinel.
+_kctx_unload_token() {
   local f="/dev/shm/kctx-${UID}-unload-requested"
   [ -f "$f" ] || f="/tmp/kctx-${UID}-unload-requested"
-  [ -f "$f" ] || return 0
-  rm -f "$f" 2>/dev/null
+  [ -f "$f" ] || return 1
+  stat -c '%Y:%i:%s' "$f" 2>/dev/null || stat -f '%m:%i:%z' "$f" 2>/dev/null
+}
+
+# Unset KUBECONFIG when the watcher signals that sleep/lock occurred.
+# Each shell tracks the last token it acted on so only the first prompt after
+# the event triggers unload — subsequent prompts are no-ops until the next event.
+_kctx_check_unload() {
+  local token
+  token="$(_kctx_unload_token)" || return 0
+  [ "${_KCTX_LAST_UNLOAD_TOKEN:-}" = "$token" ] && return 0
+  _KCTX_LAST_UNLOAD_TOKEN="$token"
   eval "$(command kctx unload 2>/dev/null)" 2>/dev/null || true
 }
+# Record the current sentinel state at init time so pre-existing sentinels from
+# a previous session do not trigger an immediate unload in new shells.
+_KCTX_LAST_UNLOAD_TOKEN="$(_kctx_unload_token 2>/dev/null || true)"
 if [ -n "${ZSH_VERSION:-}" ]; then
   autoload -Uz add-zsh-hook 2>/dev/null && add-zsh-hook precmd _kctx_check_unload
 else
@@ -237,12 +251,12 @@ fi
 if [ -z "${_KCTX_WATCH_PID:-}" ]; then
   command kctx watch &
   _KCTX_WATCH_PID=$!
-  trap 'kill "${_KCTX_WATCH_PID:-}" 2>/dev/null' EXIT
+  trap 'kill "${_KCTX_WATCH_PID:-}" 2>/dev/null; command kctx clear-cache 2>/dev/null' EXIT
 fi
 `
 }
 
-func watchCmd(cfg *config.Config) *cobra.Command {
+func watchCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "watch",
 		Short: "Watch for sleep/lock events and manage kubeconfigs (run in background by shell-init)",

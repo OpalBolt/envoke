@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -245,14 +246,29 @@ const bashInitScript = `renv() {
   esac
 }
 
-# Unload secret variables when the watcher signals that sleep/lock occurred.
-_renv_check_unload() {
+# Return a token that changes whenever the unload sentinel is refreshed.
+# Reading metadata instead of consuming the file lets every open shell
+# observe the same event once without racing to delete it.
+_renv_unload_token() {
   local f="/dev/shm/renv-${UID}-unload-requested"
   [ -f "$f" ] || f="/tmp/renv-${UID}-unload-requested"
-  [ -f "$f" ] || return 0
-  rm -f "$f" 2>/dev/null
+  [ -f "$f" ] || return 1
+  stat -c '%Y:%i:%s' "$f" 2>/dev/null || stat -f '%m:%i:%z' "$f" 2>/dev/null
+}
+
+# Unload secret variables when the watcher signals that sleep/lock occurred.
+# Each shell tracks the last token it acted on so only the first prompt after
+# the event triggers unload — subsequent prompts are no-ops until the next event.
+_renv_check_unload() {
+  local token
+  token="$(_renv_unload_token)" || return 0
+  [ "${_RENV_LAST_UNLOAD_TOKEN:-}" = "$token" ] && return 0
+  _RENV_LAST_UNLOAD_TOKEN="$token"
   eval "$(command renv unload 2>/dev/null)" 2>/dev/null || true
 }
+# Record the current sentinel state at init time so pre-existing sentinels from
+# a previous session do not trigger an immediate unload in new shells.
+_RENV_LAST_UNLOAD_TOKEN="$(_renv_unload_token 2>/dev/null || true)"
 if [ -n "${ZSH_VERSION:-}" ]; then
   autoload -Uz add-zsh-hook 2>/dev/null && add-zsh-hook precmd _renv_check_unload
 else
@@ -277,19 +293,42 @@ const fishInitScript = `function renv
   end
 end
 
-# Unload secret variables when the watcher signals that sleep/lock occurred.
-function _renv_check_unload --on-event fish_prompt
+# Return a token for the current unload sentinel (mtime:inode:size).
+# Reading metadata instead of consuming the file lets every open shell
+# observe the same event once without racing to delete it.
+function _renv_unload_token
   set -l f /dev/shm/renv-(id -u)-unload-requested
   test -f $f; or set f /tmp/renv-(id -u)-unload-requested
-  test -f $f; or return
-  rm -f $f 2>/dev/null
+  test -f $f; or return 1
+  stat -c '%Y:%i:%s' $f 2>/dev/null; or stat -f '%m:%i:%z' $f 2>/dev/null
+end
+
+# Unload secret variables when the watcher signals that sleep/lock occurred.
+# Each shell tracks the last token it acted on so only the first prompt after
+# the event triggers unload — subsequent prompts are no-ops until the next event.
+function _renv_check_unload --on-event fish_prompt
+  set -l token (_renv_unload_token 2>/dev/null); or return
+  test "$_RENV_LAST_UNLOAD_TOKEN" = "$token"; and return
+  set -g _RENV_LAST_UNLOAD_TOKEN $token
   command renv unload | source 2>/dev/null; or true
 end
+# Record the current sentinel state at init time so pre-existing sentinels
+# do not trigger an immediate unload in new shells.
+set -g _RENV_LAST_UNLOAD_TOKEN (_renv_unload_token 2>/dev/null; or echo "")
 
 # Start the sleep/lock watcher once per shell session.
 if not set -q _RENV_WATCH_PID
   command renv watch &
   set -gx _RENV_WATCH_PID $last_pid
+end
+
+# Terminate the watcher and clear sensitive cache/session material on shell exit.
+function _renv_cleanup --on-event fish_exit
+  if set -q _RENV_WATCH_PID
+    kill $_RENV_WATCH_PID 2>/dev/null; or true
+    set -e _RENV_WATCH_PID
+  end
+  command renv clear-cache 2>/dev/null; or true
 end
 `
 
@@ -315,11 +354,12 @@ All other renv subcommands (exec, yaml, status, …) pass through unchanged.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			switch shell {
 			case "fish":
-				fmt.Print(fishInitScript)
+				_, err := io.WriteString(cmd.OutOrStdout(), fishInitScript)
+				return err
 			default:
-				fmt.Print(bashInitScript)
+				_, err := io.WriteString(cmd.OutOrStdout(), bashInitScript)
+				return err
 			}
-			return nil
 		},
 	}
 	cmd.Flags().StringVar(&shell, "shell", "bash", "Shell type: bash, zsh, fish")
@@ -477,8 +517,9 @@ org.freedesktop.login1.Manager.PrepareForSleep signals.
 
 Wayland screen lockers (swaylock, waylock) must be triggered via
 'loginctl lock-session' for the Lock signal to reach renv. When the locker
-is invoked directly (e.g. 'exec swaylock') logind is not informed and the
-cache is NOT cleared. The recommended swayidle configuration is:
+is invoked directly (e.g. 'exec swaylock') logind is not informed, so renv
+does not receive the Lock signal and open shells are not told to unload
+secret variables. The recommended swayidle configuration is:
 
   exec swayidle -w \
       timeout 300 'loginctl lock-session' \
