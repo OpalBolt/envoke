@@ -202,8 +202,8 @@ func shellInitCmd() *cobra.Command {
 
 func kctxShellSnippet() string {
 	return `
-# kctx shell integration — source this into your shell
-# Usage: eval "$(kctx shell-init)"
+# kctx shell integration — add to ~/.bashrc or ~/.zshrc:
+# eval "$(kctx shell-init)"
 
 kctx() {
   case "$1" in

@@ -16,10 +16,10 @@ Add this **once** to your shell config — then `renv resolve .env` just works, 
 
 ```bash
 # ~/.bashrc or ~/.zshrc
-eval "$(renv init)"
+eval "$(renv shell-init)"
 
 # fish: ~/.config/fish/config.fish
-renv init --shell fish | source
+renv shell-init --shell fish | source
 ```
 
 After that, simply:
@@ -42,7 +42,7 @@ scripts, CI pipelines, and one-off commands.
 
 ### Manual eval (original behaviour)
 
-If you prefer not to use `renv init`, you can always eval explicitly:
+If you prefer not to use `renv shell-init`, you can always eval explicitly:
 
 ```bash
 eval "$(renv resolve .env)"
@@ -129,7 +129,7 @@ API_KEY=vault://secret/myapp#api_key
 
 | Command | Description |
 |---------|-------------|
-| `renv init [--shell bash\|zsh\|fish]` | Print shell function so resolve/unload work without eval |
+| `renv shell-init [--shell bash\|zsh\|fish]` | Print shell function so resolve/unload work without eval |
 | `renv resolve [file]` | Resolve and emit exports (default file: `.env`) |
 | `renv exec [--env file] -- cmd [args]` | Run command with resolved vars injected (no eval) |
 | `renv unload` | Emit unset commands for all tracked variables |
