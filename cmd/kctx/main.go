@@ -252,14 +252,30 @@ func kctxShellSnippet() string {
 
 kctx() {
   case "$1" in
+    switch)
+      # Explicit subcommand: kctx switch <env> [source] [flags]
+      eval "$(command kctx switch "${@:2}")"
+      # Record the current sentinel token so a pre-existing stale sentinel
+      # (e.g. from a prior lock/sleep) doesn't trigger an immediate unload on
+      # the next prompt. A sentinel written *after* this point (new event) will
+      # have a different token and will still fire correctly.
+      _KCTX_LAST_UNLOAD_TOKEN="$(_kctx_unload_token 2>/dev/null || true)"
+      trap 'kctx unload; kill "${_KCTX_WATCH_PID:-}" 2>/dev/null; command kctx clear-cache 2>/dev/null' EXIT
+      ;;
     unload)
       eval "$(command kctx unload)"
       ;;
-    status)
-      command kctx status
+    status|clear-cache|watch|shell-init)
+      command kctx "$@"
+      ;;
+    --version|--help|-h)
+      command kctx "$@"
       ;;
     *)
+      # Positional shorthand: kctx <env> [source] → kctx switch <env> [source]
       eval "$(command kctx switch "$@")"
+      _KCTX_LAST_UNLOAD_TOKEN="$(_kctx_unload_token 2>/dev/null || true)"
+      trap 'kctx unload; kill "${_KCTX_WATCH_PID:-}" 2>/dev/null; command kctx clear-cache 2>/dev/null' EXIT
       ;;
   esac
 }
