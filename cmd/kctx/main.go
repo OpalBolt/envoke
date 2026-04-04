@@ -254,13 +254,15 @@ kctx() {
   case "$1" in
     switch)
       # Explicit subcommand: kctx switch <env> [source] [flags]
-      eval "$(command kctx switch "${@:2}")"
-      # Record the current sentinel token so a pre-existing stale sentinel
-      # (e.g. from a prior lock/sleep) doesn't trigger an immediate unload on
-      # the next prompt. A sentinel written *after* this point (new event) will
-      # have a different token and will still fire correctly.
-      _KCTX_LAST_UNLOAD_TOKEN="$(_kctx_unload_token 2>/dev/null || true)"
-      trap 'kctx unload; kill "${_KCTX_WATCH_PID:-}" 2>/dev/null; command kctx clear-cache 2>/dev/null' EXIT
+      # Only eval and arm the EXIT trap when switch succeeds; a failing switch
+      # must not replace the shell-init EXIT trap or unload a working kubeconfig.
+      if _kctx_out="$(command kctx switch "${@:2}")"; then
+        eval "$_kctx_out"
+        # Record current sentinel token so a stale pre-existing sentinel
+        # doesn't trigger immediate unload on the next prompt.
+        _KCTX_LAST_UNLOAD_TOKEN="$(_kctx_unload_token 2>/dev/null || true)"
+        trap 'kctx unload; kill "${_KCTX_WATCH_PID:-}" 2>/dev/null; command kctx clear-cache 2>/dev/null' EXIT
+      fi
       ;;
     unload)
       eval "$(command kctx unload)"
@@ -271,11 +273,17 @@ kctx() {
     --version|--help|-h)
       command kctx "$@"
       ;;
+    "")
+      # No arguments: show root-level help (list all subcommands).
+      command kctx
+      ;;
     *)
       # Positional shorthand: kctx <env> [source] → kctx switch <env> [source]
-      eval "$(command kctx switch "$@")"
-      _KCTX_LAST_UNLOAD_TOKEN="$(_kctx_unload_token 2>/dev/null || true)"
-      trap 'kctx unload; kill "${_KCTX_WATCH_PID:-}" 2>/dev/null; command kctx clear-cache 2>/dev/null' EXIT
+      if _kctx_out="$(command kctx switch "$@")"; then
+        eval "$_kctx_out"
+        _KCTX_LAST_UNLOAD_TOKEN="$(_kctx_unload_token 2>/dev/null || true)"
+        trap 'kctx unload; kill "${_KCTX_WATCH_PID:-}" 2>/dev/null; command kctx clear-cache 2>/dev/null' EXIT
+      fi
       ;;
   esac
 }
