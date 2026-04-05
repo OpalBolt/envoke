@@ -2,7 +2,6 @@ package secrets
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -168,123 +167,6 @@ func TestExtractFieldAllTypes(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("extractField(%q) = %q, want %q", tt.spec, got, tt.want)
 		}
-	}
-}
-
-// TestLoadLocalPasswordFromPath_GracePeriodExpired verifies that a stored
-// password file older than the grace period is removed and treated as a miss.
-func TestLoadLocalPasswordFromPath_GracePeriodExpired(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "renv-local-key-1000-9999")
-
-	if err := os.WriteFile(path, []byte("mypassword"), 0600); err != nil {
-		t.Fatalf("writing test file: %v", err)
-	}
-	// Back-date the file so it appears older than the grace period.
-	past := time.Now().Add(-2 * time.Minute)
-	if err := os.Chtimes(path, past, past); err != nil {
-		t.Fatalf("chtimes: %v", err)
-	}
-
-	pw, err := loadLocalPasswordFromPath(path, 1*time.Minute)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if pw != "" {
-		t.Errorf("expected empty password (expired), got %q", pw)
-	}
-	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
-		t.Error("expected expired key file to be removed")
-	}
-}
-
-// TestLoadLocalPasswordFromPath_WithinGracePeriod verifies that a recently
-// written password file is returned without re-prompting.
-func TestLoadLocalPasswordFromPath_WithinGracePeriod(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "renv-local-key-1000-9999")
-
-	const wantPW = "mypassword"
-	if err := os.WriteFile(path, []byte(wantPW), 0600); err != nil {
-		t.Fatalf("writing test file: %v", err)
-	}
-
-	pw, err := loadLocalPasswordFromPath(path, 5*time.Minute)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if pw != wantPW {
-		t.Errorf("got %q, want %q", pw, wantPW)
-	}
-}
-
-// TestLoadLocalPasswordFromPath_NoGracePeriod verifies that a zero grace period
-// means the file is always returned regardless of age.
-func TestLoadLocalPasswordFromPath_NoGracePeriod(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "renv-local-key-1000")
-
-	const wantPW = "sharedpassword"
-	if err := os.WriteFile(path, []byte(wantPW), 0600); err != nil {
-		t.Fatalf("writing test file: %v", err)
-	}
-	// Back-date well into the past — should not matter with gracePeriod==0.
-	past := time.Now().Add(-24 * time.Hour)
-	if err := os.Chtimes(path, past, past); err != nil {
-		t.Fatalf("chtimes: %v", err)
-	}
-
-	pw, err := loadLocalPasswordFromPath(path, 0)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if pw != wantPW {
-		t.Errorf("got %q, want %q", pw, wantPW)
-	}
-}
-
-// TestSessionLocalKeyStorePath verifies that separate PPIDs produce separate paths.
-func TestSessionLocalKeyStorePath(t *testing.T) {
-	uid := "1000"
-	path1 := sessionLocalKeyStorePath(uid, "1234")
-	path2 := sessionLocalKeyStorePath(uid, "5678")
-	if path1 == path2 {
-		t.Errorf("expected different paths for different PPIDs, got same: %s", path1)
-	}
-	// Both should contain the uid.
-	for _, p := range []string{path1, path2} {
-		if !filepath.IsAbs(p) {
-			t.Errorf("expected absolute path, got %q", p)
-		}
-	}
-}
-
-// TestKeyStorePath_GracePeriodZeroUsesShared verifies that with PasswordGracePeriod==0
-// the shared (uid-only) path is returned.
-func TestKeyStorePath_GracePeriodZeroUsesShared(t *testing.T) {
-	uid := fmt.Sprintf("%d", os.Getuid())
-	c := &BWClient{PasswordGracePeriod: 0}
-	got := c.keyStorePath(uid)
-	want := localKeyStorePath(uid)
-	if got != want {
-		t.Errorf("got %q, want shared path %q", got, want)
-	}
-}
-
-// TestKeyStorePath_GracePeriodSetUsesSessionPath verifies that with
-// PasswordGracePeriod > 0 a PPID-keyed path is returned (not the shared path).
-func TestKeyStorePath_GracePeriodSetUsesSessionPath(t *testing.T) {
-	uid := fmt.Sprintf("%d", os.Getuid())
-	c := &BWClient{PasswordGracePeriod: time.Minute}
-	got := c.keyStorePath(uid)
-	shared := localKeyStorePath(uid)
-	if got == shared {
-		t.Errorf("expected per-terminal path, got shared path %q", got)
-	}
-	ppid := fmt.Sprintf("%d", os.Getppid())
-	want := sessionLocalKeyStorePath(uid, ppid)
-	if got != want {
-		t.Errorf("got %q, want %q", got, want)
 	}
 }
 

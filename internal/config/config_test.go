@@ -50,7 +50,6 @@ log:
   format: json
 cache:
   max_age: 2h
-  isolated: true
 timeouts:
   bitwarden: 60s
   vault: 45s
@@ -71,9 +70,6 @@ timeouts:
 	}
 	if cfg.Cache.MaxAge != "2h" {
 		t.Errorf("Cache.MaxAge: got %q, want %q", cfg.Cache.MaxAge, "2h")
-	}
-	if !cfg.Cache.Isolated {
-		t.Error("Cache.Isolated: expected true")
 	}
 	if cfg.Timeouts.Bitwarden != "60s" {
 		t.Errorf("Timeouts.Bitwarden: got %q, want %q", cfg.Timeouts.Bitwarden, "60s")
@@ -111,13 +107,11 @@ func TestLoad_EmptyPathUsesDefault(t *testing.T) {
 func TestApplyEnv(t *testing.T) {
 	// Isolate env var changes to this test.
 	vars := map[string]string{
-		"RENV_LOG_LEVEL":             "debug",
-		"RENV_LOG_FORMAT":            "json",
-		"RENV_CACHE_MAX_AGE":         "4h",
-		"RENV_ISOLATED":              "true",
-		"RENV_PASSWORD_GRACE_PERIOD": "5m",
-		"RENV_TIMEOUT_BITWARDEN":     "10s",
-		"RENV_TIMEOUT_VAULT":         "15s",
+		"RENV_LOG_LEVEL":         "debug",
+		"RENV_LOG_FORMAT":        "json",
+		"RENV_CACHE_MAX_AGE":     "4h",
+		"RENV_TIMEOUT_BITWARDEN": "10s",
+		"RENV_TIMEOUT_VAULT":     "15s",
 	}
 	for k, v := range vars {
 		t.Setenv(k, v)
@@ -135,45 +129,11 @@ func TestApplyEnv(t *testing.T) {
 	if cfg.Cache.MaxAge != "4h" {
 		t.Errorf("Cache.MaxAge: got %q, want 4h", cfg.Cache.MaxAge)
 	}
-	if !cfg.Cache.Isolated {
-		t.Error("Cache.Isolated: expected true")
-	}
-	if cfg.Cache.PasswordGracePeriod != "5m" {
-		t.Errorf("Cache.PasswordGracePeriod: got %q, want 5m", cfg.Cache.PasswordGracePeriod)
-	}
 	if cfg.Timeouts.Bitwarden != "10s" {
 		t.Errorf("Timeouts.Bitwarden: got %q, want 10s", cfg.Timeouts.Bitwarden)
 	}
 	if cfg.Timeouts.Vault != "15s" {
 		t.Errorf("Timeouts.Vault: got %q, want 15s", cfg.Timeouts.Vault)
-	}
-}
-
-func TestApplyEnv_IsolatedValues(t *testing.T) {
-	tests := []struct {
-		val  string
-		want bool
-	}{
-		{"true", true},
-		{"1", true},
-		{"yes", true},
-		{"false", false},
-		{"0", false},
-		{"no", false},
-		{"", false}, // env var unset — handled by empty-string guard in applyEnv
-	}
-	for _, tt := range tests {
-		if tt.val == "" {
-			continue // applyEnv only applies when val != ""
-		}
-		t.Run(tt.val, func(t *testing.T) {
-			t.Setenv("RENV_ISOLATED", tt.val)
-			cfg := Defaults()
-			applyEnv(&cfg)
-			if cfg.Cache.Isolated != tt.want {
-				t.Errorf("RENV_ISOLATED=%q → Isolated=%v, want %v", tt.val, cfg.Cache.Isolated, tt.want)
-			}
-		})
 	}
 }
 
@@ -193,25 +153,6 @@ func TestCacheMaxAge(t *testing.T) {
 		got := cfg.CacheMaxAge()
 		if got != tt.want {
 			t.Errorf("CacheMaxAge(%q) = %v, want %v", tt.input, got, tt.want)
-		}
-	}
-}
-
-func TestCachePasswordGracePeriod(t *testing.T) {
-	tests := []struct {
-		input string
-		want  time.Duration
-	}{
-		{"5m", 5 * time.Minute},
-		{"", 0},    // fallback is 0
-		{"bad", 0}, // fallback on parse error
-	}
-	for _, tt := range tests {
-		cfg := Defaults()
-		cfg.Cache.PasswordGracePeriod = tt.input
-		got := cfg.CachePasswordGracePeriod()
-		if got != tt.want {
-			t.Errorf("CachePasswordGracePeriod(%q) = %v, want %v", tt.input, got, tt.want)
 		}
 	}
 }

@@ -35,24 +35,6 @@ type LogConfig struct {
 type CacheConfig struct {
 	// MaxAge is the maximum age of cached Bitwarden folder items (Go duration string).
 	MaxAge string `yaml:"max_age"`
-	// Isolated disables cross-terminal LocalPassword sharing. When false (default),
-	// the local cache password is saved to /dev/shm after the first prompt so other
-	// terminals can reuse the encrypted cache without being prompted again. Set to
-	// true to require each terminal to provide the password independently.
-	Isolated bool `yaml:"isolated"`
-	// PasswordGracePeriod is how long after a successful local-password prompt the
-	// stored key remains valid without re-prompting (Go duration string, e.g. "1m").
-	//
-	// When 0 (the default) the old behaviour applies: --isolated controls whether the
-	// password is shared across terminals at all (no expiry).
-	//
-	// When > 0:
-	//   - The password store is keyed per terminal session (parent shell PID), so
-	//     each new terminal always prompts at least once.
-	//   - Within the grace period the same terminal re-loads without a prompt.
-	//   - After the grace period the stored key is deleted and the prompt re-appears.
-	//   - The encrypted cache files themselves are still shared across terminals.
-	PasswordGracePeriod string `yaml:"password_grace_period"`
 }
 
 // TimeoutConfig controls subprocess call timeouts.
@@ -127,12 +109,6 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("RENV_CACHE_MAX_AGE"); v != "" {
 		cfg.Cache.MaxAge = v
 	}
-	if v := os.Getenv("RENV_ISOLATED"); v != "" {
-		cfg.Cache.Isolated = v == "true" || v == "1" || v == "yes"
-	}
-	if v := os.Getenv("RENV_PASSWORD_GRACE_PERIOD"); v != "" {
-		cfg.Cache.PasswordGracePeriod = v
-	}
 	if v := os.Getenv("RENV_TIMEOUT_BITWARDEN"); v != "" {
 		cfg.Timeouts.Bitwarden = v
 	}
@@ -144,12 +120,6 @@ func applyEnv(cfg *Config) {
 // CacheMaxAge parses and returns the cache max-age duration.
 func (c *Config) CacheMaxAge() time.Duration {
 	return parseDuration(c.Cache.MaxAge, 8*time.Hour)
-}
-
-// CachePasswordGracePeriod parses and returns the password grace period duration.
-// Returns 0 when unset, meaning the old shared-store behaviour applies.
-func (c *Config) CachePasswordGracePeriod() time.Duration {
-	return parseDuration(c.Cache.PasswordGracePeriod, 0)
 }
 
 // BitwardenTimeout parses and returns the Bitwarden subprocess timeout.

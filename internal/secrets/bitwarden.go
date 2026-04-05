@@ -25,7 +25,7 @@ import (
 //     persisted to disk. Only needed on a cache miss or first access to a folder.
 //   - LocalPassword: a local session password used to encrypt/decrypt the cache
 //     files in /dev/shm. Prompted once per invocation (or sourced from
-//     RENV_LOCAL_PASSWORD). Never sent to Bitwarden.
+//     RENV_LOCAL_PASSWORD). Held in process memory only; never written to disk.
 //
 // Access flow:
 //  1. First access to a folder: prompt LocalPassword + BWPassword → fetch from BW
@@ -33,34 +33,10 @@ import (
 //  2. Subsequent access within cache TTL: prompt LocalPassword only → decrypt
 //     cache. No Bitwarden contact.
 //  3. Access after cache TTL expires: prompt LocalPassword + BWPassword → re-fetch.
-//
-// Local-password storage behaviour (when Isolated=false):
-//
-//   - PasswordGracePeriod == 0 (default): the LocalPassword is persisted to
-//     /dev/shm as a shared file (uid-keyed). All terminals of the same user can
-//     skip the prompt once any one of them has authenticated. The file never
-//     expires on its own — only renv clear-cache removes it.
-//
-//   - PasswordGracePeriod > 0: the LocalPassword is persisted to a per-terminal
-//     file (keyed by the parent shell PID). Each new terminal must authenticate at
-//     least once. Within the grace period the same terminal may reload without
-//     re-prompting. After the period the file is deleted and the prompt reappears.
-//     The encrypted cache files remain shared across all terminals.
-//
-// Set Isolated=true to disable all persistent storage and require a prompt on
-// every invocation, regardless of PasswordGracePeriod.
 type BWClient struct {
 	Cache         *Cache
 	BWPassword    string // cleared after bw unlock; used only for `bw unlock --raw`
-	LocalPassword string // used only for cache encryption; never sent to Bitwarden
-	// Isolated disables cross-terminal LocalPassword sharing. When false (default),
-	// the LocalPassword is saved to /dev/shm after the first prompt so other
-	// terminals can reuse the cache without prompting again.
-	Isolated bool
-	// PasswordGracePeriod is how long after a successful local-password prompt the
-	// stored key remains valid without re-prompting. When 0 (default) the shared
-	// store never expires. When > 0 the store is keyed per terminal (parent PID).
-	PasswordGracePeriod time.Duration
+	LocalPassword string // used only for cache encryption; never sent to Bitwarden; held in memory only
 	// Timeout caps each bw subprocess call. Zero uses the 30 s default.
 	Timeout time.Duration
 
@@ -79,9 +55,8 @@ func (c *BWClient) timeout() time.Duration {
 // ensureLocalPassword populates c.LocalPassword from (in order of precedence):
 //  1. c.LocalPassword already set
 //  2. RENV_LOCAL_PASSWORD env var
-//  3. Key store (shared or per-terminal, see PasswordGracePeriod), when Isolated=false
-//  4. Prompt on /dev/tty; on success, the password is saved to the key store
-//     (unless Isolated=true) so subsequent calls within the grace period skip it.
+//  3. Prompt on /dev/tty; password is stored in c.LocalPassword for the lifetime
+//     of this process only — never written to disk.
 func (c *BWClient) ensureLocalPassword() error {
 	if c.LocalPassword != "" {
 		return nil
@@ -89,15 +64,6 @@ func (c *BWClient) ensureLocalPassword() error {
 	if pw := os.Getenv("RENV_LOCAL_PASSWORD"); pw != "" {
 		c.LocalPassword = pw
 		return nil
-	}
-	uid := fmt.Sprintf("%d", os.Getuid())
-	if !c.Isolated {
-		path := c.keyStorePath(uid)
-		if pw, err := loadLocalPasswordFromPath(path, c.PasswordGracePeriod); err == nil && pw != "" {
-			slog.Debug("using stored local password", "path", path)
-			c.LocalPassword = pw
-			return nil
-		}
 	}
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
@@ -111,74 +77,6 @@ func (c *BWClient) ensureLocalPassword() error {
 	}
 	fmt.Fprintln(tty)
 	c.LocalPassword = string(pwBytes)
-	if !c.Isolated {
-		path := c.keyStorePath(uid)
-		if err := saveLocalPasswordToPath(path, c.LocalPassword); err != nil {
-			slog.Debug("could not save local password to store", "error", err)
-		}
-	}
-	return nil
-}
-
-// keyStorePath returns the file path used to persist the local password.
-// When PasswordGracePeriod > 0, a per-terminal path keyed by the parent process
-// PID (typically the invoking shell) is returned so that each terminal session
-// authenticates independently. Otherwise the shared uid-keyed path is returned.
-func (c *BWClient) keyStorePath(uid string) string {
-	if c.PasswordGracePeriod > 0 {
-		ppid := fmt.Sprintf("%d", os.Getppid())
-		return sessionLocalKeyStorePath(uid, ppid)
-	}
-	return localKeyStorePath(uid)
-}
-
-// sessionLocalKeyStorePath returns a per-terminal local password store path.
-// Keyed by uid and the parent process PID (typically the invoking shell) so
-// that each terminal session has an independent authentication state.
-func sessionLocalKeyStorePath(uid, ppid string) string {
-	dir := "/tmp"
-	if fi, err := os.Stat("/dev/shm"); err == nil && fi.IsDir() {
-		dir = "/dev/shm"
-	}
-	return filepath.Join(dir, "renv-local-key-"+uid+"-"+ppid)
-}
-
-// loadLocalPasswordFromPath reads the local password stored at path.
-// When gracePeriod > 0 and the file is older than gracePeriod, the file is
-// deleted and ("", nil) is returned, forcing re-authentication on the next call.
-func loadLocalPasswordFromPath(path string, gracePeriod time.Duration) (string, error) {
-	fi, err := os.Stat(path)
-	if os.IsNotExist(err) {
-		return "", nil
-	}
-	if err != nil {
-		return "", fmt.Errorf("cache: stating local password store: %w", err)
-	}
-	if gracePeriod > 0 && time.Since(fi.ModTime()) > gracePeriod {
-		age := time.Since(fi.ModTime()).Round(time.Second)
-		slog.Debug("local password grace period expired; requiring re-authentication",
-			"path", path, "age", age, "grace_period", gracePeriod)
-		_ = os.Remove(path)
-		return "", nil
-	}
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return "", nil
-	}
-	if err != nil {
-		return "", fmt.Errorf("cache: reading local password store: %w", err)
-	}
-	return string(data), nil
-}
-
-// saveLocalPasswordToPath writes the local password to path (chmod 0600).
-// The file's modification time is used as the "authenticated at" timestamp
-// for grace-period checks.
-func saveLocalPasswordToPath(path, password string) error {
-	if err := os.WriteFile(path, []byte(password), 0600); err != nil {
-		return fmt.Errorf("saving local password: %w", err)
-	}
-	slog.Debug("saved local password to store", "path", path)
 	return nil
 }
 
@@ -305,33 +203,9 @@ func localKeyStorePath(uid string) string {
 	return filepath.Join(dir, "renv-local-key-"+uid)
 }
 
-// SaveLocalPassword persists the local cache password to the shared store (chmod 0600).
-// The file lives in /dev/shm and is therefore RAM-backed and cleared on reboot.
-func SaveLocalPassword(uid, password string) error {
-	path := localKeyStorePath(uid)
-	if err := os.WriteFile(path, []byte(password), 0600); err != nil {
-		return fmt.Errorf("saving local password: %w", err)
-	}
-	slog.Debug("saved local password to shared store", "path", path)
-	return nil
-}
-
-// LoadStoredLocalPassword reads the shared local cache password.
-// Returns ("", nil) if the file does not exist.
-func LoadStoredLocalPassword(uid string) (string, error) {
-	path := localKeyStorePath(uid)
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return "", nil
-	}
-	if err != nil {
-		return "", fmt.Errorf("reading local password store: %w", err)
-	}
-	return string(data), nil
-}
-
-// ClearStoredLocalPassword removes the shared local password file and any
-// per-terminal session key files for uid.
+// ClearStoredLocalPassword removes any local password files left by previous
+// versions of renv. The password is no longer written to disk, but legacy files
+// may still exist on systems that ran an older version.
 func ClearStoredLocalPassword(uid string) error {
 	dir := "/tmp"
 	if fi, err := os.Stat("/dev/shm"); err == nil && fi.IsDir() {

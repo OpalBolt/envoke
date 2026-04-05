@@ -30,8 +30,6 @@ func main() {
 func rootCmd() *cobra.Command {
 	var verbose bool
 	var noCache bool
-	var isolated bool
-	var passwordGracePeriod string
 	var cfgFile string
 	var logLevel string
 	var cfg config.Config
@@ -53,19 +51,11 @@ func rootCmd() *cobra.Command {
 			if verbose {
 				cfg.Log.Level = "debug"
 			}
-			if cmd.Root().PersistentFlags().Changed("isolated") {
-				cfg.Cache.Isolated = isolated
-			}
-			if cmd.Root().PersistentFlags().Changed("password-grace-period") {
-				cfg.Cache.PasswordGracePeriod = passwordGracePeriod
-			}
 			logger.Init(cfg.Log.Level, cfg.Log.Format)
 			slog.Debug("config loaded",
 				"log_level", cfg.Log.Level,
 				"log_format", cfg.Log.Format,
 				"cache_max_age", cfg.Cache.MaxAge,
-				"cache_isolated", cfg.Cache.Isolated,
-				"cache_password_grace_period", cfg.Cache.PasswordGracePeriod,
 				"timeout_bitwarden", cfg.Timeouts.Bitwarden,
 				"timeout_vault", cfg.Timeouts.Vault,
 			)
@@ -75,8 +65,6 @@ func rootCmd() *cobra.Command {
 
 	root.PersistentFlags().BoolVar(&verbose, "verbose", false, "Enable debug logging (shorthand for --log-level=debug)")
 	root.PersistentFlags().BoolVar(&noCache, "no-cache", false, "Disable encrypted cache")
-	root.PersistentFlags().BoolVar(&isolated, "isolated", false, "Require local password in each terminal (disable cross-terminal sharing)")
-	root.PersistentFlags().StringVar(&passwordGracePeriod, "password-grace-period", "", "Grace period before re-prompting for local password (e.g. 1m, 5m, 1h). When set, each terminal authenticates independently; re-prompt is skipped within the period.")
 	root.PersistentFlags().StringVar(&cfgFile, "config", "", "Config file path (default: $XDG_CONFIG_HOME/renv/config.yaml)")
 	root.PersistentFlags().StringVar(&logLevel, "log-level", "", "Log level: debug, info, warn, error")
 	root.SetVersionTemplate("{{.Name}} {{.Version}}\n")
@@ -101,10 +89,8 @@ func newClients(noCache bool, cfg *config.Config) (*secrets.Cache, *secrets.BWCl
 		cache.Disabled = true
 	}
 	bwClient := &secrets.BWClient{
-		Cache:               cache,
-		Timeout:             cfg.BitwardenTimeout(),
-		Isolated:            cfg.Cache.Isolated,
-		PasswordGracePeriod: cfg.CachePasswordGracePeriod(),
+		Cache:   cache,
+		Timeout: cfg.BitwardenTimeout(),
 	}
 	vaultClient := &secrets.VaultClient{Timeout: cfg.VaultTimeout()}
 	return cache, bwClient, vaultClient
@@ -491,16 +477,6 @@ func statusCmd() *cobra.Command {
 					ui.Item(w, f, ageStr)
 				}
 			}
-
-			// Local password stored?
-			lp, _ := secrets.LoadStoredLocalPassword(uid)
-			lpStatus := ui.Gray(w, "not stored")
-			if lp != "" {
-				lpStatus = ui.Green(w, "stored")
-			}
-			fmt.Fprintln(w)
-			ui.Header(w, "Session")
-			ui.Item(w, "Local password", lpStatus)
 
 			return nil
 		},
