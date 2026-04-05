@@ -1,7 +1,6 @@
 // Package ui provides styled output helpers for CLI feedback using lipgloss.
-// All helpers write to an io.Writer and automatically adapt to terminal
-// capabilities — color and borders are disabled when the output is not a TTY
-// (pipes, CI, direnv subprocesses, etc.).
+// Colors are applied automatically when the writer is a TTY and stripped
+// for pipes, CI, and direnv subprocesses.
 package ui
 
 import (
@@ -28,19 +27,6 @@ func rendererFor(w io.Writer) *lipgloss.Renderer {
 		return lipgloss.NewRenderer(f)
 	}
 	return lipgloss.NewRenderer(w, termenv.WithProfile(termenv.Ascii))
-}
-
-// isTTY reports whether w is an *os.File attached to a TTY.
-func isTTY(w io.Writer) bool {
-	f, ok := w.(*os.File)
-	if !ok {
-		return false
-	}
-	info, err := f.Stat()
-	if err != nil {
-		return false
-	}
-	return (info.Mode() & os.ModeCharDevice) != 0
 }
 
 // ── Inline colour helpers ────────────────────────────────────────────────────
@@ -134,65 +120,28 @@ func List(w io.Writer, names []string) {
 
 // ── Lipgloss panel ───────────────────────────────────────────────────────────
 
-// Panel renders a rounded-border summary box to w.
-//
-// title is shown in the top border. headline is a one-line summary shown at the
-// top of the box body. entries are key/source rows listed below the headline.
-//
-// When w is not a TTY, a compact plain-text block is printed instead so that
-// direnv and other non-interactive contexts get readable output without noise.
+// Panel prints a compact summary to w: one header line combining title and
+// headline, followed by indented key/source rows. No borders or padding.
+// Colors are stripped automatically on non-TTY writers.
 func Panel(w io.Writer, title, headline string, entries []PanelEntry) {
 	r := rendererFor(w)
 
-	if !isTTY(w) {
-		// Compact plain-text: one header line + indented entry list.
-		fmt.Fprintf(w, "%s %s\n", Green(w, "✓"), headline)
-		for _, e := range entries {
-			display := entryDisplay(e)
-			fmt.Fprintf(w, "  %-24s %s\n", e.Key, Gray(w, display))
-		}
-		return
+	dimStyle := r.NewStyle().Foreground(lipgloss.Color("8"))
+	keyStyle := r.NewStyle().Foreground(lipgloss.Color("4")).Width(24)
+
+	// One header line: "✓ renv  Loaded 2 variables from .env"
+	fmt.Fprintf(w, "%s %s  %s\n",
+		Green(w, "✓"),
+		Bold(w, title),
+		headline,
+	)
+
+	for _, e := range entries {
+		fmt.Fprintf(w, "  %s%s\n",
+			keyStyle.Render(e.Key),
+			dimStyle.Render(entryDisplay(e)),
+		)
 	}
-
-	// ── Styles ──────────────────────────────────────────────────────────────
-	borderColor := lipgloss.Color("4") // blue
-
-	titleStyle := r.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("6")) // cyan title
-
-	headlineStyle := r.NewStyle().Bold(true)
-
-	keyStyle := r.NewStyle().
-		Foreground(lipgloss.Color("4")). // blue key
-		Width(24)
-
-	srcStyle := r.NewStyle().
-		Foreground(lipgloss.Color("8")) // gray source
-
-	boxStyle := r.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(borderColor).
-		Padding(0, 1)
-
-	// ── Build inner content ──────────────────────────────────────────────────
-	// The title lives inside the box as the first line; this avoids any
-	// rune-level manipulation of lipgloss's ANSI-colored border strings.
-	var sb strings.Builder
-	sb.WriteString(titleStyle.Render(title))
-	sb.WriteString("\n")
-	sb.WriteString(Green(w, "✓") + " " + headlineStyle.Render(headline))
-
-	if len(entries) > 0 {
-		sb.WriteString("\n")
-		for _, e := range entries {
-			display := entryDisplay(e)
-			line := keyStyle.Render(e.Key) + srcStyle.Render(display)
-			sb.WriteString("\n" + line)
-		}
-	}
-
-	fmt.Fprintln(w, boxStyle.Render(sb.String()))
 }
 
 // sourceLabel formats a source URI into a short display label.
