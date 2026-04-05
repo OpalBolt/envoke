@@ -193,8 +193,9 @@ func sessionStorePath(uid string) string {
 	return filepath.Join(dir, "renv-bw-session-"+uid)
 }
 
-// localKeyStorePath returns the path where the shared LocalPassword is stored.
-// The file lives in /dev/shm (RAM) so it is automatically cleared on reboot.
+// localKeyStorePath returns the legacy path where the shared LocalPassword was
+// stored by older versions of renv. LocalPassword is no longer written to disk;
+// this helper exists only so ClearStoredLocalPassword can remove any leftover files.
 func localKeyStorePath(uid string) string {
 	dir := "/tmp"
 	if fi, err := os.Stat("/dev/shm"); err == nil && fi.IsDir() {

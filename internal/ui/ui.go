@@ -144,14 +144,6 @@ func Panel(w io.Writer, title, headline string, entries []PanelEntry) {
 	}
 }
 
-// sourceLabel formats a source URI into a short display label.
-func sourceLabel(source string) string {
-	if source == "" {
-		return "(literal)"
-	}
-	return "← " + source
-}
-
 // entryDisplay returns the right-hand display string for a PanelEntry.
 // - Both Value and Source: "value  ← source"
 // - Source only: "← source"
