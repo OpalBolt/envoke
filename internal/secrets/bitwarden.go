@@ -80,6 +80,30 @@ func (c *BWClient) ensureLocalPassword() error {
 	return nil
 }
 
+// ReadLocalPassword returns the local cache encryption password from, in order:
+//  1. RENV_LOCAL_PASSWORD env var
+//  2. An interactive prompt on /dev/tty (no echo)
+//
+// Use this when you need the local password outside of a BWClient (e.g., when
+// fetching from Vault and then encrypting to the named kubeconfig store).
+func ReadLocalPassword() (string, error) {
+	if pw := os.Getenv("RENV_LOCAL_PASSWORD"); pw != "" {
+		return pw, nil
+	}
+	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if err != nil {
+		return "", fmt.Errorf("opening /dev/tty: %w", err)
+	}
+	defer tty.Close()
+	fmt.Fprintf(tty, "Local cache password: ")
+	pwBytes, err := term.ReadPassword(int(tty.Fd()))
+	if err != nil {
+		return "", fmt.Errorf("reading local cache password from tty: %w", err)
+	}
+	fmt.Fprintln(tty)
+	return string(pwBytes), nil
+}
+
 // AccountTag returns an 8-char fingerprint of the active BW account.
 // It is used as a cache key discriminator to namespace cache entries per account.
 // Result is memoised for the lifetime of the client and persisted to disk so

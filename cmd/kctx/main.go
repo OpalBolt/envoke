@@ -65,6 +65,7 @@ func rootCmd() *cobra.Command {
 	root.SetVersionTemplate("{{.Name}} {{.Version}}\n")
 
 	root.AddCommand(
+		loadCmd(&cfg),
 		switchCmd(&cfg),
 		unloadCmd(),
 		statusCmd(),
@@ -75,31 +76,47 @@ func rootCmd() *cobra.Command {
 	return root
 }
 
-func switchCmd(cfg *config.Config) *cobra.Command {
+// loadCmd fetches a kubeconfig from Bitwarden or Vault and stores it in the
+// named store, encrypted with the local password. Designed to be called from
+// a .env file so multiple configs can be pre-loaded before switching.
+//
+// Usage:
+//
+//	kctx load prod bw://folder/item
+//	kctx load staging vault://secret/kubeconfig/staging
+func loadCmd(cfg *config.Config) *cobra.Command {
 	return &cobra.Command{
-		Use:   "switch <env> [vault-path|bw://item]",
-		Short: "Fetch kubeconfig, write to tmpfile, print KUBECONFIG export",
-		Args:  cobra.RangeArgs(1, 2),
+		Use:   "load <name> <bw://item|vault-path>",
+		Short: "Fetch a kubeconfig and cache it under a local name",
+		Long: `Fetch a kubeconfig from Bitwarden or Vault and encrypt it in the local
+named store so that 'kctx switch <name>' can load it without re-fetching.
+
+Place multiple kctx load calls in your .env file to pre-load all configs.
+The local password and BW password are prompted on first use; subsequent
+calls in the same shell session reuse the local password set in
+RENV_LOCAL_PASSWORD.
+
+Examples:
+  kctx load prod bw://kubernetes/prod
+  kctx load staging vault://secret/kubeconfig/staging`,
+		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			env := args[0]
-			source := ""
-			if len(args) > 1 {
-				source = args[1]
+			name := args[0]
+			source := args[1]
+
+			if err := kubeconfig.ValidateStoreName(name); err != nil {
+				return err
 			}
-			slog.Debug("switching kubeconfig", "env", env, "source", source)
+
+			slog.Debug("loading kubeconfig", "name", name, "source", source)
+
+			uid := fmt.Sprintf("%d", os.Getuid())
+			store := kubeconfig.NewNamedStore()
 
 			var kubeconfigData []byte
+			var localPassword string
 
-			if source == "" || source == env {
-				// Default: try vault path based on env name
-				vaultRef := secrets.VaultRef{Path: "secret/kubeconfig/" + env, Field: "kubeconfig"}
-				vc := &secrets.VaultClient{Timeout: cfg.VaultTimeout()}
-				val, verr := vc.Resolve(vaultRef)
-				if verr != nil {
-					return fmt.Errorf("fetching kubeconfig for %q: %w", env, verr)
-				}
-				kubeconfigData = []byte(val)
-			} else if len(source) > 5 && source[:5] == "bw://" {
+			if strings.HasPrefix(source, "bw://") {
 				ref, err := secrets.ParseBWRef(source)
 				if err != nil {
 					return err
@@ -115,15 +132,97 @@ func switchCmd(cfg *config.Config) *cobra.Command {
 					return bwerr
 				}
 				kubeconfigData = []byte(val)
+				localPassword = bwClient.LocalPassword
 			} else {
-				// Treat as vault path
-				vaultRef := secrets.VaultRef{Path: source, Field: "kubeconfig"}
+				// Treat as Vault path; field defaults to "kubeconfig".
+				field := "kubeconfig"
+				path := source
+				if strings.HasPrefix(source, "vault://") {
+					path = strings.TrimPrefix(source, "vault://")
+				}
+				vaultRef := secrets.VaultRef{Path: path, Field: field}
 				vc := &secrets.VaultClient{Timeout: cfg.VaultTimeout()}
 				val, verr := vc.Resolve(vaultRef)
 				if verr != nil {
 					return verr
 				}
 				kubeconfigData = []byte(val)
+				// Vault doesn't use local password; prompt separately.
+				lp, lperr := secrets.ReadLocalPassword()
+				if lperr != nil {
+					return lperr
+				}
+				localPassword = lp
+			}
+
+			if err := store.Put(uid, name, localPassword, kubeconfigData); err != nil {
+				return fmt.Errorf("storing kubeconfig %q: %w", name, err)
+			}
+
+			ui.Success(os.Stderr, fmt.Sprintf("Loaded kubeconfig: %s", ui.Bold(os.Stderr, name)))
+			return nil
+		},
+	}
+}
+
+// switchCmd loads a pre-cached (named) kubeconfig and exports KUBECONFIG.
+// If the name is not found in the local named store, it falls back to an
+// explicit bw:// or vault path source if one is provided.
+func switchCmd(cfg *config.Config) *cobra.Command {
+	return &cobra.Command{
+		Use:   "switch <name> [bw://item|vault-path]",
+		Short: "Switch to a named kubeconfig (or fetch one if a source is given)",
+		Long: `Switch KUBECONFIG to a named kubeconfig previously loaded with 'kctx load'.
+
+If the named kubeconfig is not in the local store, a source (bw:// or vault
+path) may be provided to fetch it on the fly.
+
+Examples:
+  kctx switch prod                          # use pre-loaded 'prod'
+  kctx switch staging bw://k8s/staging      # fetch directly if not pre-loaded`,
+		Args: cobra.RangeArgs(1, 2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			source := ""
+			if len(args) > 1 {
+				source = args[1]
+			}
+			slog.Debug("switching kubeconfig", "name", name, "source", source)
+
+			uid := fmt.Sprintf("%d", os.Getuid())
+			store := kubeconfig.NewNamedStore()
+
+			var kubeconfigData []byte
+
+			// Try the named store first.
+			if err := kubeconfig.ValidateStoreName(name); err == nil {
+				lp, lperr := secrets.ReadLocalPassword()
+				if lperr != nil {
+					return lperr
+				}
+				data, err := store.Get(uid, name, lp)
+				if err != nil {
+					return fmt.Errorf("reading named kubeconfig %q: %w", name, err)
+				}
+				if data != nil {
+					kubeconfigData = data
+				}
+			}
+
+			// Fall back to an explicit source if the named store had no entry.
+			if kubeconfigData == nil {
+				if source == "" {
+					return fmt.Errorf(
+						"no pre-loaded kubeconfig named %q found\n"+
+							"Run: kctx load %s <bw://item|vault-path>",
+						name, name,
+					)
+				}
+				var err error
+				kubeconfigData, err = fetchKubeconfig(cfg, source)
+				if err != nil {
+					return fmt.Errorf("fetching kubeconfig for %q: %w", name, err)
+				}
 			}
 
 			path, werr := kubeconfig.WriteKubeconfig(kubeconfigData)
@@ -135,11 +234,41 @@ func switchCmd(cfg *config.Config) *cobra.Command {
 			fmt.Printf("trap 'kctx unload' EXIT\n")
 
 			// Feedback to stderr — stdout must stay clean for eval.
-			ui.Success(os.Stderr, fmt.Sprintf("Switched to kubeconfig: %s", ui.Bold(os.Stderr, env)))
+			ui.Success(os.Stderr, fmt.Sprintf("Switched to kubeconfig: %s", ui.Bold(os.Stderr, name)))
 			ui.Item(os.Stderr, "KUBECONFIG", path)
 			return nil
 		},
 	}
+}
+
+// fetchKubeconfig fetches kubeconfig bytes from the given bw:// or vault source.
+func fetchKubeconfig(cfg *config.Config, source string) ([]byte, error) {
+	if strings.HasPrefix(source, "bw://") {
+		ref, err := secrets.ParseBWRef(source)
+		if err != nil {
+			return nil, err
+		}
+		cache := secrets.NewCache()
+		cache.MaxAge = cfg.CacheMaxAge()
+		bwClient := &secrets.BWClient{
+			Cache:   cache,
+			Timeout: cfg.BitwardenTimeout(),
+		}
+		val, bwerr := bwClient.Resolve(ref)
+		if bwerr != nil {
+			return nil, bwerr
+		}
+		return []byte(val), nil
+	}
+	// Treat as Vault path.
+	path := strings.TrimPrefix(source, "vault://")
+	vaultRef := secrets.VaultRef{Path: path, Field: "kubeconfig"}
+	vc := &secrets.VaultClient{Timeout: cfg.VaultTimeout()}
+	val, verr := vc.Resolve(vaultRef)
+	if verr != nil {
+		return nil, verr
+	}
+	return []byte(val), nil
 }
 
 func unloadCmd() *cobra.Command {
@@ -180,7 +309,7 @@ func isManagedKubeconfig(path string) bool {
 func statusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
-		Short: "Show current KUBECONFIG and kubectl context",
+		Short: "Show current KUBECONFIG, kubectl context, and loaded kubeconfigs",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			w := os.Stdout
 			ui.Header(w, "Kubeconfig")
@@ -203,6 +332,19 @@ func statusCmd() *cobra.Command {
 					ui.Item(w, "Current context", ui.Bold(w, ctx))
 				}
 			}
+
+			// Show named kubeconfigs available in the local store.
+			uid := fmt.Sprintf("%d", os.Getuid())
+			store := kubeconfig.NewNamedStore()
+			names, err := store.List(uid)
+			if err != nil {
+				slog.Warn("listing named kubeconfigs", "err", err)
+			} else if len(names) > 0 {
+				ui.Header(w, "Loaded kubeconfigs (use 'kctx switch <name>')")
+				for _, n := range names {
+					ui.Item(w, "•", n)
+				}
+			}
 			return nil
 		},
 	}
@@ -222,13 +364,20 @@ func currentKubectlContext() string {
 func clearCacheCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "clear-cache",
-		Short: "Remove all kctx cache files",
+		Short: "Remove all kctx cache files and named kubeconfigs",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cache := secrets.NewCache()
 			uid := fmt.Sprintf("%d", os.Getuid())
+
+			cache := secrets.NewCache()
 			if err := cache.Clear(uid); err != nil {
 				return err
 			}
+
+			store := kubeconfig.NewNamedStore()
+			if err := store.Clear(uid); err != nil {
+				return err
+			}
+
 			ui.Success(os.Stderr, "Cache cleared")
 			return nil
 		},
@@ -252,8 +401,24 @@ func kctxShellSnippet() string {
 
 kctx() {
   case "$1" in
+    load)
+      # Pre-load a named kubeconfig from Bitwarden or Vault.
+      # Prompt for the local password once per shell session and export it so
+      # subsequent 'kctx load' calls in the same .env source don't re-prompt.
+      #
+      # Usage in .env:
+      #   kctx load prod     bw://kubernetes/prod
+      #   kctx load staging  bw://kubernetes/staging
+      if [ -z "${RENV_LOCAL_PASSWORD:-}" ]; then
+        printf "Local cache password: " >&2
+        read -rs _KCTX_LP </dev/tty; printf "\n" >&2
+        export RENV_LOCAL_PASSWORD="$_KCTX_LP"
+        unset _KCTX_LP
+      fi
+      command kctx load "${@:2}"
+      ;;
     switch)
-      # Explicit subcommand: kctx switch <env> [source] [flags]
+      # Explicit subcommand: kctx switch <name> [source] [flags]
       # Only eval and arm the EXIT trap when switch succeeds; a failing switch
       # must not replace the shell-init EXIT trap or unload a working kubeconfig.
       if _kctx_out="$(command kctx switch "${@:2}")"; then
@@ -278,7 +443,7 @@ kctx() {
       command kctx
       ;;
     *)
-      # Positional shorthand: kctx <env> [source] → kctx switch <env> [source]
+      # Positional shorthand: kctx <name> [source] → kctx switch <name> [source]
       if _kctx_out="$(command kctx switch "$@")"; then
         eval "$_kctx_out"
         _KCTX_LAST_UNLOAD_TOKEN="$(_kctx_unload_token 2>/dev/null || true)"
@@ -363,11 +528,13 @@ On Windows, event hooks are not yet implemented.`,
 				return fmt.Errorf("registering lock hook: %w", err)
 			}
 
-			// On sleep: clear the encrypted cache as well.
+			// On sleep: clear the encrypted cache and named kubeconfig store as well.
 			if err := hook.RegisterSleep(func() error {
 				slog.Debug("cleanup: clearing kctx cache and managed kubeconfigs on sleep")
 				cache := secrets.NewCache()
 				_ = cache.Clear(uid)
+				store := kubeconfig.NewNamedStore()
+				_ = store.Clear(uid)
 				kubeconfig.ClearManaged()
 				_ = kubeconfig.RequestUnload(uid)
 				return nil
