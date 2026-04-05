@@ -92,9 +92,8 @@ func loadCmd(cfg *config.Config) *cobra.Command {
 named store so that 'kctx switch <name>' can load it without re-fetching.
 
 Place multiple kctx load calls in your .env file to pre-load all configs.
-The local password and BW password are prompted on first use; subsequent
-calls in the same shell session reuse the local password set in
-RENV_LOCAL_PASSWORD.
+Both the local password and the Bitwarden password are prompted fresh on
+every call — no passwords are persisted or shared between invocations.
 
 Examples:
   kctx load prod bw://kubernetes/prod
@@ -403,18 +402,11 @@ kctx() {
   case "$1" in
     load)
       # Pre-load a named kubeconfig from Bitwarden or Vault.
-      # Prompt for the local password once per shell session and export it so
-      # subsequent 'kctx load' calls in the same .env source don't re-prompt.
+      # Passwords are prompted fresh on every call — no caching or persistence.
       #
       # Usage in .env:
       #   kctx load prod     bw://kubernetes/prod
       #   kctx load staging  bw://kubernetes/staging
-      if [ -z "${RENV_LOCAL_PASSWORD:-}" ]; then
-        printf "Local cache password: " >&2
-        read -rs _KCTX_LP </dev/tty; printf "\n" >&2
-        export RENV_LOCAL_PASSWORD="$_KCTX_LP"
-        unset _KCTX_LP
-      fi
       command kctx load "${@:2}"
       ;;
     switch)
