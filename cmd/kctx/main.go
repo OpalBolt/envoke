@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 
@@ -133,13 +134,29 @@ Examples:
 				kubeconfigData = []byte(val)
 				localPassword = bwClient.LocalPassword
 			} else {
-				// Treat as Vault path; field defaults to "kubeconfig".
-				field := "kubeconfig"
-				path := source
+				// Parse vault:// URI (with optional #field fragment) or treat as raw path.
+				var vaultRef secrets.VaultRef
 				if strings.HasPrefix(source, "vault://") {
-					path = strings.TrimPrefix(source, "vault://")
+					if strings.Contains(source, "#") {
+						// Fragment present — parse it fully.
+						ref, err := secrets.ParseVaultRef(source)
+						if err != nil {
+							return err
+						}
+						if ref.Field == "" {
+							ref.Field = "kubeconfig"
+						}
+						vaultRef = ref
+					} else {
+						// No fragment — default field to "kubeconfig".
+						vaultRef = secrets.VaultRef{
+							Path:  strings.TrimPrefix(source, "vault://"),
+							Field: "kubeconfig",
+						}
+					}
+				} else {
+					vaultRef = secrets.VaultRef{Path: source, Field: "kubeconfig"}
 				}
-				vaultRef := secrets.VaultRef{Path: path, Field: field}
 				vc := &secrets.VaultClient{Timeout: cfg.VaultTimeout()}
 				val, verr := vc.Resolve(vaultRef)
 				if verr != nil {
@@ -259,9 +276,29 @@ func fetchKubeconfig(cfg *config.Config, source string) ([]byte, error) {
 		}
 		return []byte(val), nil
 	}
-	// Treat as Vault path.
-	path := strings.TrimPrefix(source, "vault://")
-	vaultRef := secrets.VaultRef{Path: path, Field: "kubeconfig"}
+	// Parse vault:// URI (with optional #field fragment) or treat as raw path.
+	var vaultRef secrets.VaultRef
+	if strings.HasPrefix(source, "vault://") {
+		if strings.Contains(source, "#") {
+			// Fragment present — parse it fully.
+			ref, err := secrets.ParseVaultRef(source)
+			if err != nil {
+				return nil, err
+			}
+			if ref.Field == "" {
+				ref.Field = "kubeconfig"
+			}
+			vaultRef = ref
+		} else {
+			// No fragment — default field to "kubeconfig".
+			vaultRef = secrets.VaultRef{
+				Path:  strings.TrimPrefix(source, "vault://"),
+				Field: "kubeconfig",
+			}
+		}
+	} else {
+		vaultRef = secrets.VaultRef{Path: source, Field: "kubeconfig"}
+	}
 	vc := &secrets.VaultClient{Timeout: cfg.VaultTimeout()}
 	val, verr := vc.Resolve(vaultRef)
 	if verr != nil {
@@ -339,10 +376,9 @@ func statusCmd() *cobra.Command {
 			if err != nil {
 				slog.Warn("listing named kubeconfigs", "err", err)
 			} else if len(names) > 0 {
+				sort.Strings(names)
 				ui.Header(w, "Loaded kubeconfigs (use 'kctx switch <name>')")
-				for _, n := range names {
-					ui.Item(w, "•", n)
-				}
+				ui.List(w, names)
 			}
 			return nil
 		},

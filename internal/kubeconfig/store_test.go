@@ -62,14 +62,18 @@ func TestNamedStore_Get_Miss(t *testing.T) {
 
 func TestNamedStore_Get_Expired(t *testing.T) {
 	store, uid := newTestStore(t)
-	store.MaxAge = 1 * time.Millisecond
 
 	data := []byte("apiVersion: v1\n")
 	if err := store.Put(uid, "prod", "pw", data); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 
-	time.Sleep(5 * time.Millisecond)
+	// Backdate the file mtime so the entry is already expired.
+	path := store.storePath(uid, "prod")
+	expiredAt := time.Now().Add(-2 * store.MaxAge)
+	if err := os.Chtimes(path, expiredAt, expiredAt); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
 
 	got, err := store.Get(uid, "prod", "pw")
 	if err != nil {
@@ -80,7 +84,6 @@ func TestNamedStore_Get_Expired(t *testing.T) {
 	}
 
 	// File should be removed.
-	path := store.storePath(uid, "prod")
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Errorf("expected expired file to be deleted")
 	}
@@ -134,14 +137,28 @@ func TestNamedStore_List(t *testing.T) {
 
 func TestNamedStore_List_ExcludesExpired(t *testing.T) {
 	dir := t.TempDir()
-	store := &NamedStore{Dir: dir, MaxAge: 1 * time.Millisecond}
+	store := &NamedStore{Dir: dir, MaxAge: time.Hour}
 	uid := "testuid"
 	pw := "pw"
 
 	if err := store.Put(uid, "old", pw, []byte("data")); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
-	time.Sleep(5 * time.Millisecond)
+
+	// Backdate all store files so the entry is already expired.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	expiredAt := time.Now().Add(-2 * store.MaxAge)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		if err := os.Chtimes(filepath.Join(dir, entry.Name()), expiredAt, expiredAt); err != nil {
+			t.Fatalf("Chtimes %q: %v", entry.Name(), err)
+		}
+	}
 
 	names, err := store.List(uid)
 	if err != nil {

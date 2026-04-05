@@ -96,16 +96,40 @@ func (s *NamedStore) Put(uid, name, password string, data []byte) error {
 
 	path := s.storePath(uid, name)
 	slog.Debug("named store put", "path", path, "name", name)
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, storeFilePerms)
+
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-")
 	if err != nil {
-		return fmt.Errorf("store: opening file: %w", err)
+		return fmt.Errorf("store: creating temp file: %w", err)
 	}
-	defer f.Close()
+	tmpPath := tmp.Name()
+	cleanupTmp := true
+	defer func() {
+		if cleanupTmp {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := tmp.Chmod(storeFilePerms); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("store: setting temp file permissions: %w", err)
+	}
 	for _, chunk := range [][]byte{salt, iv, ciphertext} {
-		if _, err := f.Write(chunk); err != nil {
-			return fmt.Errorf("store: writing data: %w", err)
+		if _, err := tmp.Write(chunk); err != nil {
+			_ = tmp.Close()
+			return fmt.Errorf("store: writing temp file: %w", err)
 		}
 	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("store: syncing temp file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("store: closing temp file: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("store: replacing file atomically: %w", err)
+	}
+	cleanupTmp = false
 	return nil
 }
 
