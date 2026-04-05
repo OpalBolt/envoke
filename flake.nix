@@ -38,7 +38,7 @@
 
         common = {
           src = ./.;
-          vendorHash = "sha256-toMUBMJ/Ky7HglGwhhLVHN+FzUWihwNfKS/XnGIe9aE=";
+          vendorHash = pkgs.lib.fakeHash;
         };
 
         renv = pkgs.buildGoModule (common // {

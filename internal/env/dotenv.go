@@ -12,9 +12,10 @@ import (
 
 // EnvEntry represents a single key-value pair from a .env file.
 type EnvEntry struct {
-	Key   string
-	Value string // resolved value
-	IsRef bool   // true if Value was a bw:// or vault:// reference
+	Key    string
+	Value  string // resolved value
+	IsRef  bool   // true if Value was a bw:// or vault:// reference
+	Source string // original reference URI (e.g. "bw://folder/item" or "vault://path#field"); empty for literals
 }
 
 // ResolveDotEnv reads a .env file, batch-fetches needed BW folders,
@@ -73,6 +74,7 @@ func ResolveDotEnv(path string, bwClient *secrets.BWClient, vaultClient *secrets
 			}
 			entry.Value = val
 			entry.IsRef = true
+			entry.Source = e.Value
 			refCount++
 		}
 		resolved = append(resolved, entry)

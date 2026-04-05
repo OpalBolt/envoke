@@ -250,8 +250,16 @@ Examples:
 			fmt.Printf("trap 'kctx unload' EXIT\n")
 
 			// Feedback to stderr — stdout must stay clean for eval.
-			ui.Success(os.Stderr, fmt.Sprintf("Switched to kubeconfig: %s", ui.Bold(os.Stderr, name)))
-			ui.Item(os.Stderr, "KUBECONFIG", path)
+			// Resolve a friendly source label for the panel.
+			srcLabel := resolveSourceLabel(name, source)
+			panelEntries := []ui.PanelEntry{
+				{Key: "KUBECONFIG", Value: path, Source: srcLabel},
+			}
+			if ctx := currentKubectlContext(path); ctx != "" {
+				panelEntries = append(panelEntries, ui.PanelEntry{Key: "Context", Value: ctx})
+			}
+			headline := fmt.Sprintf("Switched to %s", ui.Bold(os.Stderr, name))
+			ui.Panel(os.Stderr, "kctx", headline, panelEntries)
 			return nil
 		},
 	}
@@ -323,8 +331,8 @@ func unloadCmd() *cobra.Command {
 			if kubeconfigPath == "" {
 				ui.Warn(os.Stderr, "KUBECONFIG was not set")
 			} else {
-				ui.Success(os.Stderr, "Kubeconfig unloaded")
-				ui.Item(os.Stderr, "Removed", kubeconfigPath)
+				entries := []ui.PanelEntry{{Key: "Removed", Value: kubeconfigPath}}
+				ui.Panel(os.Stderr, "kctx", "Kubeconfig unloaded", entries)
 			}
 			return nil
 		},
@@ -340,6 +348,15 @@ func isManagedKubeconfig(path string) bool {
 		return false
 	}
 	return len(base) > 5 && base[:5] == "kctx-"
+}
+
+// resolveSourceLabel returns a short human-readable label for where the
+// kubeconfig was fetched from, suitable for display in the switch panel.
+func resolveSourceLabel(name, source string) string {
+	if source == "" {
+		return "named store"
+	}
+	return source
 }
 
 func statusCmd() *cobra.Command {
@@ -364,7 +381,7 @@ func statusCmd() *cobra.Command {
 				}
 
 				// Try to show current kubectl context.
-				if ctx := currentKubectlContext(); ctx != "" {
+				if ctx := currentKubectlContext(kc); ctx != "" {
 					ui.Item(w, "Current context", ui.Bold(w, ctx))
 				}
 			}
@@ -387,13 +404,17 @@ func statusCmd() *cobra.Command {
 
 // currentKubectlContext runs kubectl config current-context and returns the
 // result, or "" if kubectl is not available or the call fails.
-func currentKubectlContext() string {
-	out, err := exec.Command("kubectl", "config", "current-context").Output()
+// If kubeconfig is non-empty it is used as the KUBECONFIG path for the invocation.
+func currentKubectlContext(kubeconfig string) string {
+	cmd := exec.Command("kubectl", "config", "current-context")
+	if kubeconfig != "" {
+		cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfig)
+	}
+	out, err := cmd.Output()
 	if err != nil {
 		return ""
 	}
-	ctx := strings.TrimSpace(string(out))
-	return ctx
+	return strings.TrimSpace(string(out))
 }
 
 func clearCacheCmd() *cobra.Command {
