@@ -216,8 +216,6 @@ RENV_LOG_LEVEL=debug renv resolve .env
 cache:
   max_age: 8h               # cached Bitwarden item TTL (env: RENV_CACHE_MAX_AGE)
   session_max_age: 8h       # stored BW session token TTL (env: RENV_SESSION_MAX_AGE)
-  isolated: false           # per-terminal auth, no sharing (env: RENV_ISOLATED)
-  password_grace_period: 0  # re-prompt window (env: RENV_PASSWORD_GRACE_PERIOD)
 ```
 
 ### Timeouts
@@ -235,7 +233,7 @@ timeouts:
 | Password | Purpose | How it is used |
 |----------|---------|----------------|
 | **BWPassword** | Bitwarden master password | Passed to `bw unlock` **via stdin** — never as a CLI argument, never persisted |
-| **LocalPassword** | Local cache encryption key | Used to AES-256-CBC encrypt/decrypt the `/dev/shm` cache. Prompted once per session; optionally shared across terminals (disabled by `--isolated`) |
+| **LocalPassword** | Local cache encryption key | Used to AES-256-CBC encrypt/decrypt the `/dev/shm` cache. Held in process memory only — never written to disk |
 
 ### Encrypted cache
 
@@ -243,37 +241,6 @@ timeouts:
 - **Encryption:** AES-256-CBC; key = PBKDF2-SHA256(localPassword, salt, 100,000 iterations, 32 bytes)
 - **Default TTL:** 8 hours (`RENV_CACHE_MAX_AGE`)
 - `--no-cache` sets `Cache.Disabled = true` — `Put`/`Get` become no-ops
-
-### Cross-terminal sharing vs isolation
-
-By default (`isolated: false`) the local cache password is stored in `/dev/shm` after
-the first prompt. Subsequent terminals can decrypt the shared encrypted cache without
-being prompted again.
-
-Set `isolated: true` (or `RENV_ISOLATED=true`) to require the local password in
-every terminal.
-
-#### Password grace period
-
-`password_grace_period` offers a middle ground:
-
-```yaml
-cache:
-  password_grace_period: 1m   # re-prompt after 1 minute of inactivity per terminal
-```
-
-When set to a non-zero duration:
-
-- The local-password store is keyed per terminal (parent shell PID). Each new terminal
-  must authenticate at least once.
-- Within the grace period, the same terminal can unload and reload secrets without
-  re-typing the password.
-- After the grace period the stored key is deleted and the prompt reappears.
-- The encrypted cache files (the secrets themselves) are still shared across terminals;
-  only the local-password access layer becomes per-terminal.
-
-`renv clear-cache` removes both the shared password file and all per-terminal session
-files.
 
 ## Sleep and screen-lock integration (Linux)
 

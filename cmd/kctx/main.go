@@ -408,7 +408,13 @@ func statusCmd() *cobra.Command {
 func currentKubectlContext(kubeconfig string) string {
 	cmd := exec.Command("kubectl", "config", "current-context")
 	if kubeconfig != "" {
-		cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfig)
+		env := make([]string, 0, len(os.Environ())-1)
+		for _, e := range os.Environ() {
+			if !strings.HasPrefix(e, "KUBECONFIG=") {
+				env = append(env, e)
+			}
+		}
+		cmd.Env = append(env, "KUBECONFIG="+kubeconfig)
 	}
 	out, err := cmd.Output()
 	if err != nil {

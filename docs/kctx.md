@@ -194,7 +194,6 @@ loginctl lock-session
 | `RENV_LOCAL_PASSWORD` | Local cache encryption password (non-interactive) |
 | `BW_SESSION` | Pre-existing Bitwarden session token (skips `bw unlock`) |
 | `RENV_CACHE_MAX_AGE` | Bitwarden cache TTL (Go duration, e.g. `8h`) |
-| `RENV_ISOLATED` | `true` to require local password in each terminal |
 | `RENV_TIMEOUT_BITWARDEN` | Timeout for `bw` subprocess calls (Go duration, e.g. `60s`) |
 | `RENV_TIMEOUT_VAULT` | Timeout for `vault` subprocess calls (Go duration, e.g. `60s`) |
 | `RENV_LOG_LEVEL` | `debug` / `info` / `warn` / `error` |
