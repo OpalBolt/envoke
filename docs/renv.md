@@ -1,6 +1,9 @@
-# renv — Secret Reference Resolver for .env Files
+# renv — Secret Reference Resolver
 
-`renv` resolves `bw://` and `vault://` secret references in `.env` and YAML files.
+`renv` resolves `bw://` and `vault://` secret references in `.env` and YAML files,
+injecting secrets into your shell or a subprocess at runtime. Nothing is written to
+disk in plaintext — secrets live only in process memory or a short-lived AES-256
+encrypted cache in `/dev/shm`.
 
 ## Installation
 
@@ -8,11 +11,16 @@
 go install github.com/eficode/secure-handling-of-secrets/cmd/renv@latest
 ```
 
-## Usage
+Or via Nix:
 
-### Zero-eval setup (recommended for interactive use)
+```bash
+nix profile install github:eficode/secure-handling-of-secrets#renv
+```
 
-Add this **once** to your shell config — then `renv resolve .env` just works, no eval needed:
+## Shell setup (recommended)
+
+Add **once** to your shell config to get `renv resolve` and `renv unload` working
+without manual `eval` boilerplate:
 
 ```bash
 # ~/.bashrc or ~/.zshrc
@@ -22,141 +30,169 @@ eval "$(renv shell-init)"
 renv shell-init --shell fish | source
 ```
 
-After that, simply:
+`renv shell-init` is completely **silent** when sourced — it defines shell wrapper
+functions and starts the background watcher (`renv watch`) without printing anything
+to the terminal.
+
+After setup:
 
 ```bash
-renv resolve .env      # loads variables into your shell
-renv unload            # unloads them when done
+renv resolve .env   # fetch secrets, load into current shell
+renv unload         # unset all tracked variables
 ```
 
-### Run a command with secrets injected (no eval, no shell function)
+### Manual eval (without shell-init)
 
-```bash
-renv exec -- myprogram --flag value
-renv exec --env secrets.env -- myprogram
-```
-
-`renv exec` resolves the `.env` file and runs the given command with those variables
-set in its environment. The current shell is **not** modified. This is ideal for
-scripts, CI pipelines, and one-off commands.
-
-### Manual eval (original behaviour)
-
-If you prefer not to use `renv shell-init`, you can always eval explicitly:
+If you prefer not to use `renv shell-init`:
 
 ```bash
 eval "$(renv resolve .env)"
 eval "$(renv unload)"
 ```
 
-### direnv integration
+## Commands
 
-The recommended way to integrate renv with direnv is via a `use_renv` helper defined
-in `~/.config/direnv/direnvrc`. This lets direnv fully own the load/unload lifecycle:
-variables are loaded when you enter the directory and **automatically unloaded** when
-you leave.
+| Command | Description |
+|---------|-------------|
+| `renv shell-init [--shell bash\|zsh\|fish]` | Emit shell functions + start watcher (silent) |
+| `renv resolve [file]` | Resolve `.env` file; emit exports to stdout, panel to stderr |
+| `renv exec [--env file] -- cmd [args]` | Run command with resolved vars injected (no eval) |
+| `renv unload` | Emit unset commands for all tracked variables |
+| `renv yaml file` | Resolve YAML file and print to stdout |
+| `renv status` | Show cache status and currently loaded variables |
+| `renv clear-cache` | Remove cache, session, and local-password files |
+| `renv watch` | Background daemon for sleep/lock events (started by shell-init) |
+| `renv --version` | Print version |
 
-**~/.config/direnv/direnvrc**
+## Output format
+
+`renv resolve` writes two things:
+
+- **stdout** — shell statements for `eval` (or for the shell wrapper):
+  ```
+  export DB_PASS='s3cr3t'
+  export API_KEY='abc123'
+  trap 'renv clear-cache' EXIT
+  ```
+  The `trap` line is omitted when running under direnv (`DIRENV_DIR` / `DIRENV_FILE`
+  is set) or inside a Nix shell (`IN_NIX_SHELL` is set), because those environments
+  manage the lifecycle themselves.
+
+- **stderr** — a styled panel showing what was loaded and where it came from:
+
+  On a TTY (rounded-border box):
+  ```
+  ╭─ renv: loaded .env ─────────────────────────╮
+  │  DB_PASS   bw://prod/database/password       │
+  │  API_KEY   vault://secret/myapp#api_key      │
+  │  APP_ENV   (literal)                         │
+  ╰──────────────────────────────────────────────╯
+  ```
+
+  On non-TTY stderr (direnv, pipes — compact plain-text):
+  ```
+  renv: loaded .env
+    DB_PASS    bw://prod/database/password
+    API_KEY    vault://secret/myapp#api_key
+    APP_ENV    (literal)
+  ```
+
+`renv unload` similarly emits `unset KEY` statements to stdout and a compact panel
+to stderr.
+
+## .env file format
+
+```bash
+# Plain values are passed through unchanged
+APP_ENV=production
+
+# Secret references — fetched at runtime
+DB_PASSWORD=bw://my-project/database/password
+API_KEY=vault://secret/myapp#api_key
+```
+
+## URI formats
+
+| Scheme | Format | Fetches |
+|--------|--------|---------|
+| Bitwarden (password) | `bw://folder/item` | Password field |
+| Bitwarden (field) | `bw://folder/item/username` | Username field |
+| Bitwarden (notes) | `bw://folder/item/note` | Notes field |
+| Bitwarden (TOTP) | `bw://folder/item/totp` | TOTP code |
+| Bitwarden (custom) | `bw://folder/item/field:name` | Custom field named `name` |
+| Bitwarden (collection) | `bw://collection:name/item` | Item in a Bitwarden collection |
+| Vault KV v2 | `vault://secret/path#field` | `field` key at the given path |
+
+## Run a command with secrets (no eval)
+
+`renv exec` resolves the `.env` file and runs the given command with secrets set
+in its environment. The current shell is **not** modified:
+
+```bash
+renv exec -- docker compose up
+renv exec -- pytest --verbose
+renv exec --env staging.env -- ./deploy.sh
+```
+
+Ideal for scripts, CI pipelines, and one-off commands.
+
+## YAML files
+
+```bash
+renv yaml config.yaml            # print resolved YAML to stdout
+renv yaml config.yaml > out.yaml
+```
+
+YAML values that are `bw://` or `vault://` URIs are resolved in place; all other
+values are passed through unchanged.
+
+## direnv integration
+
+The recommended way to integrate `renv` with direnv is a `use_renv` helper in
+`~/.config/direnv/direnvrc`:
 
 ```bash
 use_renv() {
   local file="${1:-.env}"
   watch_file "$file"
-  # Unset any variables from a previous renv load so direnv can track them cleanly.
   eval "$(renv unload 2>/dev/null || true)"
   eval "$(renv resolve "$file")"
 }
 ```
 
-**Your project's .envrc**
+Then in your project's `.envrc`:
 
 ```bash
 use renv .env
 ```
 
-`watch_file "$file"` tells direnv to re-run `.envrc` whenever your `.env` changes.
+`watch_file "$file"` tells direnv to re-run `.envrc` whenever the `.env` changes.
+The first run prompts for your Bitwarden master password; subsequent entries within
+the cache TTL reuse the encrypted cache — no re-prompt.
 
-The first run prompts for your Bitwarden master password; subsequent re-entries
-(within 8 hours) reuse the stored session and encrypted cache — no re-prompt.
-
-> **Note:** Variables are unloaded by direnv when you leave the directory, so
-> `renv unload` is not needed in the normal direnv workflow.  Use it only when
-> loading secrets manually (without direnv) via `eval "$(renv resolve .env)"`.
+When `renv` detects a direnv context (`DIRENV_DIR` or `DIRENV_FILE` is set) it:
+- Switches to compact, non-TTY output on stderr
+- Omits the `trap` line from stdout (direnv manages the unload lifecycle)
 
 #### Logging with direnv
 
-Because `renv` runs as a subprocess of direnv, `--log-level` and `--verbose` flags
-cannot be passed directly. Enable debug output by setting `RENV_LOG_LEVEL` in your
-`.envrc` **before** the `use renv` call — direnv exports it into the subprocess
-environment:
+Because `renv` runs as a subprocess of direnv, pass `RENV_LOG_LEVEL` in `.envrc`:
 
 ```bash
 # .envrc
-export RENV_LOG_LEVEL=debug   # remove or set to 'warn' when done
+export RENV_LOG_LEVEL=debug   # remove or set to warn when done
 use renv .env
 ```
 
-All log output goes to stderr, so it appears in the terminal but never pollutes the
-exported variables.
-
-### Manual load / unload (without direnv)
-
-When not using direnv, load secrets into your current shell with `eval`:
-
-```bash
-eval "$(renv resolve .env)"
-```
-
-To unload (unset all variables that were exported):
-
-```bash
-eval "$(renv unload)"
-```
-
-> **Note:** Both `renv resolve` and `renv unload` only *print* shell commands —
-> you must wrap them in `eval "$(…)"` for the variables to actually be set or unset
-> in your shell.
-
-### .env file format
-
-```bash
-DB_HOST=localhost
-DB_PASSWORD=bw://my-project/database/password
-API_KEY=vault://secret/myapp#api_key
-```
-
-### Commands
-
-| Command | Description |
-|---------|-------------|
-| `renv shell-init [--shell bash\|zsh\|fish]` | Print shell function so resolve/unload work without eval |
-| `renv resolve [file]` | Resolve and emit exports (default file: `.env`) |
-| `renv exec [--env file] -- cmd [args]` | Run command with resolved vars injected (no eval) |
-| `renv unload` | Emit unset commands for all tracked variables |
-| `renv yaml config.yaml` | Resolve YAML file |
-| `renv yaml config.yaml --key database.password` | Extract single value |
-| `renv clear-cache` | Remove cache files and stored BW session (preserves var tracking) |
-| `renv status` | Show cache status |
-| `renv --version` | Print version |
-
-## URI formats
-
-| Scheme | Format | Example |
-|--------|--------|---------|
-| Bitwarden folder | `bw://folder/item[/field]` | `bw://prod/database/password` |
-| Bitwarden collection | `bw://collection:name/item[/field]` | `bw://collection:prod/database` |
-| Vault KV v2 | `vault://path#field` | `vault://secret/myapp#api_key` |
+All log output goes to stderr and never pollutes the exported variables.
 
 ## Configuration
 
-`renv` loads settings from a YAML config file, environment variables, and CLI flags,
-in that order (CLI flags win).
+`renv` loads settings from a YAML config file, environment variables, and CLI flags
+(CLI flags win).
 
 **Default config location:** `~/.config/renv/config.yaml`
 (respects `$XDG_CONFIG_HOME`; override with `--config /path/to/config.yaml`)
-
-Copy [`docs/config.yaml`](config.yaml) from this repository as a starting point — it
-contains every option with explanations and defaults.
 
 ### Logging
 
@@ -166,11 +202,7 @@ log:
   format: text   # text | json                  (env: RENV_LOG_FORMAT)
 ```
 
-- `warn` (default) — only warnings and errors
-- `info` — adds resolve counts and provider calls
-- `debug` — full detail; useful when troubleshooting a failing `bw://` or `vault://` reference
-
-Quick one-shot debug without editing the config:
+One-shot debug:
 
 ```bash
 renv resolve .env --log-level debug
@@ -178,46 +210,15 @@ renv resolve .env --log-level debug
 RENV_LOG_LEVEL=debug renv resolve .env
 ```
 
-All log output goes to **stderr** and never pollutes the exported variables.
-
 ### Cache and session lifetimes
 
 ```yaml
 cache:
-  max_age: 8h               # how long fetched Bitwarden items are cached (env: RENV_CACHE_MAX_AGE)
-  session_max_age: 8h       # how long the stored BW session token is kept (env: RENV_SESSION_MAX_AGE)
-  isolated: false           # set to true to require local password in each terminal (env: RENV_ISOLATED)
-  password_grace_period: 0  # re-prompt window; see below (env: RENV_PASSWORD_GRACE_PERIOD)
+  max_age: 8h               # cached Bitwarden item TTL (env: RENV_CACHE_MAX_AGE)
+  session_max_age: 8h       # stored BW session token TTL (env: RENV_SESSION_MAX_AGE)
+  isolated: false           # per-terminal auth, no sharing (env: RENV_ISOLATED)
+  password_grace_period: 0  # re-prompt window (env: RENV_PASSWORD_GRACE_PERIOD)
 ```
-
-By default (`isolated: false`, `password_grace_period: 0`) the local cache password is saved to `/dev/shm`
-after the first prompt. Subsequent terminals can decrypt the shared encrypted cache without being
-prompted — so a second terminal just works if the cache is still warm.
-
-Set `isolated: true` (or `--isolated` / `RENV_ISOLATED=true`) to revert to per-terminal authentication:
-every invocation must provide the local password.
-
-#### Password grace period
-
-`password_grace_period` offers a middle ground between always-shared and always-isolated:
-
-```yaml
-cache:
-  password_grace_period: 1m   # re-prompt after 1 minute of inactivity
-```
-
-When set to a non-zero Go duration (e.g. `1m`, `5m`, `30m`):
-
-- The local password store is **keyed per terminal session** (by the parent shell PID). Each new
-  terminal must authenticate at least once — Terminal 2 always prompts even if Terminal 1 is
-  still within its grace period.
-- Within the grace period, the **same** terminal can unload and reload secrets without re-typing
-  the password.
-- After the grace period the stored key is deleted and the prompt reappears.
-- The **encrypted cache files** (the secrets themselves) are still shared across all terminals; only
-  the local-password access layer becomes per-terminal.
-
-`renv clear-cache` always removes both the shared password file and all per-terminal session files.
 
 ### Timeouts
 
@@ -227,34 +228,74 @@ timeouts:
   vault: 30s       # per vault subprocess call (env: RENV_TIMEOUT_VAULT)
 ```
 
+## Two-password security model
+
+`renv` uses two distinct passwords that must never be confused:
+
+| Password | Purpose | How it is used |
+|----------|---------|----------------|
+| **BWPassword** | Bitwarden master password | Passed to `bw unlock` **via stdin** — never as a CLI argument, never persisted |
+| **LocalPassword** | Local cache encryption key | Used to AES-256-CBC encrypt/decrypt the `/dev/shm` cache. Prompted once per session; optionally shared across terminals (disabled by `--isolated`) |
+
+### Encrypted cache
+
+- **Location:** `/dev/shm` (Linux tmpfs) with `/tmp` fallback
+- **Encryption:** AES-256-CBC; key = PBKDF2-SHA256(localPassword, salt, 100,000 iterations, 32 bytes)
+- **Default TTL:** 8 hours (`RENV_CACHE_MAX_AGE`)
+- `--no-cache` sets `Cache.Disabled = true` — `Put`/`Get` become no-ops
+
+### Cross-terminal sharing vs isolation
+
+By default (`isolated: false`) the local cache password is stored in `/dev/shm` after
+the first prompt. Subsequent terminals can decrypt the shared encrypted cache without
+being prompted again.
+
+Set `isolated: true` (or `RENV_ISOLATED=true`) to require the local password in
+every terminal.
+
+#### Password grace period
+
+`password_grace_period` offers a middle ground:
+
+```yaml
+cache:
+  password_grace_period: 1m   # re-prompt after 1 minute of inactivity per terminal
+```
+
+When set to a non-zero duration:
+
+- The local-password store is keyed per terminal (parent shell PID). Each new terminal
+  must authenticate at least once.
+- Within the grace period, the same terminal can unload and reload secrets without
+  re-typing the password.
+- After the grace period the stored key is deleted and the prompt reappears.
+- The encrypted cache files (the secrets themselves) are still shared across terminals;
+  only the local-password access layer becomes per-terminal.
+
+`renv clear-cache` removes both the shared password file and all per-terminal session
+files.
+
 ## Sleep and screen-lock integration (Linux)
 
-`renv watch` reacts differently to sleep and lock events:
+`renv watch` listens for D-Bus signals from **systemd-logind**:
 
-| Event | Action |
-|-------|--------|
-| Screen locked | Secret env vars unloaded from open shells. Cache kept — secrets re-resolve quickly after unlock without re-entering passwords. |
-| System suspend / hibernate | Encrypted cache, stored session, and local passwords cleared. Full re-authentication required after wake. |
+| Event | D-Bus signal | Action |
+|-------|-------------|--------|
+| Screen locked | `org.freedesktop.login1.Session.Lock` | Env vars unloaded from open shells; cache kept |
+| System suspend/hibernate | `org.freedesktop.login1.Manager.PrepareForSleep` | Cache, session, and local passwords cleared; full re-auth required after wake |
 
-On Linux the watcher listens for two D-Bus signals emitted by **systemd-logind**:
-
-| D-Bus signal | Trigger |
-|--------------|---------|
-| `org.freedesktop.login1.Session.Lock` | Screen locked via `loginctl lock-session` |
-| `org.freedesktop.login1.Manager.PrepareForSleep` | System suspend / hibernate |
+`renv watch` is started automatically by `renv shell-init` as a background daemon.
 
 ### Requirement: lock via loginctl / D-Bus
 
-**The lock signal only reaches renv when the session is locked through
-`loginctl lock-session`** (or anything else that tells logind to emit
-`Session.Lock` on D-Bus). Lock the session with:
+The lock signal only reaches `renv` when the session is locked through
+`loginctl lock-session` (or anything else that sends the D-Bus signal):
 
 ```bash
 loginctl lock-session
 ```
 
-For automatic locking after inactivity, wire your idle daemon to call
-`loginctl lock-session`. For example with **swayidle**:
+For automatic locking with **swayidle**:
 
 ```bash
 exec swayidle -w \
@@ -262,31 +303,30 @@ exec swayidle -w \
     before-sleep 'loginctl lock-session'
 ```
 
-And for a manual keybind in your compositor (e.g. sway):
+Manual keybind (sway):
 
 ```
 bindsym $mod+l exec loginctl lock-session
 ```
 
-> **Note:** Invoking a screen locker directly (e.g. `exec swaylock` or
-> `exec waylock`) does **not** inform logind. renv will not receive the lock
-> signal and secret variables will remain in the shell until the system sleeps
-> or the shell exits.
+> **Note:** Invoking a screen locker directly (e.g. `swaylock`, `waylock`) without
+> going through `loginctl` does **not** emit the D-Bus signal. `renv` will not
+> receive the lock event.
 
 ## Environment variables
 
 | Variable | Description |
 |----------|-------------|
-| `RENV_LOG_LEVEL` | Log level: `debug`, `info`, `warn`, `error` |
-| `RENV_LOG_FORMAT` | Log format: `text` (default) or `json` |
-| `RENV_CACHE_MAX_AGE` | Max age of cached Bitwarden items (Go duration, e.g. `4h`) |
-| `RENV_SESSION_MAX_AGE` | Max age of stored Bitwarden session (Go duration, e.g. `24h`) |
-| `RENV_ISOLATED` | Set to `true` to require local password in each terminal; disables cross-terminal cache sharing |
-| `RENV_PASSWORD_GRACE_PERIOD` | Grace period before re-prompting for local password (Go duration, e.g. `1m`). When set, each terminal authenticates independently. |
+| `RENV_LOG_LEVEL` | `debug` / `info` / `warn` / `error` |
+| `RENV_LOG_FORMAT` | `text` (default) or `json` |
+| `RENV_CACHE_MAX_AGE` | Cache TTL (Go duration, e.g. `4h`) |
+| `RENV_SESSION_MAX_AGE` | BW session token TTL (Go duration, e.g. `24h`) |
+| `RENV_ISOLATED` | `true` to require local password in each terminal |
+| `RENV_PASSWORD_GRACE_PERIOD` | Per-terminal re-prompt window (Go duration, e.g. `1m`) |
 | `RENV_TIMEOUT_BITWARDEN` | Timeout for `bw` subprocess calls (Go duration, e.g. `60s`) |
 | `RENV_TIMEOUT_VAULT` | Timeout for `vault` subprocess calls (Go duration, e.g. `60s`) |
-| `BW_SESSION` | Active Bitwarden session token |
-| `RENV_BW_PASSWORD` | Bitwarden master password (non-interactive) |
+| `RENV_BW_PASSWORD` | Bitwarden master password (non-interactive / CI) |
 | `RENV_LOCAL_PASSWORD` | Local cache encryption password (non-interactive) |
+| `BW_SESSION` | Pre-existing Bitwarden session token (skips `bw unlock`) |
 | `VAULT_ADDR` | Vault server URL |
 | `VAULT_TOKEN` | Vault authentication token |
