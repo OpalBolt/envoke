@@ -156,15 +156,15 @@ func Panel(w io.Writer, title, headline string, entries []PanelEntry) {
 
 	// ── Styles ──────────────────────────────────────────────────────────────
 	borderColor := lipgloss.Color("4") // blue
+
 	titleStyle := r.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color("6")) // cyan title
 
-	headlineStyle := r.NewStyle().
-		Bold(true)
+	headlineStyle := r.NewStyle().Bold(true)
 
 	keyStyle := r.NewStyle().
-		Foreground(lipgloss.Color("4")).  // blue key
+		Foreground(lipgloss.Color("4")). // blue key
 		Width(24)
 
 	srcStyle := r.NewStyle().
@@ -176,7 +176,11 @@ func Panel(w io.Writer, title, headline string, entries []PanelEntry) {
 		Padding(0, 1)
 
 	// ── Build inner content ──────────────────────────────────────────────────
+	// The title lives inside the box as the first line; this avoids any
+	// rune-level manipulation of lipgloss's ANSI-colored border strings.
 	var sb strings.Builder
+	sb.WriteString(titleStyle.Render(title))
+	sb.WriteString("\n")
 	sb.WriteString(Green(w, "✓") + " " + headlineStyle.Render(headline))
 
 	if len(entries) > 0 {
@@ -188,43 +192,7 @@ func Panel(w io.Writer, title, headline string, entries []PanelEntry) {
 		}
 	}
 
-	// ── Title in top border ──────────────────────────────────────────────────
-	box := boxStyle.Render(sb.String())
-	titleRendered := " " + titleStyle.Render(title) + " "
-
-	// Replace the top border's first rune sequence with the title text.
-	lines := strings.SplitN(box, "\n", 2)
-	if len(lines) == 2 {
-		topLine := lines[0]
-		// Find where to inject title — after the opening corner char (╭).
-		// We replace `─` chars with the title, preserving the border length.
-		bare := stripBorderTitle(topLine, titleRendered)
-		fmt.Fprintln(w, bare+"\n"+lines[1])
-	} else {
-		fmt.Fprintln(w, box)
-	}
-}
-
-// stripBorderTitle replaces leading border dashes after the first corner char
-// with title text, so the title appears flush in the top border.
-func stripBorderTitle(topLine, title string) string {
-	// topLine looks like:  ╭──────────────────────╮
-	// We want:             ╭─ title ───────────────╮
-	runes := []rune(topLine)
-	titleRunes := []rune(title)
-	if len(runes) < 3 || len(titleRunes)+3 > len(runes) {
-		return topLine
-	}
-	result := make([]rune, len(runes))
-	result[0] = runes[0] // opening corner
-	copy(result[1:1+len(titleRunes)], titleRunes)
-	// Fill remainder with the border dash character from the original line.
-	dash := runes[1]
-	for i := 1 + len(titleRunes); i < len(runes)-1; i++ {
-		result[i] = dash
-	}
-	result[len(runes)-1] = runes[len(runes)-1] // closing corner
-	return string(result)
+	fmt.Fprintln(w, boxStyle.Render(sb.String()))
 }
 
 // sourceLabel formats a source URI into a short display label.
