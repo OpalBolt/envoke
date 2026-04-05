@@ -83,3 +83,6 @@ timeouts:
   # Applies to: vault kv get.
   # Env: RENV_TIMEOUT_VAULT
   vault: 30s
+
+ui:
+  border: true
