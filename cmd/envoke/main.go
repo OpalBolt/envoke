@@ -528,9 +528,18 @@ kctx() {
 envoke() {
   case "$1" in
     resolve)
+      # Help/version: print directly, do not eval.
+      case "${2:-}" in
+        --help|-h|--version) command envoke resolve "${@:2}"; return ;;
+      esac
+      # Capture output and exit code before eval so failures propagate correctly.
+      local _envoke_out _envoke_exit
+      _envoke_out="$(command envoke resolve "${@:2}")"
+      _envoke_exit=$?
+      [ "$_envoke_exit" -ne 0 ] && return "$_envoke_exit"
       # Auto-eval so secrets and kubeconfigs are loaded into the current shell.
       # Strip the standalone EXIT trap — the shell-init trap below covers cleanup.
-      eval "$(command envoke resolve "${@:2}" | grep -v '^trap ')"
+      eval "$(printf '%s\n' "$_envoke_out" | grep -v '^trap ')"
       ;;
     renv)
       # Delegate to the renv shell function which handles eval internally.
@@ -639,8 +648,17 @@ end
 function envoke
   switch $argv[1]
     case resolve
-      # Auto-eval so secrets and kubeconfigs are loaded into the current shell.
-      command envoke resolve $argv[2..] | grep -v '^trap ' | source
+      # Help/version: print directly, do not source.
+      if contains -- --help $argv; or contains -- -h $argv
+        command envoke resolve $argv[2..]
+        return
+      end
+      # Capture output and exit code before sourcing so failures propagate correctly.
+      set -l _envoke_out (command envoke resolve $argv[2..])
+      set -l _envoke_exit $status
+      test $_envoke_exit -ne 0; and return $_envoke_exit
+      # Auto-source so secrets and kubeconfigs are loaded into the current shell.
+      printf '%s\n' $_envoke_out | grep -v '^trap ' | source
     case renv
       renv $argv[2..]
     case kctx
