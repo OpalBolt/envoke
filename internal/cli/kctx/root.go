@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"path/filepath"
 	"sort"
 	"strings"
 	"syscall"
@@ -311,12 +310,7 @@ func unloadCmd(cfg *config.Config) *cobra.Command {
 }
 
 func isManagedKubeconfig(path string) bool {
-	dir := filepath.Dir(path)
-	base := filepath.Base(path)
-	if dir != "/dev/shm" && dir != "/tmp" {
-		return false
-	}
-	return len(base) > 5 && base[:5] == "kctx-"
+	return kubeconfig.IsManaged(path)
 }
 
 func resolveSourceLabel(name, source string) string {

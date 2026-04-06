@@ -34,6 +34,17 @@ func NewTempFile(prefix string) (*os.File, error) {
 	return f, nil
 }
 
+// IsManaged reports whether path looks like a kctx-managed kubeconfig tmpfile
+// (i.e. a "kctx-" prefixed file in /dev/shm or /tmp).
+func IsManaged(path string) bool {
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+	if dir != "/dev/shm" && dir != "/tmp" {
+		return false
+	}
+	return len(base) > 5 && base[:5] == "kctx-"
+}
+
 // ClearManaged removes all kctx-managed kubeconfig tmpfiles from /dev/shm and /tmp.
 // Only files with the "kctx-" prefix are removed.
 func ClearManaged() {

@@ -84,6 +84,7 @@ entries that load kubeconfigs into the local kctx named store.`,
 		renvRoot,
 		kctxRoot,
 		resolveCmd(&noCache, &cfg),
+		unloadCmd(&cfg),
 		shellInitCmd(),
 		clearCacheCmd(),
 		watchCmd(),
@@ -347,6 +348,72 @@ func writeTempEnv(entries []env.RawEntry) (string, error) {
 	return f.Name(), nil
 }
 
+// unloadCmd emits shell commands to unset all tracked env vars and KUBECONFIG.
+// Output must be eval'd: eval "$(envoke unload)"
+func unloadCmd(cfg *config.Config) *cobra.Command {
+	return &cobra.Command{
+		Use:   "unload",
+		Short: "Unset all tracked env vars and KUBECONFIG",
+		Long: `Emit shell commands to unset all variables exported by envoke resolve,
+and unset KUBECONFIG if it was set by kctx.
+
+The output must be evaluated by your shell:
+
+  eval "$(envoke unload)"
+
+When using the envoke shell-init, the shell function handles this automatically.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			uid := fmt.Sprintf("%d", os.Getuid())
+			slog.Debug("unloading all envoke state", "uid", uid)
+
+			var panelEntries []ui.PanelEntry
+
+			// Unload tracked env vars (renv side). Errors here are non-fatal:
+			// we still must emit unset KUBECONFIG below.
+			names, err := secrets.LoadVarNames(uid)
+			if err != nil {
+				slog.Warn("loading tracked var names", "err", err)
+			}
+			if len(names) > 0 {
+				entries := make([]env.EnvEntry, len(names))
+				for i, name := range names {
+					entries[i] = env.EnvEntry{Key: name}
+				}
+				if emitErr := env.EmitUnload(os.Stdout, entries); emitErr != nil {
+					slog.Warn("emitting unload", "err", emitErr)
+				} else {
+					_ = secrets.ClearVarNames(uid)
+					for _, n := range names {
+						panelEntries = append(panelEntries, ui.PanelEntry{Key: n})
+					}
+				}
+			}
+
+			// Unload kubeconfig (kctx side) — always emit the unset so the
+			// shell variable is cleared even if we don't own the file.
+			kubeconfigPath := os.Getenv("KUBECONFIG")
+			if kubeconfigPath != "" && kubeconfig.IsManaged(kubeconfigPath) {
+				if err := os.Remove(kubeconfigPath); err != nil && !os.IsNotExist(err) {
+					slog.Warn("removing managed kubeconfig", "path", kubeconfigPath, "err", err)
+				}
+				panelEntries = append(panelEntries, ui.PanelEntry{
+					Key:   "KUBECONFIG",
+					Value: kubeconfigPath,
+				})
+			}
+			fmt.Fprintln(os.Stdout, "unset KUBECONFIG")
+
+			if len(panelEntries) == 0 {
+				ui.Warn(os.Stderr, "Nothing to unload")
+				return nil
+			}
+			headline := fmt.Sprintf("Unloaded %s", ui.Bold(os.Stderr, pluralItems(len(panelEntries))))
+			ui.Panel(os.Stderr, "envoke", headline, panelEntries, cfg.UI.Border)
+			return nil
+		},
+	}
+}
+
 // clearCacheCmd clears both renv and kctx caches.
 func clearCacheCmd() *cobra.Command {
 	return &cobra.Command{
@@ -541,6 +608,18 @@ envoke() {
       # Strip the standalone EXIT trap — the shell-init trap below covers cleanup.
       eval "$(printf '%s\n' "$_envoke_out" | grep -v '^trap ')"
       ;;
+    unload)
+      # Help/version: print directly, do not eval.
+      case "${2:-}" in
+        --help|-h|--version) command envoke unload "${@:2}"; return ;;
+      esac
+      # Capture output and exit code before eval so failures propagate correctly.
+      local _envoke_out _envoke_exit
+      _envoke_out="$(command envoke unload)"
+      _envoke_exit=$?
+      [ "$_envoke_exit" -ne 0 ] && return "$_envoke_exit"
+      eval "$(printf '%s\n' "$_envoke_out" | grep -v '^trap ')"
+      ;;
     renv)
       # Delegate to the renv shell function which handles eval internally.
       renv "${@:2}"
@@ -602,7 +681,7 @@ fi
 if [ -z "${_ENVOKE_WATCH_PID:-}" ]; then
   command envoke watch &
   _ENVOKE_WATCH_PID=$!
-  trap 'eval "$(command envoke renv unload 2>/dev/null || true)"; command envoke kctx unload >/dev/null 2>&1; kill "${_ENVOKE_WATCH_PID:-}" 2>/dev/null; command envoke clear-cache 2>/dev/null' EXIT
+  trap 'eval "$(command envoke unload 2>/dev/null || true)"; kill "${_ENVOKE_WATCH_PID:-}" 2>/dev/null; command envoke clear-cache 2>/dev/null' EXIT
 fi
 `
 
@@ -659,6 +738,17 @@ function envoke
       test $_envoke_exit -ne 0; and return $_envoke_exit
       # Auto-source so secrets and kubeconfigs are loaded into the current shell.
       printf '%s\n' $_envoke_out | grep -v '^trap ' | source
+    case unload
+      # Help/version: print directly, do not source.
+      if contains -- --help $argv; or contains -- -h $argv
+        command envoke unload $argv[2..]
+        return
+      end
+      # Capture output and exit code before sourcing so failures propagate correctly.
+      set -l _envoke_out (command envoke unload)
+      set -l _envoke_exit $status
+      test $_envoke_exit -ne 0; and return $_envoke_exit
+      printf '%s\n' $_envoke_out | grep -v '^trap ' | source
     case renv
       renv $argv[2..]
     case kctx
@@ -703,6 +793,7 @@ if not set -q _ENVOKE_WATCH_PID
 end
 
 function _envoke_cleanup --on-event fish_exit
+  command envoke unload 2>/dev/null | source 2>/dev/null; or true
   if set -q _ENVOKE_WATCH_PID
     kill $_ENVOKE_WATCH_PID 2>/dev/null; or true
     set -e _ENVOKE_WATCH_PID
