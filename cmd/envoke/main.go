@@ -159,19 +159,29 @@ The output must be evaluated by your shell:
 				}
 			}
 
-			// Handle kubeconfig directives.
+			// Create ONE shared cache+clients for the entire resolve operation.
+			// This ensures LocalPassword (and BW session) are prompted only once,
+			// regardless of how many KCTX_ and bw:// entries the file contains.
+			sharedCache := secrets.NewCache()
+			sharedCache.MaxAge = cfg.CacheMaxAge()
+			if *noCache {
+				sharedCache.Disabled = true
+			}
+			sharedBW := &secrets.BWClient{
+				Cache:   sharedCache,
+				Timeout: cfg.BitwardenTimeout(),
+			}
+			sharedVault := &secrets.VaultClient{Timeout: cfg.VaultTimeout()}
+
+			// Handle kubeconfig directives using the shared clients.
 			var kctxPanelEntries []ui.PanelEntry
 			if len(kctxEntries) > 0 {
 				uid := fmt.Sprintf("%d", os.Getuid())
 				store := kubeconfig.NewNamedStore()
 				for _, e := range kctxEntries {
 					name := kctxNameFromKey(e.Key)
-					kubeconfigData, localPwd, err := fetchKubeconfigForDirective(cfg, *noCache, e.Value)
-					if err != nil {
+					if err := fetchKubeconfigForDirective(sharedBW, sharedVault, name, e.Value, uid, store); err != nil {
 						return fmt.Errorf("loading kubeconfig %q (%s): %w", name, e.Value, err)
-					}
-					if err := store.Put(uid, name, localPwd, kubeconfigData); err != nil {
-						return fmt.Errorf("storing kubeconfig %q: %w", name, err)
 					}
 					kctxPanelEntries = append(kctxPanelEntries, ui.PanelEntry{
 						Key:    name,
@@ -181,9 +191,9 @@ The output must be evaluated by your shell:
 				}
 			}
 
-			// Handle env secret entries — write a temporary .env-like file and resolve,
-			// or write the filtered entries to a temporary file for ResolveDotEnv.
-			// We reconstruct by passing only the env entries through ResolveDotEnv.
+			// Handle env secret entries using the same shared clients.
+			// Because sharedBW already has LocalPassword set (from the kctx step above,
+			// if any), ensureLocalPassword() returns immediately without re-prompting.
 			var resolvedEntries []env.EnvEntry
 			if len(envEntries) > 0 {
 				tmpFile, err := writeTempEnv(envEntries)
@@ -192,18 +202,7 @@ The output must be evaluated by your shell:
 				}
 				defer os.Remove(tmpFile)
 
-				cache := secrets.NewCache()
-				cache.MaxAge = cfg.CacheMaxAge()
-				if *noCache {
-					cache.Disabled = true
-				}
-				bwClient := &secrets.BWClient{
-					Cache:   cache,
-					Timeout: cfg.BitwardenTimeout(),
-				}
-				vaultClient := &secrets.VaultClient{Timeout: cfg.VaultTimeout()}
-
-				resolvedEntries, err = env.ResolveDotEnv(tmpFile, bwClient, vaultClient)
+				resolvedEntries, err = env.ResolveDotEnv(tmpFile, sharedBW, sharedVault)
 				if err != nil {
 					return fmt.Errorf("resolving %s: %w", file, err)
 				}
@@ -274,61 +273,62 @@ func kctxNameFromKey(key string) string {
 	return strings.ToLower(strings.TrimPrefix(key, "KCTX_"))
 }
 
-// fetchKubeconfigForDirective fetches kubeconfig bytes from a bw:// or vault:// source
-// and returns the data along with the local password used (for storing in the named store).
-func fetchKubeconfigForDirective(cfg *config.Config, noCache bool, source string) ([]byte, string, error) {
+// fetchKubeconfigForDirective fetches kubeconfig bytes from a bw:// or vault:// source,
+// stores them in the named store, and ensures the shared bwClient has a LocalPassword set.
+// Using a shared bwClient means LocalPassword is prompted at most once per process.
+func fetchKubeconfigForDirective(bwClient *secrets.BWClient, vaultClient *secrets.VaultClient, name, source, uid string, store *kubeconfig.NamedStore) error {
+	var kubeconfigData []byte
+
 	if strings.HasPrefix(source, "bw://") {
 		ref, err := secrets.ParseBWRef(source)
 		if err != nil {
-			return nil, "", err
-		}
-		cache := secrets.NewCache()
-		cache.MaxAge = cfg.CacheMaxAge()
-		if noCache {
-			cache.Disabled = true
-		}
-		bwClient := &secrets.BWClient{
-			Cache:   cache,
-			Timeout: cfg.BitwardenTimeout(),
+			return err
 		}
 		val, err := bwClient.Resolve(ref)
 		if err != nil {
-			return nil, "", err
+			return err
 		}
-		return []byte(val), bwClient.LocalPassword, nil
+		// bwClient.LocalPassword is now set by Resolve (ensureLocalPassword was called).
+		kubeconfigData = []byte(val)
+	} else {
+		// vault:// path
+		var vaultRef secrets.VaultRef
+		if strings.HasPrefix(source, "vault://") {
+			if strings.Contains(source, "#") {
+				ref, err := secrets.ParseVaultRef(source)
+				if err != nil {
+					return err
+				}
+				if ref.Field == "" {
+					ref.Field = "kubeconfig"
+				}
+				vaultRef = ref
+			} else {
+				vaultRef = secrets.VaultRef{
+					Path:  strings.TrimPrefix(source, "vault://"),
+					Field: "kubeconfig",
+				}
+			}
+		} else {
+			vaultRef = secrets.VaultRef{Path: source, Field: "kubeconfig"}
+		}
+		val, err := vaultClient.Resolve(vaultRef)
+		if err != nil {
+			return err
+		}
+		// For vault sources, ensure the shared bwClient has a LocalPassword so store.Put works.
+		// If a prior BW operation already set it, this is a no-op.
+		if bwClient.LocalPassword == "" {
+			lp, err := secrets.ReadLocalPassword()
+			if err != nil {
+				return err
+			}
+			bwClient.LocalPassword = lp
+		}
+		kubeconfigData = []byte(val)
 	}
 
-	// vault:// path
-	var vaultRef secrets.VaultRef
-	if strings.HasPrefix(source, "vault://") {
-		if strings.Contains(source, "#") {
-			ref, err := secrets.ParseVaultRef(source)
-			if err != nil {
-				return nil, "", err
-			}
-			if ref.Field == "" {
-				ref.Field = "kubeconfig"
-			}
-			vaultRef = ref
-		} else {
-			vaultRef = secrets.VaultRef{
-				Path:  strings.TrimPrefix(source, "vault://"),
-				Field: "kubeconfig",
-			}
-		}
-	} else {
-		vaultRef = secrets.VaultRef{Path: source, Field: "kubeconfig"}
-	}
-	vc := &secrets.VaultClient{Timeout: cfg.VaultTimeout()}
-	val, err := vc.Resolve(vaultRef)
-	if err != nil {
-		return nil, "", err
-	}
-	lp, err := secrets.ReadLocalPassword()
-	if err != nil {
-		return nil, "", err
-	}
-	return []byte(val), lp, nil
+	return store.Put(uid, name, bwClient.LocalPassword, kubeconfigData)
 }
 
 // writeTempEnv writes env entries to a temp .env file for processing by ResolveDotEnv.
@@ -525,6 +525,27 @@ kctx() {
   esac
 }
 
+envoke() {
+  case "$1" in
+    resolve)
+      # Auto-eval so secrets and kubeconfigs are loaded into the current shell.
+      # Strip the standalone EXIT trap — the shell-init trap below covers cleanup.
+      eval "$(command envoke resolve "${@:2}" | grep -v '^trap ')"
+      ;;
+    renv)
+      # Delegate to the renv shell function which handles eval internally.
+      renv "${@:2}"
+      ;;
+    kctx)
+      # Delegate to the kctx shell function which handles eval internally.
+      kctx "${@:2}"
+      ;;
+    *)
+      command envoke "$@"
+      ;;
+  esac
+}
+
 # ── renv unload token ──────────────────────────────────────────────────────────
 _renv_unload_token() {
   local f="/dev/shm/renv-${UID}-unload-requested"
@@ -612,6 +633,20 @@ function kctx
         echo $_kctx_raw | grep -v '^trap ' | source
         set -g _KCTX_LAST_UNLOAD_TOKEN (_kctx_unload_token 2>/dev/null; or echo "")
       end
+  end
+end
+
+function envoke
+  switch $argv[1]
+    case resolve
+      # Auto-eval so secrets and kubeconfigs are loaded into the current shell.
+      command envoke resolve $argv[2..] | grep -v '^trap ' | source
+    case renv
+      renv $argv[2..]
+    case kctx
+      kctx $argv[2..]
+    case '*'
+      command envoke $argv
   end
 end
 

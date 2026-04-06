@@ -76,7 +76,7 @@ renv unload         # unset them when done
 `renv resolve` prints a styled panel to **stderr** showing each variable and its source:
 
 ```
-╭─ renv: loaded .env ─────────────────────────╮
+╭─ renv: loaded .env ────────-─────────────────╮
 │  DB_PASS   bw://prod/database/password       │
 │  API_KEY   vault://secret/myapp#api_key      │
 ╰──────────────────────────────────────────────╯
@@ -162,8 +162,8 @@ Each `kctx switch` writes a fresh tmpfile to `/dev/shm` (falling back to `/tmp`)
 ```
 ╭─ kctx: prod ──────────────────────────────────────╮
 │  KUBECONFIG   /dev/shm/kctx-a3f2b1                │
-│  Context      prod-cluster                         │
-│  Source       vault://secret/kubeconfig/prod       │
+│  Context      prod-cluster                        │
+│  Source       vault://secret/kubeconfig/prod      │
 ╰───────────────────────────────────────────────────╯
 ```
 
