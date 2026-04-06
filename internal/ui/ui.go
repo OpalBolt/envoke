@@ -120,10 +120,21 @@ func List(w io.Writer, names []string) {
 
 // ── Lipgloss panel ───────────────────────────────────────────────────────────
 
-// Panel prints a compact summary to w: one header line combining title and
+// Panel prints a summary to w. When border is true a rounded box with the
+// title embedded in the top edge is drawn; otherwise a compact single-header
+// line with indented key/source rows is printed. Colors are stripped
+// automatically on non-TTY writers.
+func Panel(w io.Writer, title, headline string, entries []PanelEntry, border bool) {
+	if border {
+		panelBordered(w, title, headline, entries)
+	} else {
+		panelCompact(w, title, headline, entries)
+	}
+}
+
+// panelCompact prints a compact summary to w: one header line combining title and
 // headline, followed by indented key/source rows. No borders or padding.
-// Colors are stripped automatically on non-TTY writers.
-func Panel(w io.Writer, title, headline string, entries []PanelEntry) {
+func panelCompact(w io.Writer, title, headline string, entries []PanelEntry) {
 	r := rendererFor(w)
 
 	dimStyle := r.NewStyle().Foreground(lipgloss.Color("8"))
@@ -142,6 +153,73 @@ func Panel(w io.Writer, title, headline string, entries []PanelEntry) {
 			dimStyle.Render(entryDisplay(e)),
 		)
 	}
+}
+
+// panelBordered prints a rounded-box summary to w:
+//
+//	╭─ title: headline ──────────────────────────╮
+//	│  KEY                    ← source           │
+//	╰────────────────────────────────────────────╯
+func panelBordered(w io.Writer, title, headline string, entries []PanelEntry) {
+	r := rendererFor(w)
+
+	dimStyle := r.NewStyle().Foreground(lipgloss.Color("8"))
+	keyStyle := r.NewStyle().Foreground(lipgloss.Color("4")).Width(24)
+	borderFg := r.NewStyle().Foreground(lipgloss.Color("8"))
+
+	// Render content rows: "  KEY   ← source"
+	type rowData struct {
+		text  string
+		width int
+	}
+	rows := make([]rowData, len(entries))
+	maxRowWidth := 0
+	for i, e := range entries {
+		t := "  " + keyStyle.Render(e.Key) + dimStyle.Render(entryDisplay(e))
+		vw := lipgloss.Width(t)
+		rows[i] = rowData{t, vw}
+		if vw > maxRowWidth {
+			maxRowWidth = vw
+		}
+	}
+
+	// Header text embedded in the top border: "bold(title): headline"
+	headerText := r.NewStyle().Bold(true).Render(title) + ": " + headline
+	headerWidth := lipgloss.Width(headerText)
+
+	// topBorderOverhead: fixed visual chars in the top border excluding the
+	// header text and the variable-length dashes:
+	//   ╭ + ─ + space + space + ╮  =  5 chars  (dashes fill the gap)
+	// So minimum top border width = headerWidth + topBorderOverhead + 1 (≥1 dash).
+	//
+	// rowBorderOverhead: fixed chars per content row:
+	//   │ + trailing_space + │  =  3 chars
+	// Rows already include a leading "  " (2 spaces), so no extra left padding.
+	const (
+		topBorderOverhead = 5
+		rowBorderOverhead = 3
+	)
+
+	// boxTotal = visual width of each border line (including corner/pipe chars).
+	boxTotal := headerWidth + topBorderOverhead + 1 // +1 for at least one dash
+	if maxRowWidth+rowBorderOverhead > boxTotal {
+		boxTotal = maxRowWidth + rowBorderOverhead
+	}
+
+	br := func(s string) string { return borderFg.Render(s) }
+
+	// Top border: ╭─ title: headline ──...──╮
+	topRight := strings.Repeat("─", boxTotal-headerWidth-topBorderOverhead)
+	fmt.Fprintln(w, br("╭─ ")+headerText+br(" "+topRight+"╮"))
+
+	// Content rows
+	for _, row := range rows {
+		pad := strings.Repeat(" ", boxTotal-rowBorderOverhead+1-row.width)
+		fmt.Fprintf(w, "%s%s%s%s\n", br("│"), row.text, pad, br("│"))
+	}
+
+	// Bottom border: ╰──...──╯
+	fmt.Fprintln(w, br("╰"+strings.Repeat("─", boxTotal-2)+"╯"))
 }
 
 // entryDisplay returns the right-hand display string for a PanelEntry.

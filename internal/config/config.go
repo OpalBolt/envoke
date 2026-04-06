@@ -21,6 +21,14 @@ type Config struct {
 	Log      LogConfig     `yaml:"log"`
 	Cache    CacheConfig   `yaml:"cache"`
 	Timeouts TimeoutConfig `yaml:"timeouts"`
+	UI       UIConfig      `yaml:"ui"`
+}
+
+// UIConfig controls user-interface presentation.
+type UIConfig struct {
+	// Border controls whether the loaded/unloaded panel is shown with a
+	// rounded box border. Enabled by default.
+	Border bool `yaml:"border"`
 }
 
 // LogConfig controls log verbosity and output format.
@@ -58,6 +66,9 @@ func Defaults() Config {
 		Timeouts: TimeoutConfig{
 			Bitwarden: "30s",
 			Vault:     "30s",
+		},
+		UI: UIConfig{
+			Border: true,
 		},
 	}
 }
@@ -114,6 +125,9 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("RENV_TIMEOUT_VAULT"); v != "" {
 		cfg.Timeouts.Vault = v
+	}
+	if v := os.Getenv("RENV_UI_BORDER"); v != "" {
+		cfg.UI.Border = v != "false" && v != "0"
 	}
 }
 

@@ -68,7 +68,7 @@ func rootCmd() *cobra.Command {
 	root.AddCommand(
 		loadCmd(&cfg),
 		switchCmd(&cfg),
-		unloadCmd(),
+		unloadCmd(&cfg),
 		statusCmd(),
 		clearCacheCmd(),
 		shellInitCmd(),
@@ -259,7 +259,7 @@ Examples:
 				panelEntries = append(panelEntries, ui.PanelEntry{Key: "Context", Value: ctx})
 			}
 			headline := fmt.Sprintf("Switched to %s", ui.Bold(os.Stderr, name))
-			ui.Panel(os.Stderr, "kctx", headline, panelEntries)
+			ui.Panel(os.Stderr, "kctx", headline, panelEntries, cfg.UI.Border)
 			return nil
 		},
 	}
@@ -288,7 +288,6 @@ func fetchKubeconfig(cfg *config.Config, source string) ([]byte, error) {
 	var vaultRef secrets.VaultRef
 	if strings.HasPrefix(source, "vault://") {
 		if strings.Contains(source, "#") {
-			// Fragment present — parse it fully.
 			ref, err := secrets.ParseVaultRef(source)
 			if err != nil {
 				return nil, err
@@ -298,7 +297,6 @@ func fetchKubeconfig(cfg *config.Config, source string) ([]byte, error) {
 			}
 			vaultRef = ref
 		} else {
-			// No fragment — default field to "kubeconfig".
 			vaultRef = secrets.VaultRef{
 				Path:  strings.TrimPrefix(source, "vault://"),
 				Field: "kubeconfig",
@@ -315,7 +313,7 @@ func fetchKubeconfig(cfg *config.Config, source string) ([]byte, error) {
 	return []byte(val), nil
 }
 
-func unloadCmd() *cobra.Command {
+func unloadCmd(cfg *config.Config) *cobra.Command {
 	return &cobra.Command{
 		Use:   "unload",
 		Short: "Unset KUBECONFIG and remove tmpfile (only if created by kctx)",
@@ -332,7 +330,7 @@ func unloadCmd() *cobra.Command {
 				ui.Warn(os.Stderr, "KUBECONFIG was not set")
 			} else {
 				entries := []ui.PanelEntry{{Key: "Removed", Value: kubeconfigPath}}
-				ui.Panel(os.Stderr, "kctx", "Kubeconfig unloaded", entries)
+				ui.Panel(os.Stderr, "kctx", "Kubeconfig unloaded", entries, cfg.UI.Border)
 			}
 			return nil
 		},

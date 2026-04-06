@@ -24,6 +24,9 @@ func TestDefaults(t *testing.T) {
 	if cfg.Timeouts.Vault != "30s" {
 		t.Errorf("Timeouts.Vault: got %q, want %q", cfg.Timeouts.Vault, "30s")
 	}
+	if !cfg.UI.Border {
+		t.Error("UI.Border: got false, want true (default on)")
+	}
 }
 
 func TestLoad_NonExistentFile(t *testing.T) {
@@ -134,6 +137,48 @@ func TestApplyEnv(t *testing.T) {
 	}
 	if cfg.Timeouts.Vault != "15s" {
 		t.Errorf("Timeouts.Vault: got %q, want 15s", cfg.Timeouts.Vault)
+	}
+}
+
+func TestApplyEnv_UIBorder(t *testing.T) {
+	tests := []struct {
+		envVal string
+		want   bool
+	}{
+		{"true", true},
+		{"1", true},
+		{"yes", true},
+		{"false", false},
+		{"0", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.envVal, func(t *testing.T) {
+			t.Setenv("RENV_UI_BORDER", tt.envVal)
+			cfg := Defaults()
+			applyEnv(&cfg)
+			if cfg.UI.Border != tt.want {
+				t.Errorf("RENV_UI_BORDER=%q: got Border=%v, want %v", tt.envVal, cfg.UI.Border, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoad_UIBorderFromFile(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	content := `
+ui:
+  border: false
+`
+	if err := os.WriteFile(cfgFile, []byte(content), 0600); err != nil {
+		t.Fatalf("writing config file: %v", err)
+	}
+	cfg, err := Load(cfgFile)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.UI.Border {
+		t.Error("UI.Border: got true, want false (set in config file)")
 	}
 }
 

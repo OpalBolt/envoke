@@ -84,7 +84,7 @@ func rootCmd() *cobra.Command {
 		yamlCmd(&cfg),
 		clearCacheCmd(),
 		statusCmd(),
-		unloadCmd(),
+		unloadCmd(&cfg),
 		watchCmd(),
 	)
 	return root
@@ -165,7 +165,7 @@ Then in .envrc:
 			headline := fmt.Sprintf("Loaded %s from %s",
 				ui.Bold(os.Stderr, pluralVars(len(entries))),
 				ui.Bold(os.Stderr, file))
-			ui.Panel(os.Stderr, "renv", headline, panelEntries)
+			ui.Panel(os.Stderr, "renv", headline, panelEntries, cfg.UI.Border)
 
 			// Emit EXIT trap — skip inside direnv (and inside nix dev-shells spawned by
 			// direnv's use_flake) because the process exits immediately after .envrc is
@@ -493,7 +493,7 @@ func statusCmd() *cobra.Command {
 	}
 }
 
-func unloadCmd() *cobra.Command {
+func unloadCmd(cfg *config.Config) *cobra.Command {
 	return &cobra.Command{
 		Use:   "unload",
 		Short: "Emit unset commands for all tracked variables",
@@ -528,7 +528,7 @@ The output must be evaluated by your shell:
 				panelEntries[i] = ui.PanelEntry{Key: n}
 			}
 			headline := fmt.Sprintf("Unloaded %s", ui.Bold(os.Stderr, pluralVars(len(names))))
-			ui.Panel(os.Stderr, "renv", headline, panelEntries)
+			ui.Panel(os.Stderr, "renv", headline, panelEntries, cfg.UI.Border)
 			return nil
 		},
 	}
