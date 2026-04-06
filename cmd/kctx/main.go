@@ -471,15 +471,14 @@ kctx() {
       command kctx load "${@:2}"
       ;;
     switch)
-      # Explicit subcommand: kctx switch <name> [source] [flags]
-      # Only eval and arm the EXIT trap when switch succeeds; a failing switch
-      # must not replace the shell-init EXIT trap or unload a working kubeconfig.
-      if _kctx_out="$(command kctx switch "${@:2}")"; then
-        eval "$_kctx_out"
-        # Record current sentinel token so a stale pre-existing sentinel
-        # doesn't trigger immediate unload on the next prompt.
+      # Explicit subcommand: kctx switch <env> [source] [flags]
+      # IMPORTANT: never call 'trap' inside this function. In zsh, a trap set
+      # inside a function fires when the function returns, not when the shell
+      # exits. Kubeconfig cleanup is handled by the shell-init EXIT trap below.
+      # Strip the 'trap' line emitted by the switch binary before eval.
+      if _kctx_raw="$(command kctx switch "${@:2}")"; then
+        eval "$(echo "$_kctx_raw" | grep -v '^trap ')"
         _KCTX_LAST_UNLOAD_TOKEN="$(_kctx_unload_token 2>/dev/null || true)"
-        trap 'kctx unload; kill "${_KCTX_WATCH_PID:-}" 2>/dev/null; command kctx clear-cache 2>/dev/null' EXIT
       fi
       ;;
     unload)
@@ -496,11 +495,10 @@ kctx() {
       command kctx
       ;;
     *)
-      # Positional shorthand: kctx <name> [source] → kctx switch <name> [source]
-      if _kctx_out="$(command kctx switch "$@")"; then
-        eval "$_kctx_out"
+      # Positional shorthand: kctx <env> [source] → kctx switch <env> [source]
+      if _kctx_raw="$(command kctx switch "$@")"; then
+        eval "$(echo "$_kctx_raw" | grep -v '^trap ')"
         _KCTX_LAST_UNLOAD_TOKEN="$(_kctx_unload_token 2>/dev/null || true)"
-        trap 'kctx unload; kill "${_KCTX_WATCH_PID:-}" 2>/dev/null; command kctx clear-cache 2>/dev/null' EXIT
       fi
       ;;
   esac
@@ -539,7 +537,7 @@ fi
 if [ -z "${_KCTX_WATCH_PID:-}" ]; then
   command kctx watch &
   _KCTX_WATCH_PID=$!
-  trap 'kill "${_KCTX_WATCH_PID:-}" 2>/dev/null; command kctx clear-cache 2>/dev/null' EXIT
+  trap 'command kctx unload >/dev/null 2>&1; kill "${_KCTX_WATCH_PID:-}" 2>/dev/null; command kctx clear-cache 2>/dev/null' EXIT
 fi
 `
 }
