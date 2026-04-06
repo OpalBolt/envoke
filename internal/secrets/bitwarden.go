@@ -62,6 +62,9 @@ func (c *BWClient) ensureLocalPassword() error {
 		return nil
 	}
 	if pw := os.Getenv("RENV_LOCAL_PASSWORD"); pw != "" {
+		if strings.TrimSpace(pw) == "" {
+			return fmt.Errorf("RENV_LOCAL_PASSWORD must not be empty or whitespace-only")
+		}
 		c.LocalPassword = pw
 		return nil
 	}
@@ -76,8 +79,42 @@ func (c *BWClient) ensureLocalPassword() error {
 		return fmt.Errorf("reading local cache password from tty: %w", err)
 	}
 	fmt.Fprintln(tty)
+	if strings.TrimSpace(string(pwBytes)) == "" {
+		return fmt.Errorf("local cache password must not be empty")
+	}
 	c.LocalPassword = string(pwBytes)
 	return nil
+}
+
+// ReadLocalPassword returns the local cache encryption password from, in order:
+//  1. RENV_LOCAL_PASSWORD env var
+//  2. An interactive prompt on /dev/tty (no echo)
+//
+// Use this when you need the local password outside of a BWClient (e.g., when
+// fetching from Vault and then encrypting to the named kubeconfig store).
+// Returns an error if the password is empty or whitespace-only.
+func ReadLocalPassword() (string, error) {
+	if pw := os.Getenv("RENV_LOCAL_PASSWORD"); pw != "" {
+		if strings.TrimSpace(pw) == "" {
+			return "", fmt.Errorf("RENV_LOCAL_PASSWORD must not be empty or whitespace-only")
+		}
+		return pw, nil
+	}
+	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if err != nil {
+		return "", fmt.Errorf("opening /dev/tty: %w", err)
+	}
+	defer tty.Close()
+	fmt.Fprintf(tty, "Local cache password: ")
+	pwBytes, err := term.ReadPassword(int(tty.Fd()))
+	if err != nil {
+		return "", fmt.Errorf("reading local cache password from tty: %w", err)
+	}
+	fmt.Fprintln(tty)
+	if strings.TrimSpace(string(pwBytes)) == "" {
+		return "", fmt.Errorf("local cache password must not be empty")
+	}
+	return string(pwBytes), nil
 }
 
 // AccountTag returns an 8-char fingerprint of the active BW account.

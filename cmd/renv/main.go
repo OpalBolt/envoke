@@ -69,6 +69,14 @@ func rootCmd() *cobra.Command {
 	root.PersistentFlags().StringVar(&logLevel, "log-level", "", "Log level: debug, info, warn, error")
 	root.SetVersionTemplate("{{.Name}} {{.Version}}\n")
 
+	// Deprecated flags kept for backwards compatibility — they are now no-ops.
+	var ignoredBool bool
+	var ignoredString string
+	root.PersistentFlags().BoolVar(&ignoredBool, "isolated", false, "Deprecated: no longer has any effect")
+	root.PersistentFlags().StringVar(&ignoredString, "password-grace-period", "", "Deprecated: no longer has any effect")
+	_ = root.PersistentFlags().MarkDeprecated("isolated", "this flag no longer has any effect and will be removed in a future release")
+	_ = root.PersistentFlags().MarkDeprecated("password-grace-period", "this flag no longer has any effect and will be removed in a future release")
+
 	root.AddCommand(
 		resolveCmd(&noCache, &cfg),
 		execCmd(&noCache, &cfg),
