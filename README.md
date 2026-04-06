@@ -94,21 +94,21 @@ renv exec --env staging.env -- ./deploy.sh
 Add to `~/.config/direnv/direnvrc`:
 
 ```bash
-use_renv() {
+use_envoke() {
   local file="${1:-.env}"
   watch_file "$file"
-  eval "$(renv unload 2>/dev/null || true)"
-  eval "$(renv resolve "$file")"
+  eval "$(envoke unload 2>/dev/null || true)"
+  eval "$(envoke resolve "$file")"
 }
 ```
 
 Then in your project's `.envrc`:
 
 ```bash
-use renv .env
+use envoke .env
 ```
 
-Secrets are loaded when you enter the directory and unloaded when you leave. When `renv` detects a direnv context (`DIRENV_DIR` or `DIRENV_FILE` is set) it automatically switches to compact non-TTY output and skips the EXIT trap (direnv manages that lifecycle itself).
+Secrets are loaded when you enter the directory and unloaded when you leave. When `envoke` detects a direnv context (`DIRENV_DIR` or `DIRENV_FILE` is set) it automatically switches to compact non-TTY output and skips the EXIT trap (direnv manages that lifecycle itself).
 
 ### YAML files
 
