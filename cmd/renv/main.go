@@ -84,7 +84,7 @@ func rootCmd() *cobra.Command {
 		yamlCmd(&cfg),
 		clearCacheCmd(),
 		statusCmd(),
-		unloadCmd(),
+		unloadCmd(&cfg),
 		watchCmd(),
 	)
 	return root
@@ -154,16 +154,18 @@ Then in .envrc:
 			// Persist the exported key names so renv unload can emit the correct unset commands.
 			uid := fmt.Sprintf("%d", os.Getuid())
 			names := make([]string, len(entries))
+			panelEntries := make([]ui.PanelEntry, len(entries))
 			for i, e := range entries {
 				names[i] = e.Key
+				panelEntries[i] = ui.PanelEntry{Key: e.Key, Source: e.Source}
 			}
 			_ = secrets.SaveVarNames(uid, names) // best-effort; don't fail resolve if state can't be saved
 
 			// Feedback to stderr — stdout must stay clean for eval.
-			ui.Success(os.Stderr, fmt.Sprintf("Loaded %s from %s",
+			headline := fmt.Sprintf("Loaded %s from %s",
 				ui.Bold(os.Stderr, pluralVars(len(entries))),
-				ui.Bold(os.Stderr, file)))
-			ui.List(os.Stderr, names)
+				ui.Bold(os.Stderr, file))
+			ui.Panel(os.Stderr, "renv", headline, panelEntries, cfg.UI.Border)
 
 			// Emit EXIT trap — skip inside direnv (and inside nix dev-shells spawned by
 			// direnv's use_flake) because the process exits immediately after .envrc is
@@ -491,7 +493,7 @@ func statusCmd() *cobra.Command {
 	}
 }
 
-func unloadCmd() *cobra.Command {
+func unloadCmd(cfg *config.Config) *cobra.Command {
 	return &cobra.Command{
 		Use:   "unload",
 		Short: "Emit unset commands for all tracked variables",
@@ -521,8 +523,12 @@ The output must be evaluated by your shell:
 			_ = secrets.ClearVarNames(uid)
 
 			// Feedback to stderr — stdout must stay clean for eval.
-			ui.Success(os.Stderr, fmt.Sprintf("Unloaded %s", ui.Bold(os.Stderr, pluralVars(len(names)))))
-			ui.List(os.Stderr, names)
+			panelEntries := make([]ui.PanelEntry, len(names))
+			for i, n := range names {
+				panelEntries[i] = ui.PanelEntry{Key: n}
+			}
+			headline := fmt.Sprintf("Unloaded %s", ui.Bold(os.Stderr, pluralVars(len(names))))
+			ui.Panel(os.Stderr, "renv", headline, panelEntries, cfg.UI.Border)
 			return nil
 		},
 	}
