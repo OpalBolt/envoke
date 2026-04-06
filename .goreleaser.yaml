@@ -1,4 +1,4 @@
-project_name: secure-handling-of-secrets
+project_name: envoke
 version: 2
 
 before:
@@ -6,30 +6,9 @@ before:
     - go mod tidy
 
 builds:
-  - id: renv
-    main: ./cmd/renv
-    binary: renv
-    env:
-      - CGO_ENABLED=0
-    ldflags:
-      - -s -w
-      - -X github.com/eficode/secure-handling-of-secrets/internal/version.Version={{.Version}}
-      - -X github.com/eficode/secure-handling-of-secrets/internal/version.Commit={{.ShortCommit}}
-      - -X github.com/eficode/secure-handling-of-secrets/internal/version.BuildDate={{.Date}}
-    goos:
-      - linux
-      - darwin
-      - windows
-    goarch:
-      - amd64
-      - arm64
-    ignore:
-      - goos: windows
-        goarch: arm64
-
-  - id: kctx
-    main: ./cmd/kctx
-    binary: kctx
+  - id: envoke
+    main: ./cmd/envoke
+    binary: envoke
     env:
       - CGO_ENABLED=0
     ldflags:

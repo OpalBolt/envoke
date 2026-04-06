@@ -29,25 +29,22 @@ Both tools render **colored, styled output** (via [charmbracelet/lipgloss](https
 
 ```bash
 # Ad-hoc (no config changes)
-nix profile install github:eficode/secure-handling-of-secrets        # both
-nix profile install github:eficode/secure-handling-of-secrets#renv
-nix profile install github:eficode/secure-handling-of-secrets#kctx
+nix profile install github:eficode/envoke
+nix profile install github:eficode/envoke#envoke
 ```
 
 Or as a flake input in your NixOS / home-manager config:
 
 ```nix
-inputs.secure-handling-of-secrets.url = "github:eficode/secure-handling-of-secrets";
+inputs.envoke.url = "github:eficode/envoke";
 # Then add to environment.systemPackages / home.packages:
-#   inputs.secure-handling-of-secrets.packages.${system}.renv
-#   inputs.secure-handling-of-secrets.packages.${system}.kctx
+#   inputs.envoke.packages.${system}.envoke
 ```
 
 ### Go
 
 ```bash
-go install github.com/eficode/secure-handling-of-secrets/cmd/renv@latest
-go install github.com/eficode/secure-handling-of-secrets/cmd/kctx@latest
+go install github.com/eficode/secure-handling-of-secrets/cmd/envoke@latest
 ```
 
 ## renv — remote env

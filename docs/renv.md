@@ -8,14 +8,17 @@ encrypted cache in `/dev/shm`.
 ## Installation
 
 ```bash
-go install github.com/eficode/secure-handling-of-secrets/cmd/renv@latest
+go install github.com/eficode/secure-handling-of-secrets/cmd/envoke@latest
 ```
 
 Or via Nix:
 
 ```bash
-nix profile install github:eficode/secure-handling-of-secrets#renv
+nix profile install github:eficode/envoke
 ```
+
+The `envoke shell-init` defines a `renv()` shell function, so all `renv` commands
+work as before after running `eval "$(envoke shell-init)"`.
 
 ## Shell setup (recommended)
 

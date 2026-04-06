@@ -1,7 +1,5 @@
 BINDIR  := bin
 ENVOKE  := $(BINDIR)/envoke
-RENV    := $(BINDIR)/renv
-KCTX    := $(BINDIR)/kctx
 GOFLAGS := -trimpath
 export CGO_ENABLED=0
 
@@ -24,21 +22,13 @@ LDFLAGS := -s -w \
 	-X $(PKG).Commit=$(COMMIT) \
 	-X $(PKG).BuildDate=$(DATE)
 
-.PHONY: build build-envoke build-renv build-kctx test test-race test-cover lint fmt tidy clean install release
+.PHONY: build build-envoke test test-race test-cover lint fmt tidy clean install release
 
-build: build-envoke build-renv build-kctx
+build: build-envoke
 
 build-envoke:
 	@mkdir -p $(BINDIR)
 	go build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(ENVOKE) ./cmd/envoke
-
-build-renv:
-	@mkdir -p $(BINDIR)
-	go build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(RENV) ./cmd/renv
-
-build-kctx:
-	@mkdir -p $(BINDIR)
-	go build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(KCTX) ./cmd/kctx
 
 test:
 	go test ./...
@@ -62,7 +52,7 @@ clean:
 	rm -rf $(BINDIR) coverage.out coverage.html
 
 install:
-	go install -ldflags "$(LDFLAGS)" ./cmd/envoke ./cmd/renv ./cmd/kctx
+	go install -ldflags "$(LDFLAGS)" ./cmd/envoke
 
 release:
 	goreleaser build --snapshot --clean

@@ -8,14 +8,17 @@ linger on disk.
 ## Installation
 
 ```bash
-go install github.com/eficode/secure-handling-of-secrets/cmd/kctx@latest
+go install github.com/eficode/secure-handling-of-secrets/cmd/envoke@latest
 ```
 
 Or via Nix:
 
 ```bash
-nix profile install github:eficode/secure-handling-of-secrets#kctx
+nix profile install github:eficode/envoke
 ```
+
+The `envoke shell-init` defines a `kctx()` shell function, so all `kctx` commands
+work as before after running `eval "$(envoke shell-init)"`.
 
 ## Shell setup (recommended)
 
