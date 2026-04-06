@@ -1,4 +1,5 @@
 BINDIR  := bin
+ENVOKE  := $(BINDIR)/envoke
 RENV    := $(BINDIR)/renv
 KCTX    := $(BINDIR)/kctx
 GOFLAGS := -trimpath
@@ -23,9 +24,13 @@ LDFLAGS := -s -w \
 	-X $(PKG).Commit=$(COMMIT) \
 	-X $(PKG).BuildDate=$(DATE)
 
-.PHONY: build build-renv build-kctx test test-race test-cover lint fmt tidy clean install release
+.PHONY: build build-envoke build-renv build-kctx test test-race test-cover lint fmt tidy clean install release
 
-build: build-renv build-kctx
+build: build-envoke build-renv build-kctx
+
+build-envoke:
+	@mkdir -p $(BINDIR)
+	go build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(ENVOKE) ./cmd/envoke
 
 build-renv:
 	@mkdir -p $(BINDIR)
@@ -57,7 +62,7 @@ clean:
 	rm -rf $(BINDIR) coverage.out coverage.html
 
 install:
-	go install -ldflags "$(LDFLAGS)" ./cmd/renv ./cmd/kctx
+	go install -ldflags "$(LDFLAGS)" ./cmd/envoke ./cmd/renv ./cmd/kctx
 
 release:
 	goreleaser build --snapshot --clean

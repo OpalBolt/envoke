@@ -65,11 +65,23 @@
           ];
         });
 
-        # Default package builds both binaries
+        envoke = pkgs.buildGoModule (common // {
+          pname = "envoke";
+          version = releaseVersion;
+          subPackages = [ "cmd/envoke" ];
+          ldflags = [
+            "-s" "-w"
+            "-X ${versionPkg}.Version=${nixVersion}"
+            "-X ${versionPkg}.Commit=${commitHash}"
+            "-X ${versionPkg}.BuildDate=${buildDate}"
+          ];
+        });
+
+        # Default package builds all three binaries
         all = pkgs.buildGoModule (common // {
           pname = "secure-handling-of-secrets";
           version = releaseVersion;
-          subPackages = [ "cmd/renv" "cmd/kctx" ];
+          subPackages = [ "cmd/envoke" "cmd/renv" "cmd/kctx" ];
           ldflags = [
             "-s" "-w"
             "-X ${versionPkg}.Version=${nixVersion}"
@@ -80,15 +92,16 @@
       in
       {
         packages = {
-          inherit renv kctx;
+          inherit renv kctx envoke;
           default = all;
         };
 
         apps = {
           renv = flake-utils.lib.mkApp { drv = renv; };
           kctx = flake-utils.lib.mkApp { drv = kctx; };
-          # nix run → renv
-          default = flake-utils.lib.mkApp { drv = renv; };
+          envoke = flake-utils.lib.mkApp { drv = envoke; };
+          # nix run → envoke
+          default = flake-utils.lib.mkApp { drv = envoke; };
 
           test = mkApp "test" [ pkgs.go ] ''
             export CGO_ENABLED=0
@@ -151,7 +164,7 @@
             gopls
             go-tools  # staticcheck
             goreleaser
-          ] ++ [ renv kctx ];
+          ] ++ [ envoke renv kctx ];
 
           shellHook = ''
             export CGO_ENABLED=0

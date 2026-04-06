@@ -108,6 +108,26 @@ type rawEntry struct {
 	Value string
 }
 
+// RawEntry is an exported pre-resolution key/value pair from a .env file.
+type RawEntry struct {
+	Key   string
+	Value string
+}
+
+// ParseRaw reads a .env file and returns the raw (unresolved) key-value pairs.
+// Useful when callers need to inspect or partition entries before resolution.
+func ParseRaw(path string) ([]RawEntry, error) {
+	entries, err := parseDotEnv(path)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]RawEntry, len(entries))
+	for i, e := range entries {
+		out[i] = RawEntry{Key: e.Key, Value: e.Value}
+	}
+	return out, nil
+}
+
 // parseDotEnv reads a .env file and returns raw (key, value) pairs.
 // Supports: KEY=value, KEY="value", KEY='value', export KEY=value
 // Comments (#) and blank lines are ignored.
