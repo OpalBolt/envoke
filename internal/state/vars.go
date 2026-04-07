@@ -1,4 +1,4 @@
-package secrets
+package state
 
 import (
 	"fmt"

@@ -7,13 +7,13 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/eficode/secure-handling-of-secrets/internal/secrets"
+	"github.com/eficode/secure-handling-of-secrets/internal/providers"
 	"gopkg.in/yaml.v3"
 )
 
 // ResolveYAML reads a YAML file, walks all scalar string values, resolves
 // any bw:// or vault:// references, and returns the resolved data structure.
-func ResolveYAML(path string, reg *secrets.Registry) (interface{}, error) {
+func ResolveYAML(path string, reg *providers.Registry) (interface{}, error) {
 	slog.Debug("reading YAML file", "path", path)
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -28,7 +28,7 @@ func ResolveYAML(path string, reg *secrets.Registry) (interface{}, error) {
 }
 
 // ResolveYAMLString resolves a YAML string.
-func ResolveYAMLString(yamlStr string, reg *secrets.Registry) (interface{}, error) {
+func ResolveYAMLString(yamlStr string, reg *providers.Registry) (interface{}, error) {
 	var doc interface{}
 	if err := yaml.Unmarshal([]byte(yamlStr), &doc); err != nil {
 		return nil, fmt.Errorf("parsing YAML: %w", err)
@@ -41,7 +41,7 @@ func ResolveYAMLString(yamlStr string, reg *secrets.Registry) (interface{}, erro
 }
 
 // walkAndResolve recursively walks a YAML value and resolves secret refs.
-func walkAndResolve(v interface{}, reg *secrets.Registry) (interface{}, error) {
+func walkAndResolve(v interface{}, reg *providers.Registry) (interface{}, error) {
 	switch val := v.(type) {
 	case map[string]interface{}:
 		for k, child := range val {
@@ -62,7 +62,7 @@ func walkAndResolve(v interface{}, reg *secrets.Registry) (interface{}, error) {
 		}
 		return val, nil
 	case string:
-		if secrets.IsSecretRef(val) {
+		if reg.IsSecretRef(val) {
 			slog.Debug("resolving YAML secret ref", "ref", val)
 			return reg.Resolve(val)
 		}

@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/eficode/secure-handling-of-secrets/internal/secrets"
+	"github.com/eficode/secure-handling-of-secrets/internal/providers"
 )
 
 // EnvEntry represents a single key-value pair from a .env file.
@@ -24,7 +24,7 @@ type EnvEntry struct {
 // The registry pre-warms on the first Resolve call per backend (e.g. BW unlock
 // and disk cache fill happen on the first bw:// reference encountered); subsequent
 // references to the same folder reuse the in-process session and cached data.
-func ResolveDotEnv(path string, reg *secrets.Registry) ([]EnvEntry, error) {
+func ResolveDotEnv(path string, reg *providers.Registry) ([]EnvEntry, error) {
 	slog.Debug("parsing .env file", "path", path)
 	lines, err := parseDotEnv(path)
 	if err != nil {
@@ -38,7 +38,7 @@ func ResolveDotEnv(path string, reg *secrets.Registry) ([]EnvEntry, error) {
 	refCount := 0
 	for _, e := range lines {
 		entry := EnvEntry{Key: e.Key, Value: e.Value}
-		if secrets.IsSecretRef(e.Value) {
+		if reg.IsSecretRef(e.Value) {
 			slog.Debug("resolving secret ref", "key", e.Key, "ref", e.Value)
 			val, err := reg.Resolve(e.Value)
 			if err != nil {

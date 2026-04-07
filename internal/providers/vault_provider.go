@@ -1,4 +1,8 @@
-package secrets
+package providers
+
+import (
+	vlt "github.com/eficode/secure-handling-of-secrets/internal/providers/vault"
+)
 
 // VaultProvider wraps VaultClient to implement the Provider interface.
 // URI parsing is handled here so that callers only see the generic Resolve(uri) method.
@@ -7,11 +11,11 @@ package secrets
 // Callers that use vault:// for kubeconfigs without a fragment should normalise
 // the URI before calling Resolve (e.g. append "#kubeconfig").
 type VaultProvider struct {
-	client *VaultClient
+	client *vlt.VaultClient
 }
 
 // NewVaultProvider creates a VaultProvider backed by the given VaultClient.
-func NewVaultProvider(client *VaultClient) *VaultProvider {
+func NewVaultProvider(client *vlt.VaultClient) *VaultProvider {
 	return &VaultProvider{client: client}
 }
 
@@ -20,7 +24,7 @@ func (p *VaultProvider) Schemes() []string { return []string{"vault"} }
 
 // Resolve parses the vault:// URI and delegates to the underlying VaultClient.
 func (p *VaultProvider) Resolve(uri string) (string, error) {
-	ref, err := ParseVaultRef(uri)
+	ref, err := vlt.ParseVaultRef(uri)
 	if err != nil {
 		return "", err
 	}
@@ -31,6 +35,6 @@ func (p *VaultProvider) Resolve(uri string) (string, error) {
 func (p *VaultProvider) Close() error { return nil }
 
 // Client returns the underlying VaultClient.
-func (p *VaultProvider) Client() *VaultClient {
+func (p *VaultProvider) Client() *vlt.VaultClient {
 	return p.client
 }

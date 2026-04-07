@@ -1,4 +1,4 @@
-package secrets
+package providers
 
 // Provider is the extension point for secret backends.
 // Each backend (Bitwarden, Vault, etc.) implements this interface and registers

@@ -1,4 +1,4 @@
-package secrets
+package providers
 
 import (
 	"fmt"
@@ -11,9 +11,9 @@ import (
 //
 // Usage:
 //
-//	reg := secrets.NewRegistry()
-//	reg.Register(secrets.NewBWProvider(bwClient))
-//	reg.Register(secrets.NewVaultProvider(vaultClient))
+//	reg := providers.NewRegistry()
+//	reg.Register(providers.NewBWProvider(bwClient))
+//	reg.Register(providers.NewVaultProvider(vaultClient))
 //	value, err := reg.Resolve("bw://folder/item")
 type Registry struct {
 	providers map[string]Provider // scheme → provider
@@ -30,7 +30,7 @@ func NewRegistry() *Registry {
 func (r *Registry) Register(p Provider) {
 	for _, scheme := range p.Schemes() {
 		if _, exists := r.providers[scheme]; exists {
-			panic(fmt.Sprintf("secrets: scheme %q already registered", scheme))
+			panic(fmt.Sprintf("providers: scheme %q already registered", scheme))
 		}
 		r.providers[scheme] = p
 	}
@@ -41,11 +41,11 @@ func (r *Registry) Register(p Provider) {
 func (r *Registry) Resolve(uri string) (string, error) {
 	scheme, ok := schemeOf(uri)
 	if !ok {
-		return "", fmt.Errorf("secrets: cannot determine scheme of URI %q", uri)
+		return "", fmt.Errorf("providers: cannot determine scheme of URI %q", uri)
 	}
 	p, ok := r.providers[scheme]
 	if !ok {
-		return "", fmt.Errorf("secrets: no provider registered for scheme %q (uri: %s)", scheme, uri)
+		return "", fmt.Errorf("providers: no provider registered for scheme %q (uri: %s)", scheme, uri)
 	}
 	return p.Resolve(uri)
 }
@@ -57,6 +57,16 @@ func (r *Registry) ProviderFor(scheme string) (Provider, bool) {
 	return p, ok
 }
 
+// IsSecretRef returns true if uri uses a scheme registered with this registry.
+func (r *Registry) IsSecretRef(uri string) bool {
+	scheme, ok := schemeOf(uri)
+	if !ok {
+		return false
+	}
+	_, ok = r.providers[scheme]
+	return ok
+}
+
 // LocalPassword returns the local cache encryption password from the Bitwarden
 // provider (if one is registered). This is needed by callers that store
 // kubeconfigs via kubeconfig.NamedStore.Put, which requires the same password
@@ -64,16 +74,18 @@ func (r *Registry) ProviderFor(scheme string) (Provider, bool) {
 //
 // Returns "" if no BW provider is registered or the password has not yet been
 // set (i.e. no BW resolve has occurred yet).
+//
+// Uses an anonymous interface assertion to avoid importing the bitwarden sub-package
+// (which would create a circular dependency since bw_provider.go already imports it).
 func (r *Registry) LocalPassword() string {
 	p, ok := r.providers["bw"]
 	if !ok {
 		return ""
 	}
-	bwp, ok := p.(*BWProvider)
-	if !ok {
-		return ""
+	if lpp, ok := p.(interface{ LocalPassword() string }); ok {
+		return lpp.LocalPassword()
 	}
-	return bwp.LocalPassword()
+	return ""
 }
 
 // Close calls Close on every registered provider.

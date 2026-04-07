@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/eficode/secure-handling-of-secrets/internal/secrets"
+	"github.com/eficode/secure-handling-of-secrets/internal/providers"
 )
 
 func TestParseDotEnv(t *testing.T) {
@@ -68,7 +68,7 @@ KEY2=world
 	}
 
 	// No secret refs — registry is never invoked.
-	entries, err := ResolveDotEnv(path, secrets.NewRegistry())
+	entries, err := ResolveDotEnv(path, providers.NewRegistry())
 	if err != nil {
 		t.Fatalf("ResolveDotEnv: %v", err)
 	}
@@ -84,7 +84,7 @@ KEY2=world
 }
 
 func TestResolveDotEnv_NonExistentFile(t *testing.T) {
-	_, err := ResolveDotEnv("/nonexistent/.env", secrets.NewRegistry())
+	_, err := ResolveDotEnv("/nonexistent/.env", providers.NewRegistry())
 	if err == nil {
 		t.Fatal("expected error for non-existent file")
 	}

@@ -1,10 +1,10 @@
-package secrets_test
+package providers_test
 
 import (
 	"errors"
 	"testing"
 
-	"github.com/eficode/secure-handling-of-secrets/internal/secrets"
+	"github.com/eficode/secure-handling-of-secrets/internal/providers"
 )
 
 // mockProvider is a test double that implements Provider.
@@ -36,7 +36,7 @@ func (m *mockProvider) Close() error {
 // ── Registry tests ────────────────────────────────────────────────────────────
 
 func TestRegistry_RoutesScheme(t *testing.T) {
-	reg := secrets.NewRegistry()
+	reg := providers.NewRegistry()
 	mp := newMockProvider([]string{"fake"}, map[string]string{
 		"fake://item": "secret-value",
 	})
@@ -52,7 +52,7 @@ func TestRegistry_RoutesScheme(t *testing.T) {
 }
 
 func TestRegistry_MultipleProviders(t *testing.T) {
-	reg := secrets.NewRegistry()
+	reg := providers.NewRegistry()
 	reg.Register(newMockProvider([]string{"alpha"}, map[string]string{"alpha://a": "A"}))
 	reg.Register(newMockProvider([]string{"beta"}, map[string]string{"beta://b": "B"}))
 
@@ -71,7 +71,7 @@ func TestRegistry_MultipleProviders(t *testing.T) {
 }
 
 func TestRegistry_UnknownScheme(t *testing.T) {
-	reg := secrets.NewRegistry()
+	reg := providers.NewRegistry()
 	_, err := reg.Resolve("unknown://item")
 	if err == nil {
 		t.Fatal("expected error for unknown scheme")
@@ -79,7 +79,7 @@ func TestRegistry_UnknownScheme(t *testing.T) {
 }
 
 func TestRegistry_MissingScheme(t *testing.T) {
-	reg := secrets.NewRegistry()
+	reg := providers.NewRegistry()
 	_, err := reg.Resolve("no-scheme-here")
 	if err == nil {
 		t.Fatal("expected error for URI without scheme")
@@ -92,13 +92,13 @@ func TestRegistry_DuplicateScheme_Panics(t *testing.T) {
 			t.Fatal("expected panic on duplicate scheme registration")
 		}
 	}()
-	reg := secrets.NewRegistry()
+	reg := providers.NewRegistry()
 	reg.Register(newMockProvider([]string{"dup"}, nil))
 	reg.Register(newMockProvider([]string{"dup"}, nil)) // should panic
 }
 
 func TestRegistry_Close_CallsAllProviders(t *testing.T) {
-	reg := secrets.NewRegistry()
+	reg := providers.NewRegistry()
 	a := newMockProvider([]string{"aa"}, nil)
 	b := newMockProvider([]string{"bb"}, nil)
 	reg.Register(a)
@@ -116,7 +116,7 @@ func TestRegistry_Close_CallsAllProviders(t *testing.T) {
 }
 
 func TestRegistry_ProviderFor(t *testing.T) {
-	reg := secrets.NewRegistry()
+	reg := providers.NewRegistry()
 	mp := newMockProvider([]string{"xyz"}, nil)
 	reg.Register(mp)
 
@@ -135,8 +135,31 @@ func TestRegistry_ProviderFor(t *testing.T) {
 }
 
 func TestRegistry_LocalPassword_NoBWProvider(t *testing.T) {
-	reg := secrets.NewRegistry()
+	reg := providers.NewRegistry()
 	if got := reg.LocalPassword(); got != "" {
 		t.Errorf("LocalPassword() = %q, want empty string when no BW provider", got)
+	}
+}
+
+func TestRegistry_IsSecretRef(t *testing.T) {
+	reg := providers.NewRegistry()
+	reg.Register(newMockProvider([]string{"bw"}, nil))
+	reg.Register(newMockProvider([]string{"vault"}, nil))
+
+	tests := []struct {
+		input string
+		want  bool
+	}{
+		{"bw://folder/item", true},
+		{"vault://path#field", true},
+		{"plaintext", false},
+		{"https://example.com", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		got := reg.IsSecretRef(tt.input)
+		if got != tt.want {
+			t.Errorf("IsSecretRef(%q) = %v, want %v", tt.input, got, tt.want)
+		}
 	}
 }

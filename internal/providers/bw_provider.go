@@ -1,4 +1,8 @@
-package secrets
+package providers
+
+import (
+	bw "github.com/eficode/secure-handling-of-secrets/internal/providers/bitwarden"
+)
 
 // BWProvider wraps BWClient to implement the Provider interface.
 // URI parsing is handled here so that callers only see the generic Resolve(uri) method.
@@ -7,11 +11,11 @@ package secrets
 // store kubeconfigs via kubeconfig.NamedStore.Put using the same encryption password
 // as the BW cache.
 type BWProvider struct {
-	client *BWClient
+	client *bw.BWClient
 }
 
 // NewBWProvider creates a BWProvider backed by the given BWClient.
-func NewBWProvider(client *BWClient) *BWProvider {
+func NewBWProvider(client *bw.BWClient) *BWProvider {
 	return &BWProvider{client: client}
 }
 
@@ -20,7 +24,7 @@ func (p *BWProvider) Schemes() []string { return []string{"bw"} }
 
 // Resolve parses the bw:// URI and delegates to the underlying BWClient.
 func (p *BWProvider) Resolve(uri string) (string, error) {
-	ref, err := ParseBWRef(uri)
+	ref, err := bw.ParseBWRef(uri)
 	if err != nil {
 		return "", err
 	}
@@ -42,6 +46,6 @@ func (p *BWProvider) LocalPassword() string {
 // Client returns the underlying BWClient.
 // Use this only when you need access to BW-specific operations
 // (e.g. FolderItems) that are not part of the Provider interface.
-func (p *BWProvider) Client() *BWClient {
+func (p *BWProvider) Client() *bw.BWClient {
 	return p.client
 }

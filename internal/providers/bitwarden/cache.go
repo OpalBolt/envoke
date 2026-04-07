@@ -1,4 +1,4 @@
-package secrets
+package bitwarden
 
 import (
 	"crypto/aes"

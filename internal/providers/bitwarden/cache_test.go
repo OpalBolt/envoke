@@ -1,14 +1,16 @@
-package secrets
+package bitwarden_test
 
 import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/eficode/secure-handling-of-secrets/internal/providers/bitwarden"
 )
 
 func TestCacheRoundtrip(t *testing.T) {
 	dir := t.TempDir()
-	c := &Cache{Dir: dir, MaxAge: 8 * time.Hour}
+	c := &bitwarden.Cache{Dir: dir, MaxAge: 8 * time.Hour}
 
 	data := []byte(`[{"id":"abc","name":"myitem","login":{"password":"s3cr3t"}}]`)
 	err := c.Put("1000", "acct1", "myfolder", "masterpass", data)
@@ -27,7 +29,7 @@ func TestCacheRoundtrip(t *testing.T) {
 
 func TestCacheWrongPassword(t *testing.T) {
 	dir := t.TempDir()
-	c := &Cache{Dir: dir, MaxAge: 8 * time.Hour}
+	c := &bitwarden.Cache{Dir: dir, MaxAge: 8 * time.Hour}
 
 	data := []byte(`[{"id":"abc"}]`)
 	if err := c.Put("1000", "acct1", "myfolder", "correctpass", data); err != nil {
@@ -42,7 +44,7 @@ func TestCacheWrongPassword(t *testing.T) {
 
 func TestCacheExpired(t *testing.T) {
 	dir := t.TempDir()
-	c := &Cache{Dir: dir, MaxAge: -1 * time.Second} // always expired
+	c := &bitwarden.Cache{Dir: dir, MaxAge: -1 * time.Second} // always expired
 
 	data := []byte(`[{"id":"abc"}]`)
 	if err := c.Put("1000", "acct1", "myfolder", "pass", data); err != nil {
@@ -60,7 +62,7 @@ func TestCacheExpired(t *testing.T) {
 
 func TestCacheMiss(t *testing.T) {
 	dir := t.TempDir()
-	c := &Cache{Dir: dir, MaxAge: 8 * time.Hour}
+	c := &bitwarden.Cache{Dir: dir, MaxAge: 8 * time.Hour}
 
 	got, err := c.Get("1000", "acct1", "nonexistent", "pass")
 	if err != nil {
@@ -73,7 +75,7 @@ func TestCacheMiss(t *testing.T) {
 
 func TestCacheClear(t *testing.T) {
 	dir := t.TempDir()
-	c := &Cache{Dir: dir, MaxAge: 8 * time.Hour}
+	c := &bitwarden.Cache{Dir: dir, MaxAge: 8 * time.Hour}
 
 	data := []byte(`[{"id":"abc"}]`)
 	c.Put("1000", "acct1", "folder1", "pass", data)
@@ -99,7 +101,7 @@ func TestCacheFilePerms(t *testing.T) {
 		t.Skip("skip file perm check in CI")
 	}
 	dir := t.TempDir()
-	c := &Cache{Dir: dir, MaxAge: 8 * time.Hour}
+	c := &bitwarden.Cache{Dir: dir, MaxAge: 8 * time.Hour}
 
 	data := []byte(`[{"id":"abc"}]`)
 	if err := c.Put("1000", "acct1", "myfolder", "pass", data); err != nil {
