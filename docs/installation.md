@@ -4,7 +4,7 @@
 
 - **Bitwarden CLI** (`bw`) — required for `bw://` references ([install guide](https://bitwarden.com/help/cli/))
 - **Vault CLI** (`vault`) — required for `vault://` references ([install guide](https://developer.hashicorp.com/vault/docs/install))
-- **kubectl** — required for `kctx` kubeconfig switching
+- **kubectl** — optional; only needed to show the current context in `kctx status` output
 
 ## Install with Go
 

@@ -229,7 +229,7 @@ KEY=bw://collection:name/item           # item in a named collection
 ### Vault reference format
 
 ```bash
-KEY=vault://secret/path#field           # KV v2; field fragment is required
+KEY=vault://secret/path#field           # KV v2; #field fragment is required for env vars
 ```
 
 `VAULT_ADDR` and `VAULT_TOKEN` must be set in the environment.
@@ -238,7 +238,8 @@ KEY=vault://secret/path#field           # KV v2; field fragment is required
 
 ```bash
 KCTX_NAME=bw://folder/item              # loaded into kctx named store as "name"
-KCTX_NAME=vault://secret/path#field     # same, from Vault
+KCTX_NAME=vault://secret/path#field     # same, from Vault — #field is optional; defaults to "kubeconfig"
+KCTX_NAME=vault://secret/kubeconfig/staging  # equivalent to vault://...#kubeconfig
 ```
 
 The `KCTX_` prefix is stripped and the remainder is lowercased to form the store name: `KCTX_PROD` → `prod`.

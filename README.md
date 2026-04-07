@@ -1,6 +1,6 @@
 # envoke
 
-**envoke** *(env + invoke)* resolves secrets from Bitwarden and HashiCorp Vault into your shell environment and manages secure named contexts — all encrypted in RAM.
+**envoke** *(env + invoke)* resolves secrets from Bitwarden and HashiCorp Vault into your shell environment and manages secure named contexts using an encrypted on-disk cache in `/dev/shm` (RAM-backed when available), with `/tmp` fallback.
 
 ```bash
 # .env
@@ -11,7 +11,7 @@ KCTX_PROD=bw://kubernetes/prod-cluster
 
 ```bash
 eval "$(envoke resolve .env)"   # load secrets + kubeconfigs
-kctx prod                       # switch to prod kubeconfig
+eval "$(envoke kctx prod)"      # switch to prod kubeconfig
 envoke unload                   # clear everything
 ```
 
@@ -23,7 +23,7 @@ envoke unload                   # clear everything
 | `envoke kctx` | *Keyless ConTeXt* | Loads and switches named contexts (kubeconfigs, etc.) from Bitwarden/Vault |
 | `envoke resolve` | | Runs both in a single pass |
 
-Secrets and kubeconfigs are cached in `/dev/shm` (RAM-backed tmpfs), encrypted with AES-256. The cache is cleared on shell exit, system lock, or sleep.
+Secrets and kubeconfigs are cached in `/dev/shm` (RAM-backed tmpfs), encrypted with AES-256. The cache is cleared on shell exit or sleep. On system lock/unlock, env vars are unloaded and managed kubeconfig tempfiles are removed.
 
 ## Documentation
 

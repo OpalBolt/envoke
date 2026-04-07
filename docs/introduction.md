@@ -15,10 +15,10 @@ You can use `envoke resolve` to handle both in one pass, or call `envoke renv` /
 
 Secrets should never sit in plaintext files, shell history, or process arguments. envoke solves this by:
 
-- Storing fetched secrets **only in encrypted RAM** (`/dev/shm`)
+- Storing fetched secrets in an **encrypted cache** — preferring `/dev/shm` (RAM-backed tmpfs), with `/tmp` fallback
 - Prompting for passwords **interactively** — never reading them from args or plaintext files
 - Passing Bitwarden passwords via **stdin**, not CLI arguments
-- **Clearing the cache** automatically on shell exit, screen lock, or system sleep
+- **Clearing the cache** automatically on shell exit or system sleep; **unloading env vars and kubeconfig tempfiles** on screen lock
 - **Tracking loaded variables** so they can be unset cleanly with `envoke unload`
 
 ## Core concepts
@@ -49,7 +49,8 @@ bw://collection:name/item           # item in a collection
 ### Vault URI format
 
 ```
-vault://path#field                  # KV v2 — field fragment is required
+vault://path#field                  # KV v2 — #field fragment is required for env var refs
+vault://path                        # for KCTX_ kubeconfig refs, #field defaults to "kubeconfig"
 ```
 
 ### Kubeconfig directives
@@ -58,7 +59,7 @@ Lines prefixed with `KCTX_` in a `.env` file are treated as named context source
 
 ```bash
 KCTX_PROD=bw://kubernetes/prod-cluster
-KCTX_STAGING=vault://secret/kubeconfig/staging#kubeconfig
+KCTX_STAGING=vault://secret/kubeconfig/staging   # #kubeconfig is the default field
 ```
 
 `envoke resolve` will load each item into a named local store instead of exporting it as a variable. You then switch between them with `kctx prod` / `kctx staging`.
@@ -67,7 +68,7 @@ KCTX_STAGING=vault://secret/kubeconfig/staging#kubeconfig
 
 ### Encrypted cache
 
-After fetching secrets from Bitwarden, the result is cached in `/dev/shm` (RAM-backed, never written to disk) using AES-256-CBC with a key derived from your local password. This means:
+After fetching secrets from Bitwarden, the result is cached using AES-256-CBC with a key derived from your local password. The cache is written to `/dev/shm` (RAM-backed tmpfs when available) and falls back to `/tmp` if `/dev/shm` is not writable. This means:
 
 - Subsequent resolves within the TTL (default: 8 hours) only prompt for your local password
 - Bitwarden is not contacted again until the cache expires or is cleared

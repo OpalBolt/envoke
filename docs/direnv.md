@@ -6,7 +6,7 @@
 
 envoke detects direnv automatically. When `DIRENV_DIR` or `DIRENV_FILE` is set in the environment, `envoke resolve` skips emitting its own EXIT trap, since direnv handles cleanup when you leave the directory.
 
-> **Note:** In direnv context, shell functions (defined by `envoke shell-init`) are not available. Only the `envoke` binary is called directly.
+> **Note:** During `.envrc` evaluation, shell functions from `envoke shell-init` are not available, so your direnv helpers should call the `envoke` binary directly. After direnv has loaded the environment, those shell functions are still available in your interactive shell if you added `envoke shell-init` to your shell config.
 
 ## Setup
 
@@ -75,7 +75,7 @@ use_renv() {
 }
 ```
 
-Likewise, a `use_kctx` helper for loading kubeconfigs only:
+Likewise, a `use_kctx` helper that skips `renv`-only resolution and focuses on kubeconfig directives (note: it still processes the full `.env` file via `envoke resolve`, which will also export any regular env vars present):
 
 ```bash
 use_kctx() {
