@@ -10,7 +10,6 @@ import (
 	"github.com/eficode/secure-handling-of-secrets/internal/secrets"
 )
 
-
 // EnvEntry represents a single key-value pair from a .env file.
 type EnvEntry struct {
 	Key    string

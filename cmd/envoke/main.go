@@ -98,6 +98,44 @@ entries that load kubeconfigs into the local kctx named store.`,
 	return root
 }
 
+// newRegistry builds a secrets Registry with BW and Vault providers.
+// noCache disables the disk cache; cfg supplies timeouts and cache settings.
+// Use a single registry across the entire resolve operation so that LocalPassword
+// and the BW session are shared and users are prompted at most once per invocation.
+func newRegistry(noCache bool, cfg *config.Config) *secrets.Registry {
+	cache := secrets.NewCache()
+	cache.MaxAge = cfg.CacheMaxAge()
+	if noCache {
+		cache.Disabled = true
+	}
+	bwClient := &secrets.BWClient{
+		Cache:   cache,
+		Timeout: cfg.BitwardenTimeout(),
+	}
+	vaultClient := &secrets.VaultClient{Timeout: cfg.VaultTimeout()}
+
+	reg := secrets.NewRegistry()
+	reg.Register(secrets.NewBWProvider(bwClient))
+	reg.Register(secrets.NewVaultProvider(vaultClient))
+	return reg
+}
+
+// normalizeKubeconfigURI normalises a kubeconfig source URI so the Vault provider
+// can handle it. vault:// URIs without a #field fragment default to "#kubeconfig".
+// Bare paths (no scheme) are treated as vault:// KV paths.
+func normalizeKubeconfigURI(source string) string {
+	if strings.HasPrefix(source, "bw://") {
+		return source
+	}
+	if strings.HasPrefix(source, "vault://") {
+		if !strings.Contains(source, "#") {
+			return source + "#kubeconfig"
+		}
+		return source
+	}
+	return "vault://" + source + "#kubeconfig"
+}
+
 // resolveCmd is the combined resolver: handles both env secrets (bw://, vault://)
 // and kubeconfig directives (KCTX_<name>=bw://... or KCTX_<name>=vault://...).
 //
@@ -166,21 +204,12 @@ The output must be evaluated by your shell:
 				}
 			}
 
-			// Create ONE shared cache+clients for the entire resolve operation.
+			// Create ONE shared registry for the entire resolve operation.
 			// This ensures LocalPassword (and BW session) are prompted only once,
 			// regardless of how many KCTX_ and bw:// entries the file contains.
-			sharedCache := secrets.NewCache()
-			sharedCache.MaxAge = cfg.CacheMaxAge()
-			if *noCache {
-				sharedCache.Disabled = true
-			}
-			sharedBW := &secrets.BWClient{
-				Cache:   sharedCache,
-				Timeout: cfg.BitwardenTimeout(),
-			}
-			sharedVault := &secrets.VaultClient{Timeout: cfg.VaultTimeout()}
+			sharedReg := newRegistry(*noCache, cfg)
 
-			// Handle kubeconfig directives using the shared clients.
+			// Handle kubeconfig directives using the shared registry.
 			var kctxPanelEntries []ui.PanelEntry
 			if len(kctxEntries) > 0 {
 				uid := fmt.Sprintf("%d", os.Getuid())
@@ -188,7 +217,7 @@ The output must be evaluated by your shell:
 				var kctxNames []string
 				for _, e := range kctxEntries {
 					name := kctxNameFromKey(e.Key)
-					if err := fetchKubeconfigForDirective(sharedBW, sharedVault, name, e.Value, uid, store); err != nil {
+					if err := fetchKubeconfigForDirective(sharedReg, name, e.Value, uid, store); err != nil {
 						if errors.Is(err, secrets.ErrInvalidPassword) {
 							return err
 						}
@@ -205,9 +234,10 @@ The output must be evaluated by your shell:
 				_ = kubeconfig.SaveTrackedNames(uid, kctxNames)
 			}
 
-			// Handle env secret entries using the same shared clients.
-			// Because sharedBW already has LocalPassword set (from the kctx step above,
-			// if any), ensureLocalPassword() returns immediately without re-prompting.
+			// Handle env secret entries using the same shared registry.
+			// Because sharedReg's BWProvider already has LocalPassword set (from the
+			// kctx step above, if any), ensureLocalPassword() returns immediately
+			// without re-prompting.
 			var resolvedEntries []env.EnvEntry
 			if len(envEntries) > 0 {
 				tmpFile, err := writeTempEnv(envEntries)
@@ -216,7 +246,7 @@ The output must be evaluated by your shell:
 				}
 				defer os.Remove(tmpFile)
 
-				resolvedEntries, err = env.ResolveDotEnv(tmpFile, sharedBW, sharedVault)
+				resolvedEntries, err = env.ResolveDotEnv(tmpFile, sharedReg)
 				if err != nil {
 					if errors.Is(err, secrets.ErrInvalidPassword) {
 						return err
@@ -291,62 +321,28 @@ func kctxNameFromKey(key string) string {
 }
 
 // fetchKubeconfigForDirective fetches kubeconfig bytes from a bw:// or vault:// source,
-// stores them in the named store, and ensures the shared bwClient has a LocalPassword set.
-// Using a shared bwClient means LocalPassword is prompted at most once per process.
-func fetchKubeconfigForDirective(bwClient *secrets.BWClient, vaultClient *secrets.VaultClient, name, source, uid string, store *kubeconfig.NamedStore) error {
-	var kubeconfigData []byte
-
-	if strings.HasPrefix(source, "bw://") {
-		ref, err := secrets.ParseBWRef(source)
-		if err != nil {
-			return err
-		}
-		val, err := bwClient.Resolve(ref)
-		if err != nil {
-			return err
-		}
-		kubeconfigData = []byte(val)
-	} else {
-		// vault:// path
-		var vaultRef secrets.VaultRef
-		if strings.HasPrefix(source, "vault://") {
-			if strings.Contains(source, "#") {
-				ref, err := secrets.ParseVaultRef(source)
-				if err != nil {
-					return err
-				}
-				if ref.Field == "" {
-					ref.Field = "kubeconfig"
-				}
-				vaultRef = ref
-			} else {
-				vaultRef = secrets.VaultRef{
-					Path:  strings.TrimPrefix(source, "vault://"),
-					Field: "kubeconfig",
-				}
-			}
-		} else {
-			vaultRef = secrets.VaultRef{Path: source, Field: "kubeconfig"}
-		}
-		val, err := vaultClient.Resolve(vaultRef)
-		if err != nil {
-			return err
-		}
-		kubeconfigData = []byte(val)
+// stores them in the named store using the registry's shared local password.
+// Using a shared registry means LocalPassword is prompted at most once per process.
+func fetchKubeconfigForDirective(reg *secrets.Registry, name, source, uid string, store *kubeconfig.NamedStore) error {
+	uri := normalizeKubeconfigURI(source)
+	val, err := reg.Resolve(uri)
+	if err != nil {
+		return err
 	}
+	kubeconfigData := []byte(val)
 
-	// Ensure LocalPassword is set before calling store.Put, regardless of
-	// whether the cache is enabled. When --no-cache is set, bwClient.Resolve
-	// skips ensureLocalPassword, so LocalPassword may still be empty here.
-	if bwClient.LocalPassword == "" {
+	// Prefer the LocalPassword already established by the BW provider (set as a
+	// side-effect of Resolve). Fall back to a fresh prompt when Vault was used.
+	localPassword := reg.LocalPassword()
+	if localPassword == "" {
 		lp, err := secrets.ReadLocalPassword()
 		if err != nil {
 			return err
 		}
-		bwClient.LocalPassword = lp
+		localPassword = lp
 	}
 
-	return store.Put(uid, name, bwClient.LocalPassword, kubeconfigData)
+	return store.Put(uid, name, localPassword, kubeconfigData)
 }
 
 // writeTempEnv writes env entries to a temp .env file for processing by ResolveDotEnv.
