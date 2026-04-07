@@ -71,6 +71,27 @@ func NewRootCmd() *cobra.Command {
 	return root
 }
 
+// NewSubCmd returns the kctx subcommand tree for embedding under another root (e.g. envoke).
+// Unlike NewRootCmd, it does not register persistent flags (those are inherited from the parent)
+// and does not install its own PersistentPreRunE (the parent's runs instead).
+// cfg is a pointer owned by the parent, populated before any subcommand runs.
+func NewSubCmd(cfg *config.Config) *cobra.Command {
+	root := &cobra.Command{
+		Use:   "kctx",
+		Short: "Ephemeral kubeconfig switcher via Vault or Bitwarden",
+	}
+	root.AddCommand(
+		loadCmd(cfg),
+		switchCmd(cfg),
+		unloadCmd(cfg),
+		statusCmd(),
+		clearCacheCmd(),
+		shellInitCmd(),
+		watchCmd(),
+	)
+	return root
+}
+
 func loadCmd(cfg *config.Config) *cobra.Command {
 	return &cobra.Command{
 		Use:   "load <name> <bw://item|vault-path>",

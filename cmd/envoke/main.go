@@ -77,8 +77,12 @@ entries that load kubeconfigs into the local kctx named store.`,
 	root.SetVersionTemplate("{{.Name}} {{.Version}}\n")
 
 	// Embed renv and kctx command trees as subcommands.
-	renvRoot := intrenv.NewRootCmd()
-	kctxRoot := intkctx.NewRootCmd()
+	// Use NewSubCmd (not NewRootCmd) so the sub-trees do not re-register persistent
+	// flags that are already defined on the envoke root — which would cause collisions
+	// via Cobra's inherited persistent-flag merging.  cfg and noCache are populated by
+	// envoke's own PersistentPreRunE before any subcommand's RunE executes.
+	renvRoot := intrenv.NewSubCmd(&noCache, &cfg)
+	kctxRoot := intkctx.NewSubCmd(&cfg)
 
 	root.AddCommand(
 		renvRoot,
@@ -289,7 +293,6 @@ func fetchKubeconfigForDirective(bwClient *secrets.BWClient, vaultClient *secret
 		if err != nil {
 			return err
 		}
-		// bwClient.LocalPassword is now set by Resolve (ensureLocalPassword was called).
 		kubeconfigData = []byte(val)
 	} else {
 		// vault:// path
@@ -317,16 +320,18 @@ func fetchKubeconfigForDirective(bwClient *secrets.BWClient, vaultClient *secret
 		if err != nil {
 			return err
 		}
-		// For vault sources, ensure the shared bwClient has a LocalPassword so store.Put works.
-		// If a prior BW operation already set it, this is a no-op.
-		if bwClient.LocalPassword == "" {
-			lp, err := secrets.ReadLocalPassword()
-			if err != nil {
-				return err
-			}
-			bwClient.LocalPassword = lp
-		}
 		kubeconfigData = []byte(val)
+	}
+
+	// Ensure LocalPassword is set before calling store.Put, regardless of
+	// whether the cache is enabled. When --no-cache is set, bwClient.Resolve
+	// skips ensureLocalPassword, so LocalPassword may still be empty here.
+	if bwClient.LocalPassword == "" {
+		lp, err := secrets.ReadLocalPassword()
+		if err != nil {
+			return err
+		}
+		bwClient.LocalPassword = lp
 	}
 
 	return store.Put(uid, name, bwClient.LocalPassword, kubeconfigData)
@@ -595,10 +600,11 @@ kctx() {
 envoke() {
   case "$1" in
     resolve)
-      # Help/version: print directly, do not eval.
-      case "${2:-}" in
-        --help|-h|--version) command envoke resolve "${@:2}"; return ;;
-      esac
+      # Help/version: print directly, do not eval — scan all args.
+      local _a
+      for _a in "${@:2}"; do
+        case "$_a" in --help|-h|--version) command envoke resolve "${@:2}"; return ;; esac
+      done
       # Capture output and exit code before eval so failures propagate correctly.
       local _envoke_out _envoke_exit
       _envoke_out="$(command envoke resolve "${@:2}")"
@@ -609,10 +615,11 @@ envoke() {
       eval "$(printf '%s\n' "$_envoke_out" | grep -v '^trap ')"
       ;;
     unload)
-      # Help/version: print directly, do not eval.
-      case "${2:-}" in
-        --help|-h|--version) command envoke unload "${@:2}"; return ;;
-      esac
+      # Help/version: print directly, do not eval — scan all args.
+      local _a
+      for _a in "${@:2}"; do
+        case "$_a" in --help|-h|--version) command envoke unload "${@:2}"; return ;; esac
+      done
       # Capture output and exit code before eval so failures propagate correctly.
       local _envoke_out _envoke_exit
       _envoke_out="$(command envoke unload)"

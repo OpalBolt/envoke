@@ -73,7 +73,7 @@ renv unload         # unset them when done
 `renv resolve` prints a styled panel to **stderr** showing each variable and its source:
 
 ```
-╭─ renv: loaded .env ────────-─────────────────╮
+╭─ renv: loaded .env ──────────────────────────╮
 │  DB_PASS   bw://prod/database/password       │
 │  API_KEY   vault://secret/myapp#api_key      │
 ╰──────────────────────────────────────────────╯

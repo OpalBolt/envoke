@@ -85,6 +85,28 @@ func NewRootCmd() *cobra.Command {
 	return root
 }
 
+// NewSubCmd returns the renv subcommand tree for embedding under another root (e.g. envoke).
+// Unlike NewRootCmd, it does not register persistent flags (those are inherited from the parent)
+// and does not install its own PersistentPreRunE (the parent's runs instead).
+// noCache and cfg are pointers owned by the parent, populated before any subcommand runs.
+func NewSubCmd(noCache *bool, cfg *config.Config) *cobra.Command {
+	root := &cobra.Command{
+		Use:   "renv",
+		Short: "Resolve secret references in .env and YAML files",
+	}
+	root.AddCommand(
+		resolveCmd(noCache, cfg),
+		execCmd(noCache, cfg),
+		shellInitCmd(),
+		yamlCmd(cfg),
+		clearCacheCmd(),
+		statusCmd(),
+		unloadCmd(cfg),
+		watchCmd(),
+	)
+	return root
+}
+
 func newClients(noCache bool, cfg *config.Config) (*secrets.Cache, *secrets.BWClient, *secrets.VaultClient) {
 	cache := secrets.NewCache()
 	cache.MaxAge = cfg.CacheMaxAge()
