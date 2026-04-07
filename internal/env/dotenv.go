@@ -10,6 +10,7 @@ import (
 	"github.com/eficode/secure-handling-of-secrets/internal/secrets"
 )
 
+
 // EnvEntry represents a single key-value pair from a .env file.
 type EnvEntry struct {
 	Key    string
@@ -18,9 +19,13 @@ type EnvEntry struct {
 	Source string // original reference URI (e.g. "bw://folder/item" or "vault://path#field"); empty for literals
 }
 
-// ResolveDotEnv reads a .env file, batch-fetches needed BW folders,
-// and returns resolved entries.
-func ResolveDotEnv(path string, bwClient *secrets.BWClient, vaultClient *secrets.VaultClient) ([]EnvEntry, error) {
+// ResolveDotEnv reads a .env file, resolves all secret references via the
+// provided Registry, and returns the resolved entries.
+//
+// The registry pre-warms on the first Resolve call per backend (e.g. BW unlock
+// and disk cache fill happen on the first bw:// reference encountered); subsequent
+// references to the same folder reuse the in-process session and cached data.
+func ResolveDotEnv(path string, reg *secrets.Registry) ([]EnvEntry, error) {
 	slog.Debug("parsing .env file", "path", path)
 	lines, err := parseDotEnv(path)
 	if err != nil {
@@ -28,47 +33,15 @@ func ResolveDotEnv(path string, bwClient *secrets.BWClient, vaultClient *secrets
 	}
 	slog.Debug("parsed .env file", "path", path, "entries", len(lines))
 
-	// Pass 1: collect unique bw:// folder/collection names for batch pre-fetch
-	bwFolders := map[string]bool{}
-	bwCollections := map[string]bool{}
-	for _, e := range lines {
-		if strings.HasPrefix(e.Value, "bw://") {
-			ref, err := secrets.ParseBWRef(e.Value)
-			if err == nil {
-				if ref.IsCollection {
-					bwCollections[ref.Folder] = true
-				} else {
-					bwFolders[ref.Folder] = true
-				}
-			}
-		}
-	}
+	defer reg.Close() //nolint:errcheck // best-effort session cleanup
 
-	// Pre-fetch all BW folders (batch fetch — one unlock)
-	for folder := range bwFolders {
-		slog.Debug("pre-fetching BW folder", "folder", folder)
-		if _, err := bwClient.FolderItems(folder); err != nil {
-			return nil, fmt.Errorf("pre-fetching BW folder %q: %w", folder, err)
-		}
-	}
-	// Pre-fetch all BW collections
-	for col := range bwCollections {
-		slog.Debug("pre-fetching BW collection", "collection", col)
-		if _, err := bwClient.CollectionItems(col); err != nil {
-			return nil, fmt.Errorf("pre-fetching BW collection %q: %w", col, err)
-		}
-	}
-	// Zero BW session token once all fetches are done
-	defer bwClient.Close()
-
-	// Pass 2: resolve all entries
 	resolved := make([]EnvEntry, 0, len(lines))
 	refCount := 0
 	for _, e := range lines {
 		entry := EnvEntry{Key: e.Key, Value: e.Value}
 		if secrets.IsSecretRef(e.Value) {
 			slog.Debug("resolving secret ref", "key", e.Key, "ref", e.Value)
-			val, err := resolveRef(e.Value, bwClient, vaultClient)
+			val, err := reg.Resolve(e.Value)
 			if err != nil {
 				return nil, fmt.Errorf("resolving %s=%q: %w", e.Key, e.Value, err)
 			}
@@ -81,25 +54,6 @@ func ResolveDotEnv(path string, bwClient *secrets.BWClient, vaultClient *secrets
 	}
 	slog.Info("resolved .env file", "path", path, "entries", len(resolved), "secrets", refCount)
 	return resolved, nil
-}
-
-// resolveRef resolves a single secret reference (bw:// or vault://).
-func resolveRef(ref string, bwClient *secrets.BWClient, vaultClient *secrets.VaultClient) (string, error) {
-	if strings.HasPrefix(ref, "bw://") {
-		r, err := secrets.ParseBWRef(ref)
-		if err != nil {
-			return "", err
-		}
-		return bwClient.Resolve(r)
-	}
-	if strings.HasPrefix(ref, "vault://") {
-		r, err := secrets.ParseVaultRef(ref)
-		if err != nil {
-			return "", err
-		}
-		return vaultClient.Resolve(r)
-	}
-	return ref, nil
 }
 
 // rawEntry is a pre-resolution key/value pair.

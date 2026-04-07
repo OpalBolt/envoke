@@ -67,8 +67,8 @@ KEY2=world
 		t.Fatalf("writing .env: %v", err)
 	}
 
-	// No secret refs — bwClient and vaultClient are never dereferenced.
-	entries, err := ResolveDotEnv(path, &secrets.BWClient{}, &secrets.VaultClient{})
+	// No secret refs — registry is never invoked.
+	entries, err := ResolveDotEnv(path, secrets.NewRegistry())
 	if err != nil {
 		t.Fatalf("ResolveDotEnv: %v", err)
 	}
@@ -84,7 +84,7 @@ KEY2=world
 }
 
 func TestResolveDotEnv_NonExistentFile(t *testing.T) {
-	_, err := ResolveDotEnv("/nonexistent/.env", &secrets.BWClient{}, &secrets.VaultClient{})
+	_, err := ResolveDotEnv("/nonexistent/.env", secrets.NewRegistry())
 	if err == nil {
 		t.Fatal("expected error for non-existent file")
 	}

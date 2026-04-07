@@ -13,13 +13,13 @@ import (
 
 // ResolveYAML reads a YAML file, walks all scalar string values, resolves
 // any bw:// or vault:// references, and returns the resolved data structure.
-func ResolveYAML(path string, bwClient *secrets.BWClient, vaultClient *secrets.VaultClient) (interface{}, error) {
+func ResolveYAML(path string, reg *secrets.Registry) (interface{}, error) {
 	slog.Debug("reading YAML file", "path", path)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", path, err)
 	}
-	result, err := ResolveYAMLString(string(data), bwClient, vaultClient)
+	result, err := ResolveYAMLString(string(data), reg)
 	if err != nil {
 		return nil, err
 	}
@@ -28,12 +28,12 @@ func ResolveYAML(path string, bwClient *secrets.BWClient, vaultClient *secrets.V
 }
 
 // ResolveYAMLString resolves a YAML string.
-func ResolveYAMLString(yamlStr string, bwClient *secrets.BWClient, vaultClient *secrets.VaultClient) (interface{}, error) {
+func ResolveYAMLString(yamlStr string, reg *secrets.Registry) (interface{}, error) {
 	var doc interface{}
 	if err := yaml.Unmarshal([]byte(yamlStr), &doc); err != nil {
 		return nil, fmt.Errorf("parsing YAML: %w", err)
 	}
-	resolved, err := walkAndResolve(doc, bwClient, vaultClient)
+	resolved, err := walkAndResolve(doc, reg)
 	if err != nil {
 		return nil, err
 	}
@@ -41,11 +41,11 @@ func ResolveYAMLString(yamlStr string, bwClient *secrets.BWClient, vaultClient *
 }
 
 // walkAndResolve recursively walks a YAML value and resolves secret refs.
-func walkAndResolve(v interface{}, bwClient *secrets.BWClient, vaultClient *secrets.VaultClient) (interface{}, error) {
+func walkAndResolve(v interface{}, reg *secrets.Registry) (interface{}, error) {
 	switch val := v.(type) {
 	case map[string]interface{}:
 		for k, child := range val {
-			resolved, err := walkAndResolve(child, bwClient, vaultClient)
+			resolved, err := walkAndResolve(child, reg)
 			if err != nil {
 				return nil, err
 			}
@@ -54,7 +54,7 @@ func walkAndResolve(v interface{}, bwClient *secrets.BWClient, vaultClient *secr
 		return val, nil
 	case []interface{}:
 		for i, child := range val {
-			resolved, err := walkAndResolve(child, bwClient, vaultClient)
+			resolved, err := walkAndResolve(child, reg)
 			if err != nil {
 				return nil, err
 			}
@@ -64,20 +64,7 @@ func walkAndResolve(v interface{}, bwClient *secrets.BWClient, vaultClient *secr
 	case string:
 		if secrets.IsSecretRef(val) {
 			slog.Debug("resolving YAML secret ref", "ref", val)
-			if strings.HasPrefix(val, "bw://") {
-				ref, err := secrets.ParseBWRef(val)
-				if err != nil {
-					return nil, err
-				}
-				return bwClient.Resolve(ref)
-			}
-			if strings.HasPrefix(val, "vault://") {
-				ref, err := secrets.ParseVaultRef(val)
-				if err != nil {
-					return nil, err
-				}
-				return vaultClient.Resolve(ref)
-			}
+			return reg.Resolve(val)
 		}
 		return val, nil
 	default:
