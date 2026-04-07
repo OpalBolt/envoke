@@ -1,4 +1,4 @@
-package main
+package kctx
 
 import (
 	"fmt"
@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"path/filepath"
 	"sort"
 	"strings"
 	"syscall"
@@ -21,22 +20,18 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func main() {
-	if err := rootCmd().Execute(); err != nil {
-		os.Exit(1)
-	}
-}
-
-func rootCmd() *cobra.Command {
+// NewRootCmd returns the root cobra command for the kctx CLI.
+func NewRootCmd() *cobra.Command {
 	var verbose bool
 	var cfgFile string
 	var logLevel string
 	var cfg config.Config
 
 	root := &cobra.Command{
-		Use:     "kctx",
-		Short:   "Ephemeral kubeconfig switcher via Vault or Bitwarden",
-		Version: version.String(),
+		Use:          "kctx",
+		Short:        "Ephemeral kubeconfig switcher via Vault or Bitwarden",
+		Version:      version.String(),
+		SilenceUsage: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			var err error
 			cfg, err = config.Load(cfgFile)
@@ -77,14 +72,27 @@ func rootCmd() *cobra.Command {
 	return root
 }
 
-// loadCmd fetches a kubeconfig from Bitwarden or Vault and stores it in the
-// named store, encrypted with the local password. Designed to be called from
-// a .env file so multiple configs can be pre-loaded before switching.
-//
-// Usage:
-//
-//	kctx load prod bw://folder/item
-//	kctx load staging vault://secret/kubeconfig/staging
+// NewSubCmd returns the kctx subcommand tree for embedding under another root (e.g. envoke).
+// Unlike NewRootCmd, it does not register persistent flags (those are inherited from the parent)
+// and does not install its own PersistentPreRunE (the parent's runs instead).
+// cfg is a pointer owned by the parent, populated before any subcommand runs.
+func NewSubCmd(cfg *config.Config) *cobra.Command {
+	root := &cobra.Command{
+		Use:   "kctx",
+		Short: "Ephemeral kubeconfig switcher via Vault or Bitwarden",
+	}
+	root.AddCommand(
+		loadCmd(cfg),
+		switchCmd(cfg),
+		unloadCmd(cfg),
+		statusCmd(),
+		clearCacheCmd(),
+		shellInitCmd(),
+		watchCmd(),
+	)
+	return root
+}
+
 func loadCmd(cfg *config.Config) *cobra.Command {
 	return &cobra.Command{
 		Use:   "load <name> <bw://item|vault-path>",
@@ -134,11 +142,9 @@ Examples:
 				kubeconfigData = []byte(val)
 				localPassword = bwClient.LocalPassword
 			} else {
-				// Parse vault:// URI (with optional #field fragment) or treat as raw path.
 				var vaultRef secrets.VaultRef
 				if strings.HasPrefix(source, "vault://") {
 					if strings.Contains(source, "#") {
-						// Fragment present — parse it fully.
 						ref, err := secrets.ParseVaultRef(source)
 						if err != nil {
 							return err
@@ -148,7 +154,6 @@ Examples:
 						}
 						vaultRef = ref
 					} else {
-						// No fragment — default field to "kubeconfig".
 						vaultRef = secrets.VaultRef{
 							Path:  strings.TrimPrefix(source, "vault://"),
 							Field: "kubeconfig",
@@ -163,7 +168,6 @@ Examples:
 					return verr
 				}
 				kubeconfigData = []byte(val)
-				// Vault doesn't use local password; prompt separately.
 				lp, lperr := secrets.ReadLocalPassword()
 				if lperr != nil {
 					return lperr
@@ -181,9 +185,6 @@ Examples:
 	}
 }
 
-// switchCmd loads a pre-cached (named) kubeconfig and exports KUBECONFIG.
-// If the name is not found in the local named store, it falls back to an
-// explicit bw:// or vault path source if one is provided.
 func switchCmd(cfg *config.Config) *cobra.Command {
 	return &cobra.Command{
 		Use:   "switch <name> [bw://item|vault-path]",
@@ -210,7 +211,6 @@ Examples:
 
 			var kubeconfigData []byte
 
-			// Try the named store first.
 			if err := kubeconfig.ValidateStoreName(name); err == nil {
 				lp, lperr := secrets.ReadLocalPassword()
 				if lperr != nil {
@@ -225,7 +225,6 @@ Examples:
 				}
 			}
 
-			// Fall back to an explicit source if the named store had no entry.
 			if kubeconfigData == nil {
 				if source == "" {
 					return fmt.Errorf(
@@ -249,8 +248,6 @@ Examples:
 			fmt.Printf("export KUBECONFIG=%s\n", path)
 			fmt.Printf("trap 'kctx unload' EXIT\n")
 
-			// Feedback to stderr — stdout must stay clean for eval.
-			// Resolve a friendly source label for the panel.
 			srcLabel := resolveSourceLabel(name, source)
 			panelEntries := []ui.PanelEntry{
 				{Key: "KUBECONFIG", Value: path, Source: srcLabel},
@@ -265,7 +262,6 @@ Examples:
 	}
 }
 
-// fetchKubeconfig fetches kubeconfig bytes from the given bw:// or vault source.
 func fetchKubeconfig(cfg *config.Config, source string) ([]byte, error) {
 	if strings.HasPrefix(source, "bw://") {
 		ref, err := secrets.ParseBWRef(source)
@@ -284,7 +280,6 @@ func fetchKubeconfig(cfg *config.Config, source string) ([]byte, error) {
 		}
 		return []byte(val), nil
 	}
-	// Parse vault:// URI (with optional #field fragment) or treat as raw path.
 	var vaultRef secrets.VaultRef
 	if strings.HasPrefix(source, "vault://") {
 		if strings.Contains(source, "#") {
@@ -325,7 +320,6 @@ func unloadCmd(cfg *config.Config) *cobra.Command {
 			}
 			fmt.Println("unset KUBECONFIG")
 
-			// Feedback to stderr — stdout must stay clean for eval.
 			if kubeconfigPath == "" {
 				ui.Warn(os.Stderr, "KUBECONFIG was not set")
 			} else {
@@ -337,19 +331,10 @@ func unloadCmd(cfg *config.Config) *cobra.Command {
 	}
 }
 
-// isManagedKubeconfig returns true if the path looks like a kctx-created tmpfile.
-// Only files under /dev/shm or /tmp with the "kctx-" prefix are considered managed.
 func isManagedKubeconfig(path string) bool {
-	dir := filepath.Dir(path)
-	base := filepath.Base(path)
-	if dir != "/dev/shm" && dir != "/tmp" {
-		return false
-	}
-	return len(base) > 5 && base[:5] == "kctx-"
+	return kubeconfig.IsManaged(path)
 }
 
-// resolveSourceLabel returns a short human-readable label for where the
-// kubeconfig was fetched from, suitable for display in the switch panel.
 func resolveSourceLabel(name, source string) string {
 	if source == "" {
 		return "named store"
@@ -378,13 +363,11 @@ func statusCmd() *cobra.Command {
 					ui.Item(w, "Managed by kctx", ui.Yellow(w, "no (external)"))
 				}
 
-				// Try to show current kubectl context.
 				if ctx := currentKubectlContext(kc); ctx != "" {
 					ui.Item(w, "Current context", ui.Bold(w, ctx))
 				}
 			}
 
-			// Show named kubeconfigs available in the local store.
 			uid := fmt.Sprintf("%d", os.Getuid())
 			store := kubeconfig.NewNamedStore()
 			names, err := store.List(uid)
@@ -400,9 +383,6 @@ func statusCmd() *cobra.Command {
 	}
 }
 
-// currentKubectlContext runs kubectl config current-context and returns the
-// result, or "" if kubectl is not available or the call fails.
-// If kubeconfig is non-empty it is used as the KUBECONFIG path for the invocation.
 func currentKubectlContext(kubeconfig string) string {
 	cmd := exec.Command("kubectl", "config", "current-context")
 	if kubeconfig != "" {
@@ -444,17 +424,9 @@ func clearCacheCmd() *cobra.Command {
 	}
 }
 
-func shellInitCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "shell-init",
-		Short: "Emit kctx shell wrapper function",
-		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Print(kctxShellSnippet())
-		},
-	}
-}
-
-func kctxShellSnippet() string {
+// ShellSnippet returns the kctx bash/zsh shell init snippet.
+// Exported so envoke can reference it when building the combined shell-init.
+func ShellSnippet() string {
 	return `
 # kctx shell integration — add to ~/.bashrc or ~/.zshrc:
 # eval "$(kctx shell-init)"
@@ -462,20 +434,12 @@ func kctxShellSnippet() string {
 kctx() {
   case "$1" in
     load)
-      # Pre-load a named kubeconfig from Bitwarden or Vault.
-      # Passwords are prompted fresh on every call — no caching or persistence.
-      #
-      # Usage in .env:
-      #   kctx load prod     bw://kubernetes/prod
-      #   kctx load staging  bw://kubernetes/staging
       command kctx load "${@:2}"
       ;;
     switch)
-      # Explicit subcommand: kctx switch <env> [source] [flags]
       # IMPORTANT: never call 'trap' inside this function. In zsh, a trap set
       # inside a function fires when the function returns, not when the shell
       # exits. Kubeconfig cleanup is handled by the shell-init EXIT trap below.
-      # Strip the 'trap' line emitted by the switch binary before eval.
       if _kctx_raw="$(command kctx switch "${@:2}")"; then
         eval "$(echo "$_kctx_raw" | grep -v '^trap ')"
         _KCTX_LAST_UNLOAD_TOKEN="$(_kctx_unload_token 2>/dev/null || true)"
@@ -491,7 +455,6 @@ kctx() {
       command kctx "$@"
       ;;
     "")
-      # No arguments: show root-level help (list all subcommands).
       command kctx
       ;;
     *)
@@ -504,19 +467,13 @@ kctx() {
   esac
 }
 
-# Derive an idempotent token for the current unload request so each shell can
-# observe the event once without consuming the shared sentinel.
 _kctx_unload_token() {
   local f="/dev/shm/kctx-${UID}-unload-requested"
   [ -f "$f" ] || f="/tmp/kctx-${UID}-unload-requested"
   [ -f "$f" ] || return 1
-  # -c is GNU/Linux (coreutils); -f is BSD/macOS (stat(1)).
   stat -c '%Y:%i:%s' "$f" 2>/dev/null || stat -f '%m:%i:%z' "$f" 2>/dev/null
 }
 
-# Unset KUBECONFIG when the watcher signals that sleep/lock occurred.
-# Each shell tracks the last token it acted on so only the first prompt after
-# the event triggers unload — subsequent prompts are no-ops until the next event.
 _kctx_check_unload() {
   local token
   token="$(_kctx_unload_token)" || return 0
@@ -524,8 +481,6 @@ _kctx_check_unload() {
   _KCTX_LAST_UNLOAD_TOKEN="$token"
   eval "$(command kctx unload 2>/dev/null)" 2>/dev/null || true
 }
-# Record the current sentinel state at init time so pre-existing sentinels from
-# a previous session do not trigger an immediate unload in new shells.
 _KCTX_LAST_UNLOAD_TOKEN="$(_kctx_unload_token 2>/dev/null || true)"
 if [ -n "${ZSH_VERSION:-}" ]; then
   autoload -Uz add-zsh-hook 2>/dev/null && add-zsh-hook precmd _kctx_check_unload
@@ -533,13 +488,22 @@ else
   PROMPT_COMMAND="_kctx_check_unload${PROMPT_COMMAND:+; $PROMPT_COMMAND}"
 fi
 
-# Start the sleep/lock watcher once per shell session.
 if [ -z "${_KCTX_WATCH_PID:-}" ]; then
   command kctx watch &
   _KCTX_WATCH_PID=$!
   trap 'command kctx unload >/dev/null 2>&1; kill "${_KCTX_WATCH_PID:-}" 2>/dev/null; command kctx clear-cache 2>/dev/null' EXIT
 fi
 `
+}
+
+func shellInitCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "shell-init",
+		Short: "Emit kctx shell wrapper function",
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Print(ShellSnippet())
+		},
+	}
 }
 
 func watchCmd() *cobra.Command {
@@ -567,9 +531,6 @@ On Windows, event hooks are not yet implemented.`,
 
 			hook := cleanup.New()
 
-			// On lock: remove managed kubeconfig tmpfiles and unload KUBECONFIG.
-			// The cache is kept so configs can be re-resolved after unlock
-			// without re-entering passwords.
 			if err := hook.RegisterLock(func() error {
 				slog.Debug("cleanup: clearing managed kubeconfigs on lock")
 				kubeconfig.ClearManaged()
@@ -579,7 +540,6 @@ On Windows, event hooks are not yet implemented.`,
 				return fmt.Errorf("registering lock hook: %w", err)
 			}
 
-			// On sleep: clear the encrypted cache and named kubeconfig store as well.
 			if err := hook.RegisterSleep(func() error {
 				slog.Debug("cleanup: clearing kctx cache and managed kubeconfigs on sleep")
 				cache := secrets.NewCache()

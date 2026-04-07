@@ -1,4 +1,4 @@
-package main
+package renv
 
 import (
 	"fmt"
@@ -21,13 +21,8 @@ import (
 	"golang.org/x/term"
 )
 
-func main() {
-	if err := rootCmd().Execute(); err != nil {
-		os.Exit(1)
-	}
-}
-
-func rootCmd() *cobra.Command {
+// NewRootCmd returns the root cobra command for the renv CLI.
+func NewRootCmd() *cobra.Command {
 	var verbose bool
 	var noCache bool
 	var cfgFile string
@@ -35,9 +30,10 @@ func rootCmd() *cobra.Command {
 	var cfg config.Config
 
 	root := &cobra.Command{
-		Use:     "renv",
-		Short:   "Resolve secret references in .env and YAML files",
-		Version: version.String(),
+		Use:          "renv",
+		Short:        "Resolve secret references in .env and YAML files",
+		Version:      version.String(),
+		SilenceUsage: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			var err error
 			cfg, err = config.Load(cfgFile)
@@ -85,6 +81,28 @@ func rootCmd() *cobra.Command {
 		clearCacheCmd(),
 		statusCmd(),
 		unloadCmd(&cfg),
+		watchCmd(),
+	)
+	return root
+}
+
+// NewSubCmd returns the renv subcommand tree for embedding under another root (e.g. envoke).
+// Unlike NewRootCmd, it does not register persistent flags (those are inherited from the parent)
+// and does not install its own PersistentPreRunE (the parent's runs instead).
+// noCache and cfg are pointers owned by the parent, populated before any subcommand runs.
+func NewSubCmd(noCache *bool, cfg *config.Config) *cobra.Command {
+	root := &cobra.Command{
+		Use:   "renv",
+		Short: "Resolve secret references in .env and YAML files",
+	}
+	root.AddCommand(
+		resolveCmd(noCache, cfg),
+		execCmd(noCache, cfg),
+		shellInitCmd(),
+		yamlCmd(cfg),
+		clearCacheCmd(),
+		statusCmd(),
+		unloadCmd(cfg),
 		watchCmd(),
 	)
 	return root
@@ -151,7 +169,6 @@ Then in .envrc:
 				return err
 			}
 
-			// Persist the exported key names so renv unload can emit the correct unset commands.
 			uid := fmt.Sprintf("%d", os.Getuid())
 			names := make([]string, len(entries))
 			panelEntries := make([]ui.PanelEntry, len(entries))
@@ -159,18 +176,13 @@ Then in .envrc:
 				names[i] = e.Key
 				panelEntries[i] = ui.PanelEntry{Key: e.Key, Source: e.Source}
 			}
-			_ = secrets.SaveVarNames(uid, names) // best-effort; don't fail resolve if state can't be saved
+			_ = secrets.SaveVarNames(uid, names)
 
-			// Feedback to stderr — stdout must stay clean for eval.
 			headline := fmt.Sprintf("Loaded %s from %s",
 				ui.Bold(os.Stderr, pluralVars(len(entries))),
 				ui.Bold(os.Stderr, file))
 			ui.Panel(os.Stderr, "renv", headline, panelEntries, cfg.UI.Border)
 
-			// Emit EXIT trap — skip inside direnv (and inside nix dev-shells spawned by
-			// direnv's use_flake) because the process exits immediately after .envrc is
-			// evaluated, which would fire the trap and clear the cache before the user
-			// ever gets to use the loaded variables.
 			inManagedEnv := os.Getenv("DIRENV_DIR") != "" ||
 				os.Getenv("DIRENV_FILE") != "" ||
 				os.Getenv("IN_NIX_SHELL") != ""
@@ -214,8 +226,6 @@ The resolved variables override any same-named variables already in the environm
 				return fmt.Errorf("resolving %s: %w", file, err)
 			}
 
-			// Build env: start with current environment, then append resolved vars.
-			// Appending after means the resolved vars win on conflict.
 			environ := os.Environ()
 			for _, e := range entries {
 				environ = append(environ, e.Key+"="+e.Value)
@@ -226,7 +236,6 @@ The resolved variables override any same-named variables already in the environm
 				return fmt.Errorf("%s: command not found", args[0])
 			}
 
-			// Replace the current process with the target command.
 			return syscall.Exec(bin, args, environ)
 		},
 	}
@@ -234,10 +243,9 @@ The resolved variables override any same-named variables already in the environm
 	return cmd
 }
 
-// bashInitScript is the shell function emitted by `renv shell-init` for bash/zsh.
-// It wraps `resolve` and `unload` with eval so the user never has to type it.
-// It also starts a background watcher that clears the cache on sleep/lock.
-const bashInitScript = `renv() {
+// BashInitScript is the shell function emitted by `renv shell-init` for bash/zsh.
+// Exported so envoke can reference it when building the combined shell-init.
+const BashInitScript = `renv() {
   case "$1" in
     resolve|unload)
       # Strip the standalone EXIT trap emitted by resolve — the shell-init
@@ -251,19 +259,14 @@ const bashInitScript = `renv() {
 }
 
 # Return a token that changes whenever the unload sentinel is refreshed.
-# Reading metadata instead of consuming the file lets every open shell
-# observe the same event once without racing to delete it.
 _renv_unload_token() {
   local f="/dev/shm/renv-${UID}-unload-requested"
   [ -f "$f" ] || f="/tmp/renv-${UID}-unload-requested"
   [ -f "$f" ] || return 1
-  # -c is GNU/Linux (coreutils); -f is BSD/macOS (stat(1)).
   stat -c '%Y:%i:%s' "$f" 2>/dev/null || stat -f '%m:%i:%z' "$f" 2>/dev/null
 }
 
 # Unload secret variables when the watcher signals that sleep/lock occurred.
-# Each shell tracks the last token it acted on so only the first prompt after
-# the event triggers unload — subsequent prompts are no-ops until the next event.
 _renv_check_unload() {
   local token
   token="$(_renv_unload_token)" || return 0
@@ -271,8 +274,6 @@ _renv_check_unload() {
   _RENV_LAST_UNLOAD_TOKEN="$token"
   eval "$(command renv unload 2>/dev/null)" 2>/dev/null || true
 }
-# Record the current sentinel state at init time so pre-existing sentinels from
-# a previous session do not trigger an immediate unload in new shells.
 _RENV_LAST_UNLOAD_TOKEN="$(_renv_unload_token 2>/dev/null || true)"
 if [ -n "${ZSH_VERSION:-}" ]; then
   autoload -Uz add-zsh-hook 2>/dev/null && add-zsh-hook precmd _renv_check_unload
@@ -288,8 +289,8 @@ if [ -z "${_RENV_WATCH_PID:-}" ]; then
 fi
 `
 
-// fishInitScript is the shell function emitted by `renv shell-init --shell fish`.
-const fishInitScript = `function renv
+// FishInitScript is the shell function emitted by `renv shell-init --shell fish`.
+const FishInitScript = `function renv
   switch $argv[1]
     case resolve unload
       command renv $argv | source
@@ -298,37 +299,26 @@ const fishInitScript = `function renv
   end
 end
 
-# Return a token for the current unload sentinel (mtime:inode:size).
-# Reading metadata instead of consuming the file lets every open shell
-# observe the same event once without racing to delete it.
 function _renv_unload_token
   set -l f /dev/shm/renv-(id -u)-unload-requested
   test -f $f; or set f /tmp/renv-(id -u)-unload-requested
   test -f $f; or return 1
-  # -c is GNU/Linux (coreutils); -f is BSD/macOS (stat(1)).
   stat -c '%Y:%i:%s' $f 2>/dev/null; or stat -f '%m:%i:%z' $f 2>/dev/null
 end
 
-# Unload secret variables when the watcher signals that sleep/lock occurred.
-# Each shell tracks the last token it acted on so only the first prompt after
-# the event triggers unload — subsequent prompts are no-ops until the next event.
 function _renv_check_unload --on-event fish_prompt
   set -l token (_renv_unload_token 2>/dev/null); or return
   test "$_RENV_LAST_UNLOAD_TOKEN" = "$token"; and return
   set -g _RENV_LAST_UNLOAD_TOKEN $token
   command renv unload | source 2>/dev/null; or true
 end
-# Record the current sentinel state at init time so pre-existing sentinels
-# do not trigger an immediate unload in new shells.
 set -g _RENV_LAST_UNLOAD_TOKEN (_renv_unload_token 2>/dev/null; or echo "")
 
-# Start the sleep/lock watcher once per shell session.
 if not set -q _RENV_WATCH_PID
   command renv watch &
   set -gx _RENV_WATCH_PID $last_pid
 end
 
-# Terminate the watcher and clear sensitive cache/session material on shell exit.
 function _renv_cleanup --on-event fish_exit
   if set -q _RENV_WATCH_PID
     kill $_RENV_WATCH_PID 2>/dev/null; or true
@@ -360,10 +350,10 @@ All other renv subcommands (exec, yaml, status, …) pass through unchanged.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			switch shell {
 			case "fish":
-				_, err := io.WriteString(cmd.OutOrStdout(), fishInitScript)
+				_, err := io.WriteString(cmd.OutOrStdout(), FishInitScript)
 				return err
 			default:
-				_, err := io.WriteString(cmd.OutOrStdout(), bashInitScript)
+				_, err := io.WriteString(cmd.OutOrStdout(), BashInitScript)
 				return err
 			}
 		},
@@ -439,9 +429,6 @@ trap fires inside a direnv subprocess.`,
 			if err := secrets.ClearStoredLocalPassword(uid); err != nil {
 				return fmt.Errorf("clearing local password: %w", err)
 			}
-			// Var-name tracking is not cleared here — that is renv unload's job.
-			// Keeping the names file intact ensures renv unload remains functional
-			// even when clear-cache is triggered by the shell EXIT trap.
 			ui.Success(os.Stderr, "Cache cleared")
 			return nil
 		},
@@ -456,7 +443,6 @@ func statusCmd() *cobra.Command {
 			w := os.Stdout
 			uid := fmt.Sprintf("%d", os.Getuid())
 
-			// ── Tracked variables ────────────────────────────────────
 			ui.Header(w, "Tracked variables")
 			names, err := secrets.LoadVarNames(uid)
 			if err != nil {
@@ -470,7 +456,6 @@ func statusCmd() *cobra.Command {
 			}
 			fmt.Fprintln(w)
 
-			// ── Cache files ──────────────────────────────────────────
 			ui.Header(w, "Cache")
 			cache := secrets.NewCache()
 			ui.Item(w, "Location", cache.Dir)
@@ -522,7 +507,6 @@ The output must be evaluated by your shell:
 			}
 			_ = secrets.ClearVarNames(uid)
 
-			// Feedback to stderr — stdout must stay clean for eval.
 			panelEntries := make([]ui.PanelEntry, len(names))
 			for i, n := range names {
 				panelEntries[i] = ui.PanelEntry{Key: n}
@@ -549,23 +533,6 @@ On sleep: the encrypted cache, stored session, and local passwords are cleared,
 requiring full re-authentication after wake.
 
 On Linux, sleep and screen-lock events are detected via D-Bus (systemd-logind).
-The watcher listens for org.freedesktop.login1.Session.Lock and
-org.freedesktop.login1.Manager.PrepareForSleep signals.
-
-Wayland screen lockers (swaylock, waylock) must be triggered via
-'loginctl lock-session' for the Lock signal to reach renv. When the locker
-is invoked directly (e.g. 'exec swaylock') logind is not informed, so renv
-does not receive the Lock signal and open shells are not told to unload
-secret variables. The recommended swayidle configuration is:
-
-  exec swayidle -w \
-      timeout 300 'loginctl lock-session' \
-      lock 'swaylock -f' \
-      before-sleep 'loginctl lock-session'
-
-  # sway keybind (e.g. in ~/.config/sway/config)
-  bindsym $mod+l exec loginctl lock-session
-
 On macOS, sleep is detected via timer drift; screen lock requires a launchd agent.
 On Windows, event hooks are not yet implemented.
 
@@ -578,9 +545,6 @@ Start manually:
 
 			hook := cleanup.New()
 
-			// On lock: unload secret variables from open shells.
-			// The cache is kept so secrets can be re-resolved after unlock
-			// without re-entering passwords.
 			if err := hook.RegisterLock(func() error {
 				slog.Debug("cleanup: unloading renv variables on lock")
 				_ = secrets.RequestUnload(uid)
@@ -589,8 +553,6 @@ Start manually:
 				return fmt.Errorf("registering lock hook: %w", err)
 			}
 
-			// On sleep: clear the encrypted cache and all stored credentials.
-			// This forces full re-authentication after wake.
 			if err := hook.RegisterSleep(func() error {
 				slog.Debug("cleanup: clearing renv cache and session on sleep")
 				cache := secrets.NewCache()
@@ -613,7 +575,6 @@ Start manually:
 	}
 }
 
-// pluralVars returns "1 variable" or "N variables".
 func pluralVars(n int) string {
 	if n == 1 {
 		return "1 variable"
@@ -621,7 +582,6 @@ func pluralVars(n int) string {
 	return fmt.Sprintf("%d variables", n)
 }
 
-// colorAge colors an age string green (fresh), yellow (mid), or red (near expiry).
 func colorAge(w io.Writer, raw string, d time.Duration, parseErr error) string {
 	if parseErr != nil {
 		return raw

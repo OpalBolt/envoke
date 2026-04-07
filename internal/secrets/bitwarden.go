@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -16,6 +17,9 @@ import (
 
 	"golang.org/x/term"
 )
+
+// ErrInvalidPassword is returned when the Bitwarden master password is rejected.
+var ErrInvalidPassword = errors.New("invalid Bitwarden master password")
 
 // BWClient wraps the bw CLI for secret fetching.
 // It does NOT use the Bitwarden SDK — subprocess only.
@@ -201,9 +205,17 @@ func (c *BWClient) Session() (string, error) {
 	cmd := exec.CommandContext(ctx, "bw", "unlock", "--raw")
 	cmd.Env = os.Environ()
 	cmd.Stdin = bytes.NewBufferString(pw + "\n")
-	cmd.Stderr = os.Stderr
+	var stderrBuf bytes.Buffer
+	cmd.Stderr = &stderrBuf
 	out, err := cmd.Output()
 	if err != nil {
+		stderrStr := strings.TrimSpace(stderrBuf.String())
+		if strings.Contains(stderrStr, "Invalid master password") {
+			return "", ErrInvalidPassword
+		}
+		if stderrStr != "" {
+			fmt.Fprintln(os.Stderr, stderrStr)
+		}
 		return "", fmt.Errorf("bw unlock failed: %w", err)
 	}
 	token := strings.TrimSpace(string(out))

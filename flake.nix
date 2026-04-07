@@ -1,5 +1,5 @@
 {
-  description = "secure-handling-of-secrets — renv and kctx CLI tools";
+  description = "envoke — unified secret environment loader (env vars and kubeconfigs)";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -41,35 +41,10 @@
           vendorHash = "sha256-U5ObZjq8TzaBKP8AbmoX/3Ylt5feuNMXM7JfGXF2NyA=";
         };
 
-        renv = pkgs.buildGoModule (common // {
-          pname = "renv";
+        envoke = pkgs.buildGoModule (common // {
+          pname = "envoke";
           version = releaseVersion;
-          subPackages = [ "cmd/renv" ];
-          ldflags = [
-            "-s" "-w"
-            "-X ${versionPkg}.Version=${nixVersion}"
-            "-X ${versionPkg}.Commit=${commitHash}"
-            "-X ${versionPkg}.BuildDate=${buildDate}"
-          ];
-        });
-
-        kctx = pkgs.buildGoModule (common // {
-          pname = "kctx";
-          version = releaseVersion;
-          subPackages = [ "cmd/kctx" ];
-          ldflags = [
-            "-s" "-w"
-            "-X ${versionPkg}.Version=${nixVersion}"
-            "-X ${versionPkg}.Commit=${commitHash}"
-            "-X ${versionPkg}.BuildDate=${buildDate}"
-          ];
-        });
-
-        # Default package builds both binaries
-        all = pkgs.buildGoModule (common // {
-          pname = "secure-handling-of-secrets";
-          version = releaseVersion;
-          subPackages = [ "cmd/renv" "cmd/kctx" ];
+          subPackages = [ "cmd/envoke" ];
           ldflags = [
             "-s" "-w"
             "-X ${versionPkg}.Version=${nixVersion}"
@@ -80,15 +55,14 @@
       in
       {
         packages = {
-          inherit renv kctx;
-          default = all;
+          inherit envoke;
+          default = envoke;
         };
 
         apps = {
-          renv = flake-utils.lib.mkApp { drv = renv; };
-          kctx = flake-utils.lib.mkApp { drv = kctx; };
-          # nix run → renv
-          default = flake-utils.lib.mkApp { drv = renv; };
+          envoke = flake-utils.lib.mkApp { drv = envoke; };
+          # nix run → envoke
+          default = flake-utils.lib.mkApp { drv = envoke; };
 
           test = mkApp "test" [ pkgs.go ] ''
             export CGO_ENABLED=0
@@ -151,7 +125,7 @@
             gopls
             go-tools  # staticcheck
             goreleaser
-          ] ++ [ renv kctx ];
+          ] ++ [ envoke ];
 
           shellHook = ''
             export CGO_ENABLED=0

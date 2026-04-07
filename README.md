@@ -29,25 +29,22 @@ Both tools render **colored, styled output** (via [charmbracelet/lipgloss](https
 
 ```bash
 # Ad-hoc (no config changes)
-nix profile install github:eficode/secure-handling-of-secrets        # both
-nix profile install github:eficode/secure-handling-of-secrets#renv
-nix profile install github:eficode/secure-handling-of-secrets#kctx
+nix profile install github:eficode/envoke
+nix profile install github:eficode/envoke#envoke
 ```
 
 Or as a flake input in your NixOS / home-manager config:
 
 ```nix
-inputs.secure-handling-of-secrets.url = "github:eficode/secure-handling-of-secrets";
+inputs.envoke.url = "github:eficode/envoke";
 # Then add to environment.systemPackages / home.packages:
-#   inputs.secure-handling-of-secrets.packages.${system}.renv
-#   inputs.secure-handling-of-secrets.packages.${system}.kctx
+#   inputs.envoke.packages.${system}.envoke
 ```
 
 ### Go
 
 ```bash
-go install github.com/eficode/secure-handling-of-secrets/cmd/renv@latest
-go install github.com/eficode/secure-handling-of-secrets/cmd/kctx@latest
+go install github.com/eficode/secure-handling-of-secrets/cmd/envoke@latest
 ```
 
 ## renv — remote env
@@ -76,7 +73,7 @@ renv unload         # unset them when done
 `renv resolve` prints a styled panel to **stderr** showing each variable and its source:
 
 ```
-╭─ renv: loaded .env ─────────────────────────╮
+╭─ renv: loaded .env ──────────────────────────╮
 │  DB_PASS   bw://prod/database/password       │
 │  API_KEY   vault://secret/myapp#api_key      │
 ╰──────────────────────────────────────────────╯
@@ -97,21 +94,21 @@ renv exec --env staging.env -- ./deploy.sh
 Add to `~/.config/direnv/direnvrc`:
 
 ```bash
-use_renv() {
+use_envoke() {
   local file="${1:-.env}"
   watch_file "$file"
-  eval "$(renv unload 2>/dev/null || true)"
-  eval "$(renv resolve "$file")"
+  eval "$(envoke unload 2>/dev/null || true)"
+  eval "$(envoke resolve "$file")"
 }
 ```
 
 Then in your project's `.envrc`:
 
 ```bash
-use renv .env
+use envoke .env
 ```
 
-Secrets are loaded when you enter the directory and unloaded when you leave. When `renv` detects a direnv context (`DIRENV_DIR` or `DIRENV_FILE` is set) it automatically switches to compact non-TTY output and skips the EXIT trap (direnv manages that lifecycle itself).
+Secrets are loaded when you enter the directory and unloaded when you leave. When `envoke` detects a direnv context (`DIRENV_DIR` or `DIRENV_FILE` is set) it automatically switches to compact non-TTY output and skips the EXIT trap (direnv manages that lifecycle itself).
 
 ### YAML files
 
@@ -162,8 +159,8 @@ Each `kctx switch` writes a fresh tmpfile to `/dev/shm` (falling back to `/tmp`)
 ```
 ╭─ kctx: prod ──────────────────────────────────────╮
 │  KUBECONFIG   /dev/shm/kctx-a3f2b1                │
-│  Context      prod-cluster                         │
-│  Source       vault://secret/kubeconfig/prod       │
+│  Context      prod-cluster                        │
+│  Source       vault://secret/kubeconfig/prod      │
 ╰───────────────────────────────────────────────────╯
 ```
 

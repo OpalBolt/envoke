@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // NewTempFile creates a temporary file in /dev/shm if available, else /tmp.
@@ -34,6 +35,17 @@ func NewTempFile(prefix string) (*os.File, error) {
 	return f, nil
 }
 
+// IsManaged reports whether path looks like a kctx-managed kubeconfig tmpfile
+// (i.e. a "kctx-" prefixed file in /dev/shm or /tmp).
+func IsManaged(path string) bool {
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+	if dir != "/dev/shm" && dir != "/tmp" {
+		return false
+	}
+	return len(base) > 5 && base[:5] == "kctx-"
+}
+
 // ClearManaged removes all kctx-managed kubeconfig tmpfiles from /dev/shm and /tmp.
 // Only files with the "kctx-" prefix are removed.
 func ClearManaged() {
@@ -47,6 +59,60 @@ func ClearManaged() {
 			os.Remove(path)
 		}
 	}
+}
+
+// trackedNamesPath returns the path of the tracked kctx store names file for uid.
+// Prefers /dev/shm (RAM-backed, cleared on reboot) over /tmp.
+func trackedNamesPath(uid string) string {
+	dir := "/tmp"
+	if fi, err := os.Stat("/dev/shm"); err == nil && fi.IsDir() {
+		dir = "/dev/shm"
+	}
+	return filepath.Join(dir, "kctx-"+uid+"-tracked")
+}
+
+// SaveTrackedNames writes the kctx store names loaded by envoke resolve to a
+// state file so that envoke unload can remove them from the store later.
+func SaveTrackedNames(uid string, names []string) error {
+	path := trackedNamesPath(uid)
+	slog.Debug("saving tracked kctx names", "path", path, "count", len(names))
+	content := strings.Join(names, "\n")
+	if len(names) > 0 {
+		content += "\n"
+	}
+	return os.WriteFile(path, []byte(content), 0600)
+}
+
+// LoadTrackedNames reads the tracked kctx store names from the state file.
+// Returns a nil slice (and no error) if the file does not exist.
+func LoadTrackedNames(uid string) ([]string, error) {
+	path := trackedNamesPath(uid)
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		slog.Debug("no tracked kctx names found", "path", path)
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading kctx tracked names: %w", err)
+	}
+	var names []string
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if line != "" {
+			names = append(names, line)
+		}
+	}
+	slog.Debug("loaded tracked kctx names", "path", path, "count", len(names))
+	return names, nil
+}
+
+// ClearTrackedNames removes the tracked kctx store names state file for uid.
+func ClearTrackedNames(uid string) error {
+	path := trackedNamesPath(uid)
+	slog.Debug("clearing tracked kctx names", "path", path)
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("clearing kctx tracked names: %w", err)
+	}
+	return nil
 }
 
 // UnloadRequestFile returns the path of the sentinel file used to signal
