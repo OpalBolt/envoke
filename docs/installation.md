@@ -2,73 +2,88 @@
 
 ## Requirements
 
-- [Bitwarden CLI (`bw`)](https://bitwarden.com/help/cli/) — required for `bw://` secret references
-- [HashiCorp Vault CLI (`vault`)](https://developer.hashicorp.com/vault/docs/install) — required for `vault://` secret references
+- **Bitwarden CLI** (`bw`) — required for `bw://` references ([install guide](https://bitwarden.com/help/cli/))
+- **Vault CLI** (`vault`) — required for `vault://` references ([install guide](https://developer.hashicorp.com/vault/docs/install))
+- **kubectl** — required for `kctx` kubeconfig switching
 
-You only need the backends you intend to use.
+## Install with Go
 
----
-
-## Go
+The simplest path if you have Go installed:
 
 ```bash
 go install github.com/eficode/secure-handling-of-secrets/cmd/envoke@latest
 ```
 
-This installs the `envoke` binary. The `renv` and `kctx` commands are provided as shell functions by `envoke shell-init` — see [Shell setup](#shell-setup) below.
-
-Requires Go 1.22 or later.
-
-### Shell setup
-
-Add **once** to your shell config:
+This installs the `envoke` binary to `$GOPATH/bin` (typically `~/go/bin`). Make sure that directory is in your `PATH`:
 
 ```bash
 # ~/.bashrc or ~/.zshrc
-eval "$(envoke shell-init)"
-
-# fish: ~/.config/fish/config.fish
-envoke shell-init --shell fish | source
+export PATH="$HOME/go/bin:$PATH"
 ```
-
-This defines `renv()` and `kctx()` shell wrapper functions, and starts the background watcher daemon. It is completely **silent** — nothing is printed when your shell starts.
-
-After setup, use `renv` and `kctx` as normal commands:
-
-```bash
-renv resolve .env
-kctx switch prod
-```
-
----
-
-## Nix
-
-### Flake (ad-hoc)
-
-```bash
-nix profile install github:eficode/envoke
-```
-
-### Flake input (NixOS / home-manager)
-
-```nix
-inputs.envoke.url = "github:eficode/envoke";
-
-# Then add to environment.systemPackages or home.packages:
-inputs.envoke.packages.${system}.envoke
-```
-
-When installed via Nix, the shell setup step is the same — add `eval "$(envoke shell-init)"` to your shell config.
-
----
 
 ## Build from source
 
 ```bash
-git clone https://github.com/eficode/secure-handling-of-secrets
+git clone https://github.com/eficode/secure-handling-of-secrets.git
 cd secure-handling-of-secrets
-make build          # outputs to bin/
+make build          # outputs to bin/envoke
 ```
 
-Requires `nix develop` (or Go 1.22+ with `CGO_ENABLED=0`) in your environment.
+Add `bin/` to your `PATH` or copy the binary to a directory already in `PATH`.
+
+Requires Go 1.25+. See [go.dev/dl](https://go.dev/dl/) for installation.
+
+## Shell integration (required)
+
+After installing the binary, add one line to your shell config to enable auto-eval, background watcher, and EXIT trap:
+
+**Bash / Zsh:**
+```bash
+eval "$(envoke shell-init)"
+```
+
+**Fish:**
+```fish
+envoke shell-init --shell fish | source
+```
+
+Add this to `~/.bashrc`, `~/.zshrc`, or `~/.config/fish/config.fish`. See [Setup](setup.md) for details.
+
+---
+
+## Install with Nix
+
+If you use Nix flakes:
+
+```bash
+# Run directly without installing
+nix run github:eficode/secure-handling-of-secrets
+
+# Add to your system flake
+inputs.envoke.url = "github:eficode/secure-handling-of-secrets";
+```
+
+### NixOS / Home Manager
+
+```nix
+# flake.nix (inputs)
+inputs.envoke.url = "github:eficode/secure-handling-of-secrets";
+
+# packages
+environment.systemPackages = [ inputs.envoke.packages.${system}.envoke ];
+```
+
+### Development shell
+
+```bash
+nix develop    # enters dev shell with Go, goreleaser, bw, vault, and envoke
+```
+
+### Available Nix outputs
+
+```bash
+nix build              # builds envoke (default package)
+nix run .#test         # run tests
+nix run .#lint         # run linter
+nix run .#fmt-check    # check formatting
+```

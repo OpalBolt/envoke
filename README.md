@@ -1,39 +1,35 @@
 # envoke
 
-Fetch secrets from Bitwarden or HashiCorp Vault at runtime and inject them into your shell — nothing stored in plaintext, nothing left on disk.
-
-- **`renv`** — resolve `bw://` / `vault://` references in `.env` and YAML files; load secrets into your shell or pass them directly to a subprocess
-- **`kctx`** — switch Kubernetes contexts by fetching kubeconfigs ephemerally from Vault or Bitwarden; `KUBECONFIG` is set only in your current shell and cleaned up on exit
+**envoke** *(env + invoke)* resolves secrets from Bitwarden and HashiCorp Vault into your shell environment and manages secure named contexts — all encrypted in RAM.
 
 ```bash
-# .env — safe to commit
-DB_PASS=bw://prod/database
-API_KEY=vault://secret/myapp#api_key
-
-# load into shell
-renv resolve .env
-
-# or run a one-off command
-renv exec -- docker compose up
-
-# switch k8s context
-kctx switch prod
+# .env
+DB_PASSWORD=bw://database/prod-db
+API_TOKEN=vault://secret/api#token
+KCTX_PROD=bw://kubernetes/prod-cluster
 ```
-
-Secrets live in process memory or a short-lived AES-256 encrypted cache in `/dev/shm`. Nothing persists past your session.
-
-## Quick start
 
 ```bash
-# install
-go install github.com/eficode/secure-handling-of-secrets/cmd/envoke@latest
-
-# add to ~/.bashrc or ~/.zshrc
-eval "$(envoke shell-init)"
+eval "$(envoke resolve .env)"   # load secrets + kubeconfigs
+kctx prod                       # switch to prod kubeconfig
+envoke unload                   # clear everything
 ```
+
+## What it does
+
+| Subcommand | Name | Purpose |
+|------------|------|---------|
+| `envoke renv` | *remote env* | Resolves `bw://` and `vault://` refs from `.env` files into shell exports |
+| `envoke kctx` | *Keyless ConTeXt* | Loads and switches named contexts (kubeconfigs, etc.) from Bitwarden/Vault |
+| `envoke resolve` | | Runs both in a single pass |
+
+Secrets and kubeconfigs are cached in `/dev/shm` (RAM-backed tmpfs), encrypted with AES-256. The cache is cleared on shell exit, system lock, or sleep.
 
 ## Documentation
 
 - [Installation](docs/installation.md)
-- [renv — remote env](docs/renv.md)
-- [kctx — keyless context](docs/kctx.md)
+- [Introduction](docs/introduction.md)
+- [Setup](docs/setup.md)
+- [Usage](docs/usage.md)
+- [direnv integration](docs/direnv.md)
+- [Nix integration](docs/nix.md)
