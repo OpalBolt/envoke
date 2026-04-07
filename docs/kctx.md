@@ -1,91 +1,12 @@
-# kctx — Ephemeral Kubeconfig Switcher
+# kctx — keyless context
 
-`kctx` fetches kubeconfig files from Vault or Bitwarden and writes them to a
-RAM-backed tmpfile in `/dev/shm` (or `/tmp`). `KUBECONFIG` is set only in the
-current shell session and is cleaned up automatically on exit. No credentials
-linger on disk.
+Fetch kubeconfig files from Vault or Bitwarden and write them to a RAM-backed tmpfile in `/dev/shm`. `KUBECONFIG` is set only in the current shell session and cleaned up automatically on exit. No credentials linger on disk.
 
-## Installation
+---
 
-```bash
-go install github.com/eficode/secure-handling-of-secrets/cmd/envoke@latest
-```
+## Introduction
 
-Or via Nix:
-
-```bash
-nix profile install github:eficode/envoke
-```
-
-The `envoke shell-init` defines a `kctx()` shell function, so all `kctx` commands
-work as before after running `eval "$(envoke shell-init)"`.
-
-## Shell setup (recommended)
-
-Add **once** to your shell config:
-
-```bash
-# ~/.bashrc or ~/.zshrc
-eval "$(kctx shell-init)"
-```
-
-`kctx shell-init` is completely **silent** when sourced — it defines a shell
-wrapper function and starts the background watcher (`kctx watch`) without
-printing anything to the terminal.
-
-### How the shell wrapper works
-
-`kctx shell-init` emits a shell function that transparently wraps the binary.
-`switch` and `unload` output shell statements (`export KUBECONFIG=…` /
-`unset KUBECONFIG`) that are `eval`'d so they take effect in the current shell.
-All other subcommands (`status`, `clear-cache`, …) run the binary directly:
-
-```bash
-kctx() {
-  case "$1" in
-    unload)
-      eval "$(command kctx unload)"
-      ;;
-    status)
-      command kctx status
-      ;;
-    *)
-      eval "$(command kctx "$@")"
-      ;;
-  esac
-}
-```
-
-## Commands
-
-| Command | Description |
-|---------|-------------|
-| `kctx shell-init` | Emit shell wrapper function + start watcher (silent) |
-| `kctx switch <env> [source]` | Fetch kubeconfig and set `KUBECONFIG` in current shell |
-| `kctx unload` | Unset `KUBECONFIG` and remove tmpfile |
-| `kctx status` | Show current `KUBECONFIG` path, managed/external, and current context |
-| `kctx clear-cache` | Remove all Bitwarden cache files used by kctx |
-| `kctx watch` | Background daemon for sleep/lock events (started by shell-init) |
-| `kctx --version` | Print version |
-
-## Usage
-
-```bash
-kctx switch prod                          # fetch from Vault: secret/kubeconfig/prod
-kctx switch prod secret/my-kubeconfig    # custom Vault path
-kctx switch prod bw://kube/prod-config   # fetch from Bitwarden
-
-kctx unload                              # unset KUBECONFIG and remove tmpfile
-kctx status                              # show current KUBECONFIG path and context
-kctx clear-cache                         # remove all kctx cache files
-```
-
-## Output
-
-After a successful `kctx switch`, a styled panel is printed to **stderr** showing
-what was loaded:
-
-On a TTY (rounded-border box, colored via [charmbracelet/lipgloss](https://github.com/charmbracelet/lipgloss)):
+`kctx switch` fetches a kubeconfig, writes it to `/dev/shm/kctx-<random>`, and exports `KUBECONFIG` pointing at it. A trap registers cleanup so the file is deleted when your shell exits.
 
 ```
 ╭─ kctx: prod ──────────────────────────────────────╮
@@ -95,31 +16,67 @@ On a TTY (rounded-border box, colored via [charmbracelet/lipgloss](https://githu
 ╰───────────────────────────────────────────────────╯
 ```
 
-On non-TTY stderr (pipes, scripts — compact plain-text):
+In a non-TTY context (pipes, scripts) the panel switches to compact plain-text automatically.
 
-```
-kctx: prod
-  KUBECONFIG  /dev/shm/kctx-a3f2b1
-  Context     prod-cluster
-  Source      vault://secret/kubeconfig/prod
-```
+---
 
-The `Context` field shows the current kubectl context name, queried with
-`KUBECONFIG` set to the new tmpfile immediately after writing it.
+## Setup
 
-**stdout** contains the shell statements to eval:
+### Shell integration (recommended)
 
-```
-export KUBECONFIG=/dev/shm/kctx-a3f2b1
-trap 'kctx unload' EXIT
+Add **once** to your shell config:
+
+```bash
+# ~/.bashrc or ~/.zshrc
+eval "$(envoke shell-init)"
 ```
 
-## Sources
+This defines the `kctx()` shell wrapper function and starts the background watcher (`kctx watch`). Completely silent when sourced.
+
+The shell wrapper transparently handles the `switch` and `unload` commands by `eval`-ing the output (so `KUBECONFIG` changes take effect in the current shell). All other subcommands run the binary directly.
+
+### Manual eval (without shell-init)
+
+```bash
+eval "$(kctx switch prod)"
+eval "$(kctx unload)"
+```
+
+---
+
+## Usage
+
+### Switch context
+
+```bash
+kctx switch prod                          # fetch from Vault: secret/kubeconfig/prod
+kctx switch prod secret/my-kubeconfig    # custom Vault path
+kctx switch prod bw://kube/prod-config   # fetch from Bitwarden
+```
+
+### Unload
+
+```bash
+kctx unload   # unset KUBECONFIG and delete tmpfile
+```
+
+### Other commands
+
+| Command | Description |
+|---------|-------------|
+| `kctx shell-init` | Emit shell wrapper and start watcher (silent) |
+| `kctx status` | Show current `KUBECONFIG` path and active context |
+| `kctx clear-cache` | Remove all Bitwarden cache files used by kctx |
+| `kctx watch` | Background daemon for sleep/lock events (started by shell-init) |
+| `kctx --version` | Print version |
+
+---
+
+## Secret sources
 
 ### Vault (default)
 
-By default `kctx switch <env>` fetches from `vault://secret/kubeconfig/<env>`.
-Pass a custom path as the second argument:
+`kctx switch <env>` fetches from `vault://secret/kubeconfig/<env>` by default. Pass a custom path as the second argument:
 
 ```bash
 kctx switch staging secret/infra/staging/kubeconfig
@@ -135,59 +92,26 @@ Provide a `bw://` URI as the second argument:
 kctx switch prod bw://kube/prod-config
 ```
 
-The kubeconfig content must be stored in the **Notes** field of the Bitwarden
-item. Bitwarden custom fields have a character limit — always use Notes for
-kubeconfig files to avoid truncation.
-
-The `bw://` format is `bw://<folder>/<item-name>` (fetches the Notes field by
-default). See the URI format table for all options.
+The kubeconfig content must be stored in the **Notes** field of the Bitwarden item. Custom fields have a character limit — always use Notes for kubeconfig files to avoid truncation.
 
 ### URI formats
 
-| Scheme | Format | Fetches |
-|--------|--------|---------|
-| Vault KV v2 | `vault://secret/path` | `kubeconfig` field at the path |
-| Bitwarden (notes) | `bw://folder/item` | Notes field (default for kubeconfig) |
-| Bitwarden (custom) | `bw://folder/item/field:name` | Custom field |
-| Bitwarden (collection) | `bw://collection:name/item` | Item in a Bitwarden collection |
+| Format | Fetches |
+|--------|---------|
+| `vault://secret/path` | Vault KV v2 — `kubeconfig` field at path |
+| `bw://folder/item` | Bitwarden — Notes field (default for kubeconfig) |
+| `bw://folder/item/field:name` | Bitwarden — custom field named `name` |
+| `bw://collection:name/item` | Bitwarden — item in a collection |
 
-## Security model
+---
 
-| Property | Detail |
-|----------|--------|
-| RAM-backed tmpfiles | Written to `/dev/shm` (Linux tmpfs, cleared on reboot); `/tmp` fallback |
-| AES-256 encrypted Bitwarden cache | Same cache model as `renv` — PBKDF2-SHA256 key derivation, 8-hour TTL |
-| Exit cleanup | Shell wrapper registers `trap 'kctx unload' EXIT` |
-| No persistent kubeconfig | Tmpfile is deleted on shell exit, lock, or sleep |
+## Configuration
 
-⚠️ **Known limitations:** root can read `/dev/shm`; macOS has no `/dev/shm` equivalent.
+`kctx` shares the same config file as `renv`:
 
-## Sleep and screen-lock integration (Linux)
+**Config file location:** `~/.config/renv/config.yaml` (respects `$XDG_CONFIG_HOME`)
 
-`kctx watch` listens for D-Bus signals from **systemd-logind**:
-
-| Event | D-Bus signal | Action |
-|-------|-------------|--------|
-| Screen locked | `org.freedesktop.login1.Session.Lock` | Removes kubeconfig tmpfiles; `KUBECONFIG` unloaded from open shells. Cache kept. |
-| System suspend/hibernate | `org.freedesktop.login1.Manager.PrepareForSleep` | Removes tmpfiles and clears Bitwarden cache. Full re-auth required after wake. |
-
-`kctx watch` is started automatically by `kctx shell-init`.
-
-### Requirement: lock via loginctl / D-Bus
-
-The lock signal only reaches `kctx` when the session is locked through
-`loginctl lock-session`:
-
-```bash
-loginctl lock-session
-```
-
-> **Note:** Invoking a screen locker directly (e.g. `swaylock`, `waylock`)
-> without `loginctl` does **not** emit the D-Bus signal. `kctx` will not
-> receive the lock event and the kubeconfig tmpfile will remain until the
-> shell exits.
-
-## Environment variables
+### Environment variables
 
 | Variable | Description |
 |----------|-------------|
@@ -197,7 +121,62 @@ loginctl lock-session
 | `RENV_LOCAL_PASSWORD` | Local cache encryption password (non-interactive) |
 | `BW_SESSION` | Pre-existing Bitwarden session token (skips `bw unlock`) |
 | `RENV_CACHE_MAX_AGE` | Bitwarden cache TTL (Go duration, e.g. `8h`) |
-| `RENV_TIMEOUT_BITWARDEN` | Timeout for `bw` subprocess calls (Go duration, e.g. `60s`) |
-| `RENV_TIMEOUT_VAULT` | Timeout for `vault` subprocess calls (Go duration, e.g. `60s`) |
+| `RENV_TIMEOUT_BITWARDEN` | Timeout for `bw` subprocess calls (e.g. `60s`) |
+| `RENV_TIMEOUT_VAULT` | Timeout for `vault` subprocess calls (e.g. `60s`) |
 | `RENV_LOG_LEVEL` | `debug` / `info` / `warn` / `error` |
 | `RENV_LOG_FORMAT` | `text` (default) or `json` |
+
+---
+
+## Security model
+
+| Property | Detail |
+|----------|--------|
+| RAM-backed tmpfiles | Written to `/dev/shm` (Linux tmpfs, cleared on reboot); `/tmp` fallback on macOS |
+| AES-256 encrypted cache | Same cache model as `renv` — PBKDF2-SHA256 key derivation, 8-hour default TTL |
+| Exit cleanup | Shell wrapper registers `trap 'kctx unload' EXIT` |
+| No persistent kubeconfig | Tmpfile deleted on shell exit, lock, or sleep |
+
+> ⚠️ **Known limitations:** root can read `/dev/shm`; macOS has no `/dev/shm` equivalent.
+
+---
+
+## Special integrations
+
+### envoke resolve — loading kubeconfigs from .env
+
+When using the `envoke resolve` command (the unified binary), you can declare kubeconfig directives alongside regular env secrets in your `.env` file:
+
+```bash
+# .env — safe to commit
+DB_PASS=bw://prod/database
+KCTX_PROD=bw://kubernetes/prod-cluster
+KCTX_STAGING=vault://secret/kubeconfigs/staging
+```
+
+Keys prefixed with `KCTX_` are treated as kubeconfig directives rather than environment variables. `envoke resolve` fetches the kubeconfig and loads it into the `kctx` named store — `KCTX_PROD` becomes the context named `prod`, `KCTX_STAGING` becomes `staging`. The kubeconfig tmpfile and `KUBECONFIG` export are set up exactly as if you had run `kctx switch`.
+
+### Sleep and screen-lock (Linux)
+
+`kctx watch` listens for D-Bus signals from **systemd-logind**:
+
+| Event | Action |
+|-------|--------|
+| Screen locked (`loginctl lock-session`) | Kubeconfig tmpfiles removed; `KUBECONFIG` unloaded from open shells; cache kept |
+| System suspend / hibernate | Tmpfiles removed and Bitwarden cache cleared; full re-auth required on wake |
+
+`kctx watch` is started automatically by `kctx shell-init`.
+
+> **Note:** Locking directly via `swaylock` or `waylock` without `loginctl` does **not** emit the D-Bus signal. The tmpfile will remain until the shell exits.
+
+For automatic locking with **swayidle**:
+
+```bash
+exec swayidle -w \
+    timeout 300 'loginctl lock-session' \
+    before-sleep 'loginctl lock-session'
+```
+
+### Nix shell
+
+When `IN_NIX_SHELL` is set, `kctx` omits the `EXIT` trap from its output — Nix manages the shell lifecycle.
