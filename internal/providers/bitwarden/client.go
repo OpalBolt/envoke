@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	appcache "github.com/eficode/secure-handling-of-secrets/internal/cache"
 	"golang.org/x/term"
 )
 
@@ -38,7 +39,7 @@ var ErrInvalidPassword = errors.New("invalid Bitwarden master password")
 //     cache. No Bitwarden contact.
 //  3. Access after cache TTL expires: prompt LocalPassword + BWPassword → re-fetch.
 type BWClient struct {
-	Cache         *Cache
+	Cache         *appcache.Cache
 	BWPassword    string // cleared after bw unlock; used only for `bw unlock --raw`
 	LocalPassword string // used only for cache encryption; never sent to Bitwarden; held in memory only
 	// Timeout caps each bw subprocess call. Zero uses the 30 s default.
@@ -341,7 +342,7 @@ func (c *BWClient) FolderItems(folder string) ([]map[string]interface{}, error) 
 	if pw == "" {
 		slog.Debug("skipping cache (no local password set)", "folder", folder)
 	} else {
-		cached, cacheErr := c.Cache.Get(uid, acctTag, folder, pw)
+		cached, cacheErr := c.Cache.Get(uid, bwCacheKey(uid, acctTag, folder), pw)
 		if cacheErr != nil {
 			slog.Warn("cache decryption failed; falling back to Bitwarden (wrong local password?)",
 				"folder", folder, "error", cacheErr)
@@ -381,7 +382,7 @@ func (c *BWClient) FolderItems(folder string) ([]map[string]interface{}, error) 
 	}
 
 	if pw != "" {
-		_ = c.Cache.Put(uid, acctTag, folder, pw, out)
+		_ = c.Cache.Put(uid, bwCacheKey(uid, acctTag, folder), pw, out)
 	}
 
 	var items []map[string]interface{}
@@ -413,7 +414,7 @@ func (c *BWClient) CollectionItems(collectionName string) ([]map[string]interfac
 	if pw == "" {
 		slog.Debug("skipping cache (no local password set)", "collection", collectionName)
 	} else {
-		cached, cacheErr := c.Cache.Get(uid, acctTag, cacheKeyStr, pw)
+		cached, cacheErr := c.Cache.Get(uid, bwCacheKey(uid, acctTag, cacheKeyStr), pw)
 		if cacheErr != nil {
 			slog.Warn("cache decryption failed; falling back to Bitwarden (wrong local password?)",
 				"collection", collectionName, "error", cacheErr)
@@ -452,7 +453,7 @@ func (c *BWClient) CollectionItems(collectionName string) ([]map[string]interfac
 	}
 
 	if pw != "" {
-		_ = c.Cache.Put(uid, acctTag, cacheKeyStr, pw, out)
+		_ = c.Cache.Put(uid, bwCacheKey(uid, acctTag, cacheKeyStr), pw, out)
 	}
 
 	var items []map[string]interface{}

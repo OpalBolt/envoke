@@ -481,7 +481,7 @@ func statusCmd() *cobra.Command {
 			ui.Header(w, "Cache")
 			cache := bw.NewCache()
 			ui.Item(w, "Location", cache.Dir)
-			files, ages, err := bw.CacheStatus(cache)
+			files, ages, err := cache.Status()
 			if err != nil {
 				return err
 			}
