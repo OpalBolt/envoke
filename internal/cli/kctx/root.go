@@ -93,6 +93,49 @@ func NewSubCmd(cfg *config.Config) *cobra.Command {
 	return root
 }
 
+func newRegistry(cfg *config.Config) *secrets.Registry {
+	cache := secrets.NewCache()
+	cache.MaxAge = cfg.CacheMaxAge()
+	bwClient := &secrets.BWClient{
+		Cache:   cache,
+		Timeout: cfg.BitwardenTimeout(),
+	}
+	vaultClient := &secrets.VaultClient{Timeout: cfg.VaultTimeout()}
+
+	reg := secrets.NewRegistry()
+	reg.Register(secrets.NewBWProvider(bwClient))
+	reg.Register(secrets.NewVaultProvider(vaultClient))
+	return reg
+}
+
+// normalizeKubeconfigURI normalises a kubeconfig source URI for the registry.
+// For vault:// URIs that lack a #field fragment, it appends "#kubeconfig".
+// For bare paths (no scheme), it prepends "vault://" and appends "#kubeconfig".
+func normalizeKubeconfigURI(source string) string {
+	if strings.HasPrefix(source, "bw://") {
+		return source
+	}
+	if strings.HasPrefix(source, "vault://") {
+		if !strings.Contains(source, "#") {
+			return source + "#kubeconfig"
+		}
+		return source
+	}
+	// bare path — treat as vault KV
+	return "vault://" + source + "#kubeconfig"
+}
+
+// kctxLocalPassword returns the local encryption password for the kubeconfig store.
+// Prefers the password already established by the BW provider (avoiding a second
+// prompt when BW was used). Falls back to a fresh ReadLocalPassword prompt when
+// the registry has no BW provider or no BW resolve has occurred (e.g. Vault path).
+func kctxLocalPassword(reg *secrets.Registry) (string, error) {
+	if lp := reg.LocalPassword(); lp != "" {
+		return lp, nil
+	}
+	return secrets.ReadLocalPassword()
+}
+
 func loadCmd(cfg *config.Config) *cobra.Command {
 	return &cobra.Command{
 		Use:   "load <name> <bw://item|vault-path>",
@@ -121,58 +164,18 @@ Examples:
 			uid := fmt.Sprintf("%d", os.Getuid())
 			store := kubeconfig.NewNamedStore()
 
-			var kubeconfigData []byte
-			var localPassword string
+			reg := newRegistry(cfg)
+			uri := normalizeKubeconfigURI(source)
 
-			if strings.HasPrefix(source, "bw://") {
-				ref, err := secrets.ParseBWRef(source)
-				if err != nil {
-					return err
-				}
-				cache := secrets.NewCache()
-				cache.MaxAge = cfg.CacheMaxAge()
-				bwClient := &secrets.BWClient{
-					Cache:   cache,
-					Timeout: cfg.BitwardenTimeout(),
-				}
-				val, bwerr := bwClient.Resolve(ref)
-				if bwerr != nil {
-					return bwerr
-				}
-				kubeconfigData = []byte(val)
-				localPassword = bwClient.LocalPassword
-			} else {
-				var vaultRef secrets.VaultRef
-				if strings.HasPrefix(source, "vault://") {
-					if strings.Contains(source, "#") {
-						ref, err := secrets.ParseVaultRef(source)
-						if err != nil {
-							return err
-						}
-						if ref.Field == "" {
-							ref.Field = "kubeconfig"
-						}
-						vaultRef = ref
-					} else {
-						vaultRef = secrets.VaultRef{
-							Path:  strings.TrimPrefix(source, "vault://"),
-							Field: "kubeconfig",
-						}
-					}
-				} else {
-					vaultRef = secrets.VaultRef{Path: source, Field: "kubeconfig"}
-				}
-				vc := &secrets.VaultClient{Timeout: cfg.VaultTimeout()}
-				val, verr := vc.Resolve(vaultRef)
-				if verr != nil {
-					return verr
-				}
-				kubeconfigData = []byte(val)
-				lp, lperr := secrets.ReadLocalPassword()
-				if lperr != nil {
-					return lperr
-				}
-				localPassword = lp
+			val, err := reg.Resolve(uri)
+			if err != nil {
+				return err
+			}
+			kubeconfigData := []byte(val)
+
+			localPassword, err := kctxLocalPassword(reg)
+			if err != nil {
+				return err
 			}
 
 			if err := store.Put(uid, name, localPassword, kubeconfigData); err != nil {
@@ -263,47 +266,11 @@ Examples:
 }
 
 func fetchKubeconfig(cfg *config.Config, source string) ([]byte, error) {
-	if strings.HasPrefix(source, "bw://") {
-		ref, err := secrets.ParseBWRef(source)
-		if err != nil {
-			return nil, err
-		}
-		cache := secrets.NewCache()
-		cache.MaxAge = cfg.CacheMaxAge()
-		bwClient := &secrets.BWClient{
-			Cache:   cache,
-			Timeout: cfg.BitwardenTimeout(),
-		}
-		val, bwerr := bwClient.Resolve(ref)
-		if bwerr != nil {
-			return nil, bwerr
-		}
-		return []byte(val), nil
-	}
-	var vaultRef secrets.VaultRef
-	if strings.HasPrefix(source, "vault://") {
-		if strings.Contains(source, "#") {
-			ref, err := secrets.ParseVaultRef(source)
-			if err != nil {
-				return nil, err
-			}
-			if ref.Field == "" {
-				ref.Field = "kubeconfig"
-			}
-			vaultRef = ref
-		} else {
-			vaultRef = secrets.VaultRef{
-				Path:  strings.TrimPrefix(source, "vault://"),
-				Field: "kubeconfig",
-			}
-		}
-	} else {
-		vaultRef = secrets.VaultRef{Path: source, Field: "kubeconfig"}
-	}
-	vc := &secrets.VaultClient{Timeout: cfg.VaultTimeout()}
-	val, verr := vc.Resolve(vaultRef)
-	if verr != nil {
-		return nil, verr
+	reg := newRegistry(cfg)
+	uri := normalizeKubeconfigURI(source)
+	val, err := reg.Resolve(uri)
+	if err != nil {
+		return nil, err
 	}
 	return []byte(val), nil
 }

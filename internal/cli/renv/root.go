@@ -108,7 +108,7 @@ func NewSubCmd(noCache *bool, cfg *config.Config) *cobra.Command {
 	return root
 }
 
-func newClients(noCache bool, cfg *config.Config) (*secrets.Cache, *secrets.BWClient, *secrets.VaultClient) {
+func newRegistry(noCache bool, cfg *config.Config) *secrets.Registry {
 	cache := secrets.NewCache()
 	cache.MaxAge = cfg.CacheMaxAge()
 	if noCache {
@@ -119,7 +119,11 @@ func newClients(noCache bool, cfg *config.Config) (*secrets.Cache, *secrets.BWCl
 		Timeout: cfg.BitwardenTimeout(),
 	}
 	vaultClient := &secrets.VaultClient{Timeout: cfg.VaultTimeout()}
-	return cache, bwClient, vaultClient
+
+	reg := secrets.NewRegistry()
+	reg.Register(secrets.NewBWProvider(bwClient))
+	reg.Register(secrets.NewVaultProvider(vaultClient))
+	return reg
 }
 
 func resolveCmd(noCache *bool, cfg *config.Config) *cobra.Command {
@@ -158,9 +162,9 @@ Then in .envrc:
 				ui.Warn(os.Stderr, "stdout is a terminal — output will not be set as env vars.")
 				fmt.Fprintln(os.Stderr, "  use: eval \"$(renv resolve .env)\"")
 			}
-			_, bwClient, vaultClient := newClients(*noCache, cfg)
+			reg := newRegistry(*noCache, cfg)
 
-			entries, err := env.ResolveDotEnv(file, bwClient, vaultClient)
+			entries, err := env.ResolveDotEnv(file, reg)
 			if err != nil {
 				return fmt.Errorf("resolving %s: %w", file, err)
 			}
@@ -219,9 +223,9 @@ The resolved variables override any same-named variables already in the environm
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			slog.Debug("running exec", "file", file, "command", args[0])
-			_, bwClient, vaultClient := newClients(*noCache, cfg)
+			reg := newRegistry(*noCache, cfg)
 
-			entries, err := env.ResolveDotEnv(file, bwClient, vaultClient)
+			entries, err := env.ResolveDotEnv(file, reg)
 			if err != nil {
 				return fmt.Errorf("resolving %s: %w", file, err)
 			}
@@ -378,9 +382,9 @@ func yamlCmd(cfg *config.Config) *cobra.Command {
 				return fmt.Errorf("--file or positional argument required")
 			}
 			slog.Debug("running yaml resolve", "file", file, "key", key)
-			_, bwClient, vaultClient := newClients(false, cfg)
+			reg := newRegistry(false, cfg)
 
-			data, err := env.ResolveYAML(file, bwClient, vaultClient)
+			data, err := env.ResolveYAML(file, reg)
 			if err != nil {
 				return err
 			}
