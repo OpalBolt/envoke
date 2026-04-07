@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -48,7 +49,8 @@ func rootCmd() *cobra.Command {
 
 The .env file supports KCTX_<name>=bw://... or KCTX_<name>=vault://...
 entries that load kubeconfigs into the local kctx named store.`,
-		Version: version.String(),
+		Version:      version.String(),
+		SilenceUsage: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			var err error
 			cfg, err = config.Load(cfgFile)
@@ -183,17 +185,24 @@ The output must be evaluated by your shell:
 			if len(kctxEntries) > 0 {
 				uid := fmt.Sprintf("%d", os.Getuid())
 				store := kubeconfig.NewNamedStore()
+				var kctxNames []string
 				for _, e := range kctxEntries {
 					name := kctxNameFromKey(e.Key)
 					if err := fetchKubeconfigForDirective(sharedBW, sharedVault, name, e.Value, uid, store); err != nil {
+						if errors.Is(err, secrets.ErrInvalidPassword) {
+							return err
+						}
 						return fmt.Errorf("loading kubeconfig %q (%s): %w", name, e.Value, err)
 					}
+					kctxNames = append(kctxNames, name)
 					kctxPanelEntries = append(kctxPanelEntries, ui.PanelEntry{
 						Key:    name,
 						Source: e.Value,
 					})
 					slog.Debug("loaded kubeconfig into kctx store", "name", name, "source", e.Value)
 				}
+				// Persist loaded kctx names for envoke unload.
+				_ = kubeconfig.SaveTrackedNames(uid, kctxNames)
 			}
 
 			// Handle env secret entries using the same shared clients.
@@ -209,6 +218,9 @@ The output must be evaluated by your shell:
 
 				resolvedEntries, err = env.ResolveDotEnv(tmpFile, sharedBW, sharedVault)
 				if err != nil {
+					if errors.Is(err, secrets.ErrInvalidPassword) {
+						return err
+					}
 					return fmt.Errorf("resolving %s: %w", file, err)
 				}
 			}
@@ -407,6 +419,27 @@ When using the envoke shell-init, the shell function handles this automatically.
 				})
 			}
 			fmt.Fprintln(os.Stdout, "unset KUBECONFIG")
+
+			// Remove kctx named store entries loaded by envoke resolve.
+			kctxNames, err := kubeconfig.LoadTrackedNames(uid)
+			if err != nil {
+				slog.Warn("loading tracked kctx names", "err", err)
+			}
+			if len(kctxNames) > 0 {
+				store := kubeconfig.NewNamedStore()
+				for _, name := range kctxNames {
+					if rmErr := store.Remove(uid, name); rmErr != nil {
+						slog.Warn("removing kctx store entry", "name", name, "err", rmErr)
+					} else {
+						slog.Debug("removed kctx store entry", "name", name)
+						panelEntries = append(panelEntries, ui.PanelEntry{
+							Key:   "kctx:" + name,
+							Value: "(store)",
+						})
+					}
+				}
+				_ = kubeconfig.ClearTrackedNames(uid)
+			}
 
 			if len(panelEntries) == 0 {
 				ui.Warn(os.Stderr, "Nothing to unload")

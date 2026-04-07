@@ -30,9 +30,10 @@ func NewRootCmd() *cobra.Command {
 	var cfg config.Config
 
 	root := &cobra.Command{
-		Use:     "renv",
-		Short:   "Resolve secret references in .env and YAML files",
-		Version: version.String(),
+		Use:          "renv",
+		Short:        "Resolve secret references in .env and YAML files",
+		Version:      version.String(),
+		SilenceUsage: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			var err error
 			cfg, err = config.Load(cfgFile)

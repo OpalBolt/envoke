@@ -28,9 +28,10 @@ func NewRootCmd() *cobra.Command {
 	var cfg config.Config
 
 	root := &cobra.Command{
-		Use:     "kctx",
-		Short:   "Ephemeral kubeconfig switcher via Vault or Bitwarden",
-		Version: version.String(),
+		Use:          "kctx",
+		Short:        "Ephemeral kubeconfig switcher via Vault or Bitwarden",
+		Version:      version.String(),
+		SilenceUsage: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			var err error
 			cfg, err = config.Load(cfgFile)
