@@ -144,14 +144,12 @@ func resolveCmd(noCache *bool, cfg *config.Config) *cobra.Command {
 Secret references (bw://, vault://) are resolved and exported as shell variables.
 
 Kubeconfig directives (keys prefixed with KCTX_) load a kubeconfig into the
-local kctx named store without exporting the raw value:
+local kctx named store and automatically set KUBECONFIG to the last loaded one:
 
   KCTX_PROD=bw://kubernetes/prod-cluster     # loads kubeconfig named "prod"
   KCTX_STAGING=vault://secret/kubeconfigs    # loads kubeconfig named "staging"
 
-After envoke resolve, switch to a loaded kubeconfig with:
-
-  kctx prod       (shorthand for: kctx switch prod)
+Use 'kctx switch <name>' to switch between loaded kubeconfigs at any time.
 
 The output must be evaluated by your shell:
 
@@ -196,18 +194,22 @@ The output must be evaluated by your shell:
 
 			// Handle kubeconfig directives using the shared registry.
 			var kctxPanelEntries []ui.PanelEntry
+			var kubeconfigPath string
 			if len(kctxEntries) > 0 {
 				uid := fmt.Sprintf("%d", os.Getuid())
 				store := kubeconfig.NewNamedStore()
 				var kctxNames []string
+				var lastKubeconfigData []byte
 				for _, e := range kctxEntries {
 					name := kctxNameFromKey(e.Key)
-					if err := fetchKubeconfigForDirective(sharedReg, name, e.Value, uid, store); err != nil {
+					data, err := fetchKubeconfigForDirective(sharedReg, name, e.Value, uid, store)
+					if err != nil {
 						if errors.Is(err, bw.ErrInvalidPassword) {
 							return err
 						}
 						return fmt.Errorf("loading kubeconfig %q (%s): %w", name, e.Value, err)
 					}
+					lastKubeconfigData = data
 					kctxNames = append(kctxNames, name)
 					kctxPanelEntries = append(kctxPanelEntries, ui.PanelEntry{
 						Key:    name,
@@ -216,6 +218,16 @@ The output must be evaluated by your shell:
 					slog.Debug("loaded kubeconfig into kctx store", "name", name, "source", e.Value)
 				}
 				_ = kubeconfig.SaveTrackedNames(uid, kctxNames)
+
+				// Write a tmpfile for the last loaded kubeconfig and emit KUBECONFIG.
+				if lastKubeconfigData != nil {
+					path, werr := kubeconfig.WriteKubeconfig(lastKubeconfigData)
+					if werr != nil {
+						return fmt.Errorf("writing kubeconfig tmpfile: %w", werr)
+					}
+					kubeconfigPath = path
+					slog.Debug("set KUBECONFIG", "path", path)
+				}
 			}
 
 			// Handle env secret entries using the same shared registry.
@@ -238,6 +250,9 @@ The output must be evaluated by your shell:
 
 			if err := env.EmitExports(os.Stdout, resolvedEntries); err != nil {
 				return err
+			}
+			if kubeconfigPath != "" {
+				fmt.Fprintf(os.Stdout, "export KUBECONFIG=%s\n", kubeconfigPath)
 			}
 
 			if len(resolvedEntries) > 0 {
@@ -273,7 +288,14 @@ The output must be evaluated by your shell:
 				case "fish":
 					fmt.Println("# Fish shell trap not supported via eval; use envoke clear-cache manually")
 				default:
-					fmt.Println("trap 'envoke clear-cache' EXIT")
+					if kubeconfigPath != "" {
+						// KUBECONFIG tmpfile needs cleanup on exit — use unload (which removes
+						// the tmpfile) followed by clear-cache. The shell-init combined trap
+						// already does this; this covers raw eval "$(envoke resolve .env)" usage.
+						fmt.Println("trap 'eval \"$(envoke unload 2>/dev/null)\" 2>/dev/null; envoke clear-cache 2>/dev/null' EXIT")
+					} else {
+						fmt.Println("trap 'envoke clear-cache' EXIT")
+					}
 				}
 			}
 			return nil
@@ -299,12 +321,13 @@ func kctxNameFromKey(key string) string {
 }
 
 // fetchKubeconfigForDirective fetches kubeconfig bytes from a bw:// or vault:// source,
-// stores them in the named store using the registry's shared local password.
-func fetchKubeconfigForDirective(reg *providers.Registry, name, source, uid string, store *kubeconfig.NamedStore) error {
+// stores them in the named store using the registry's shared local password,
+// and returns the kubeconfig bytes so the caller can write a tmpfile.
+func fetchKubeconfigForDirective(reg *providers.Registry, name, source, uid string, store *kubeconfig.NamedStore) ([]byte, error) {
 	uri := normalizeKubeconfigURI(source)
 	val, err := reg.Resolve(uri)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	kubeconfigData := []byte(val)
 
@@ -312,12 +335,12 @@ func fetchKubeconfigForDirective(reg *providers.Registry, name, source, uid stri
 	if localPassword == "" {
 		lp, err := bw.ReadLocalPassword()
 		if err != nil {
-			return err
+			return nil, err
 		}
 		localPassword = lp
 	}
 
-	return store.Put(uid, name, localPassword, kubeconfigData)
+	return kubeconfigData, store.Put(uid, name, localPassword, kubeconfigData)
 }
 
 // writeTempEnv writes env entries to a temp .env file for processing by ResolveDotEnv.
