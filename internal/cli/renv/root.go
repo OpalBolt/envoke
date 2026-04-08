@@ -171,6 +171,7 @@ Then in .envrc:
 				fmt.Fprintln(os.Stderr, "  use: eval \"$(renv resolve .env)\"")
 			}
 			reg := newRegistry(*noCache, cfg)
+			defer reg.Close() //nolint:errcheck // best-effort session cleanup
 
 			entries, err := env.ResolveDotEnv(file, reg)
 			if err != nil {
@@ -234,6 +235,7 @@ The resolved variables override any same-named variables already in the environm
 		RunE: func(cmd *cobra.Command, args []string) error {
 			slog.Debug("running exec", "file", file, "command", args[0])
 			reg := newRegistry(*noCache, cfg)
+			defer reg.Close() //nolint:errcheck // best-effort session cleanup
 
 			entries, err := env.ResolveDotEnv(file, reg)
 			if err != nil {
@@ -397,6 +399,7 @@ func yamlCmd(cfg *config.Config) *cobra.Command {
 			}
 			slog.Debug("running yaml resolve", "file", file, "key", key)
 			reg := newRegistry(false, cfg)
+			defer reg.Close() //nolint:errcheck // best-effort session cleanup
 
 			data, err := env.ResolveYAML(file, reg)
 			if err != nil {

@@ -32,8 +32,6 @@ func ResolveDotEnv(path string, reg *providers.Registry) ([]EnvEntry, error) {
 	}
 	slog.Debug("parsed .env file", "path", path, "entries", len(lines))
 
-	defer reg.Close() //nolint:errcheck // best-effort session cleanup
-
 	resolved := make([]EnvEntry, 0, len(lines))
 	refCount := 0
 	for _, e := range lines {

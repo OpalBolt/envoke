@@ -192,6 +192,7 @@ The output must be evaluated by your shell:
 
 			// Create ONE shared registry for the entire resolve operation.
 			sharedReg := newRegistry(*noCache, cfg)
+			defer sharedReg.Close() //nolint:errcheck // best-effort session cleanup
 
 			// Handle kubeconfig directives using the shared registry.
 			var kctxPanelEntries []ui.PanelEntry

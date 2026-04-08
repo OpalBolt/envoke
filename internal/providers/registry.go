@@ -75,8 +75,9 @@ func (r *Registry) IsSecretRef(uri string) bool {
 // Returns "" if no BW provider is registered or the password has not yet been
 // set (i.e. no BW resolve has occurred yet).
 //
-// Uses an anonymous interface assertion to avoid importing the bitwarden sub-package
-// (which would create a circular dependency since bw_provider.go already imports it).
+// Uses a structural interface assertion so the registry can obtain the
+// password from any registered provider that exposes LocalPassword() string
+// without depending on a specific concrete provider type.
 func (r *Registry) LocalPassword() string {
 	p, ok := r.providers["bw"]
 	if !ok {
@@ -88,12 +89,18 @@ func (r *Registry) LocalPassword() string {
 	return ""
 }
 
-// Close calls Close on every registered provider.
+// Close calls Close on every registered provider exactly once.
+// If a provider is registered for multiple schemes it is still closed only once.
 // A non-nil error from one provider does not stop the others from being closed.
 // The last non-nil error is returned.
 func (r *Registry) Close() error {
 	var last error
+	seen := make(map[Provider]struct{})
 	for _, p := range r.providers {
+		if _, already := seen[p]; already {
+			continue
+		}
+		seen[p] = struct{}{}
 		if err := p.Close(); err != nil {
 			last = err
 		}

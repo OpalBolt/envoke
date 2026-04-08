@@ -26,9 +26,9 @@ func zeroBytes(b []byte) {
 	}
 }
 
-// zeroString overwrites a string's backing memory with zeros (best-effort in Go).
+// zeroString clears the caller-visible string reference.
+// In Go, strings are immutable, so this does not overwrite the original
+// backing memory; it only drops this reference to the secret value.
 func zeroString(s *string) {
-	b := []byte(*s)
-	zeroBytes(b)
-	*s = string(make([]byte, len(*s)))
+	*s = ""
 }
