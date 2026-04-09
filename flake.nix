@@ -112,11 +112,10 @@
             govulncheck ./...
           '';
 
-          # Outputs SARIF to gosec-results.sarif for upload to GitHub Security tab.
-          # G304 (file inclusion via variable) is excluded — we intentionally read
-          # files from user-supplied paths (config, .env files).
+          # Outputs text findings to the log. SARIF upload requires GHAS which
+          # is not available. The job fails if gosec finds any issues.
           gosec = mkApp "gosec" [ pkgs.gosec ] ''
-            gosec -exclude=G304 -fmt sarif -out gosec-results.sarif -stdout -verbose=text ./...
+            gosec -exclude=G304 -fmt text -stdout -verbose=text ./...
           '';
 
           clean = mkApp "clean" [ ] ''

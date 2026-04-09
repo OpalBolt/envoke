@@ -40,18 +40,13 @@ jobs:
   # Checks for hard-coded credentials, unsafe exec, weak crypto, path
   # traversal, and more — especially relevant for a codebase that handles
   # secrets and spawns privileged subprocesses.
-  # Outputs SARIF so findings appear in the GitHub Security tab.
-  # `|| true` is intentional: gosec exits 1 when it finds issues (which is
-  # expected) and writes gosec-results.sarif before exiting. Without it the
-  # nix shell wrapper's set -e would propagate the exit code and the upload
-  # step would never see the file.
+  # Outputs findings as text to the job log. The job fails if gosec finds
+  # any issues (SARIF/code-scanning upload requires GHAS, which is not
+  # available).
   # ---------------------------------------------------------------------------
   gosec:
     name: gosec
     runs-on: ubuntu-latest
-    permissions:
-      contents: read        # required for actions/checkout
-      security-events: write  # needed to upload SARIF to GitHub Security tab
     steps:
       - uses: actions/checkout@v4
 
@@ -66,11 +61,5 @@ jobs:
           restore-prefixes-first-match: nix-${{ runner.os }}-
 
       - name: Run gosec
-        run: nix run .#gosec || true
-
-      - name: Upload SARIF to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@v4
-        if: hashFiles('gosec-results.sarif') != ''
-        with:
-          sarif_file: gosec-results.sarif
+        run: nix run .#gosec
 
