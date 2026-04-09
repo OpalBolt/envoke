@@ -203,7 +203,12 @@ func pkcs7Pad(data []byte, blockSize int) []byte {
 	padded := make([]byte, len(data)+padding)
 	copy(padded, data)
 	for i := len(data); i < len(padded); i++ {
-		padded[i] = byte(padding) //nolint:gosec // G115: padding is blockSize - (len%blockSize), max value is blockSize (16), fits in byte
+		padded[i] = byte(padding)
+	}
+	return padded
+}
+
+// pkcs7Unpad removes PKCS#7 padding.
 func pkcs7Unpad(data []byte) ([]byte, error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("empty data")

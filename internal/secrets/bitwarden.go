@@ -78,7 +78,7 @@ func (c *BWClient) ensureLocalPassword() error {
 	}
 	defer tty.Close()
 	fmt.Fprintf(tty, "Local cache password: ")
-	pwBytes, err := term.ReadPassword(int(tty.Fd())) //nolint:gosec // G115: tty fd is a small non-negative integer, safe to cast
+	pwBytes, err := term.ReadPassword(int(tty.Fd()))
 	if err != nil {
 		return fmt.Errorf("reading local cache password from tty: %w", err)
 	}
@@ -110,7 +110,7 @@ func ReadLocalPassword() (string, error) {
 	}
 	defer tty.Close()
 	fmt.Fprintf(tty, "Local cache password: ")
-	pwBytes, err := term.ReadPassword(int(tty.Fd())) //nolint:gosec // G115: tty fd is a small non-negative integer, safe to cast
+	pwBytes, err := term.ReadPassword(int(tty.Fd()))
 	if err != nil {
 		return "", fmt.Errorf("reading local cache password from tty: %w", err)
 	}
@@ -187,7 +187,7 @@ func (c *BWClient) Session() (string, error) {
 		}
 		defer tty.Close()
 		fmt.Fprintf(tty, "Bitwarden master password: ")
-		pwBytes, err := term.ReadPassword(int(tty.Fd())) //nolint:gosec // G115: tty fd is a small non-negative integer, safe to cast
+		pwBytes, err := term.ReadPassword(int(tty.Fd()))
 		if err != nil {
 			return "", fmt.Errorf("reading password from tty: %w", err)
 		}

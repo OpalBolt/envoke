@@ -154,7 +154,7 @@ Then in .envrc:
 				file = args[0]
 			}
 			slog.Debug("running resolve", "file", file, "shell", shell)
-			if term.IsTerminal(int(os.Stdout.Fd())) { //nolint:gosec // G115: fd is a small non-negative integer, safe to cast on all supported platforms
+			if term.IsTerminal(int(os.Stdout.Fd())) {
 				ui.Warn(os.Stderr, "stdout is a terminal — output will not be set as env vars.")
 				fmt.Fprintln(os.Stderr, "  use: eval \"$(renv resolve .env)\"")
 			}

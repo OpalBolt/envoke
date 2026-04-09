@@ -316,7 +316,7 @@ func unloadCmd(cfg *config.Config) *cobra.Command {
 			kubeconfigPath := os.Getenv("KUBECONFIG")
 			slog.Debug("clearing kubeconfig", "path", kubeconfigPath)
 			if kubeconfigPath != "" && isManagedKubeconfig(kubeconfigPath) {
-				_ = os.Remove(kubeconfigPath) //nolint:gosec // G703: path is validated by isManagedKubeconfig before reaching here
+				_ = os.Remove(kubeconfigPath)
 			}
 			fmt.Println("unset KUBECONFIG")
 

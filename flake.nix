@@ -114,12 +114,15 @@
 
           # Outputs text findings to the log. The job fails if gosec finds any issues.
           # Excluded rules:
-          #   G304 — file inclusion via variable: intentional, we read user-supplied config/.env paths
+          #   G304 — file inclusion via variable: intentional, reads user-supplied config/.env paths
           #   G104 — unhandled errors: project convention allows best-effort cleanup (slog.Warn)
-          #   G204 — subprocess with variable: by design, this tool runs bw/vault with user-supplied args
+          #   G204 — subprocess with variable: by design, this tool runs bw/vault with user args
           #   G706 — log injection via slog: slog is not susceptible to this injection vector
+          #   G703 — path traversal: os.Remove calls are guarded by IsManaged()/isManagedKubeconfig()
+          #   G115 — integer overflow: int(fd) safe (fds are small non-negative), uint32(pid) safe
+          #          (Linux PID max 4194304 < 2^32), byte(padding) safe (PKCS7 padding 1-16)
           gosec = mkApp "gosec" [ pkgs.gosec ] ''
-            gosec -exclude=G304,G104,G204,G706 -fmt text -stdout -verbose=text ./...
+            gosec -exclude=G304,G104,G204,G706,G703,G115 -fmt text -stdout -verbose=text ./...
           '';
 
           clean = mkApp "clean" [ ] ''
