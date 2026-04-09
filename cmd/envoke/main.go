@@ -138,7 +138,7 @@ The output must be evaluated by your shell:
 				file = args[0]
 			}
 			slog.Debug("running envoke resolve", "file", file)
-			if term.IsTerminal(int(os.Stdout.Fd())) {
+			if term.IsTerminal(int(os.Stdout.Fd())) { //nolint:gosec // G115: fd is a small non-negative integer, safe to cast on all supported platforms
 				ui.Warn(os.Stderr, "stdout is a terminal — output will not be set as env vars.")
 				fmt.Fprintln(os.Stderr, "  use: eval \"$(envoke resolve .env)\"")
 			}
@@ -410,7 +410,7 @@ When using the envoke shell-init, the shell function handles this automatically.
 			// shell variable is cleared even if we don't own the file.
 			kubeconfigPath := os.Getenv("KUBECONFIG")
 			if kubeconfigPath != "" && kubeconfig.IsManaged(kubeconfigPath) {
-				if err := os.Remove(kubeconfigPath); err != nil && !os.IsNotExist(err) {
+				if err := os.Remove(kubeconfigPath); err != nil && !os.IsNotExist(err) { //nolint:gosec // G703: path is validated by kubeconfig.IsManaged before reaching here
 					slog.Warn("removing managed kubeconfig", "path", kubeconfigPath, "err", err)
 				}
 				panelEntries = append(panelEntries, ui.PanelEntry{

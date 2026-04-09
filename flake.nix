@@ -112,10 +112,14 @@
             govulncheck ./...
           '';
 
-          # Outputs text findings to the log. SARIF upload requires GHAS which
-          # is not available. The job fails if gosec finds any issues.
+          # Outputs text findings to the log. The job fails if gosec finds any issues.
+          # Excluded rules:
+          #   G304 — file inclusion via variable: intentional, we read user-supplied config/.env paths
+          #   G104 — unhandled errors: project convention allows best-effort cleanup (slog.Warn)
+          #   G204 — subprocess with variable: by design, this tool runs bw/vault with user-supplied args
+          #   G706 — log injection via slog: slog is not susceptible to this injection vector
           gosec = mkApp "gosec" [ pkgs.gosec ] ''
-            gosec -exclude=G304 -fmt text -stdout -verbose=text ./...
+            gosec -exclude=G304,G104,G204,G706 -fmt text -stdout -verbose=text ./...
           '';
 
           clean = mkApp "clean" [ ] ''

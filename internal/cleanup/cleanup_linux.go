@@ -90,7 +90,7 @@ func (h *linuxHook) ensureStarted() error {
 func (h *linuxHook) currentSessionPath(conn *dbus.Conn) dbus.ObjectPath {
 	obj := conn.Object("org.freedesktop.login1", "/org/freedesktop/login1")
 	var path dbus.ObjectPath
-	if err := obj.Call("org.freedesktop.login1.Manager.GetSessionByPID", 0, uint32(os.Getpid())).Store(&path); err != nil {
+	if err := obj.Call("org.freedesktop.login1.Manager.GetSessionByPID", 0, uint32(os.Getpid())).Store(&path); err != nil { //nolint:gosec // G115: Linux PID max is 4194304, well within uint32 range
 		slog.Debug("cleanup: cannot resolve session path, Lock match will be broad", "error", err)
 		return ""
 	}
