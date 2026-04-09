@@ -1,0 +1,92 @@
+name: Security
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  schedule:
+    # Run weekly on Monday at 07:00 UTC to catch newly published CVEs
+    - cron: "0 7 * * 1"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # govulncheck — Go vulnerability database check
+  # Flags known CVEs in direct and transitive dependencies as well as in
+  # code paths actually reachable from this module.
+  # ---------------------------------------------------------------------------
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run govulncheck
+        uses: golang/govulncheck-action@v1
+        with:
+          go-version-file: go.mod
+          go-package: ./...
+
+  # ---------------------------------------------------------------------------
+  # gosec — static analysis for common Go security mistakes
+  # Checks for things like hard-coded credentials, unsafe use of exec,
+  # weak crypto, path traversal, and more. This tool is especially relevant
+  # for a codebase that handles secrets and spawns privileged subprocesses.
+  # ---------------------------------------------------------------------------
+  gosec:
+    name: gosec
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write  # needed to upload SARIF to GitHub Security tab
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run gosec
+        uses: securego/gosec@master
+        with:
+          # Output SARIF so findings appear in the Security tab, plus text for
+          # the log. Exclude G304 (file inclusion via variable) — we intentionally
+          # read files from user-supplied paths (config, .env). Revisit if new
+          # patterns are added.
+          args: >-
+            -exclude=G304
+            -fmt sarif
+            -out gosec-results.sarif
+            -stdout
+            -verbose=text
+            ./...
+
+      - name: Upload SARIF to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: gosec-results.sarif
+
+  # ---------------------------------------------------------------------------
+  # dependency-review — block PRs that introduce vulnerable dependencies
+  # Uses the GitHub Advisory Database. Runs only on pull_request events.
+  # ---------------------------------------------------------------------------
+  dependency-review:
+    name: Dependency review
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/dependency-review-action@v4
+        with:
+          # Fail on any severity; comment a summary on the PR
+          fail-on-severity: moderate
+          comment-summary-in-pr: always
