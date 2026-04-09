@@ -50,6 +50,7 @@ jobs:
     name: gosec
     runs-on: ubuntu-latest
     permissions:
+      contents: read        # required for actions/checkout
       security-events: write  # needed to upload SARIF to GitHub Security tab
     steps:
       - uses: actions/checkout@v4
