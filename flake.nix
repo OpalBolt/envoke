@@ -108,6 +108,17 @@
             go mod verify
           '';
 
+          govulncheck = mkApp "govulncheck" [ pkgs.govulncheck ] ''
+            govulncheck ./...
+          '';
+
+          # Outputs SARIF to gosec-results.sarif for upload to GitHub Security tab.
+          # G304 (file inclusion via variable) is excluded — we intentionally read
+          # files from user-supplied paths (config, .env files).
+          gosec = mkApp "gosec" [ pkgs.gosec ] ''
+            gosec -exclude=G304 -fmt sarif -out gosec-results.sarif -stdout -verbose=text ./...
+          '';
+
           clean = mkApp "clean" [ ] ''
             rm -rf bin coverage.out coverage.html
           '';
@@ -125,6 +136,8 @@
             gopls
             go-tools  # staticcheck
             goreleaser
+            govulncheck
+            gosec
           ] ++ [ envoke ];
 
           shellHook = ''

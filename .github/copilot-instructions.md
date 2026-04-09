@@ -135,13 +135,16 @@ Shell scripts must pass `shellcheck --severity=warning`.
 
 ## Code Review
 
-When reviewing a pull request, Copilot must apply **all four review agents** defined in `.github/instructions/`. Run each agent independently and surface findings under a clearly labelled heading per agent.
+PR reviews are handled by the **`pr-review`** custom agent (`.github/agents/pr-review.agent.md`), which runs four specialised sub-agents **in parallel** and synthesises their findings.
 
-| Agent file | Focus |
-|---|---|
-| [`review-security.instructions.md`](.github/instructions/review-security.instructions.md) | Secret leakage, shell/subprocess injection, URI parsing, crypto weaknesses, TOCTOU races, password model violations |
-| [`review-remnants.instructions.md`](.github/instructions/review-remnants.instructions.md) | TODOs, commented-out code, hardcoded values, debug prints, dead imports, misplaced files |
-| [`review-standards.instructions.md`](.github/instructions/review-standards.instructions.md) | Error wrapping, structured logging, two-password model, shell output safety, subcommand pattern, test presence |
-| [`review-tests.instructions.md`](.github/instructions/review-tests.instructions.md) | Missing/weak tests, race-unsafe tests, missing skip guards for integration tests, benchmark quality |
+| Agent file | Role | Focus |
+|---|---|---|
+| [`pr-review.agent.md`](.github/agents/pr-review.agent.md) | Orchestrator | Spawns all sub-agents in parallel; synthesises findings |
+| [`review-security.agent.md`](.github/agents/review-security.agent.md) | Sub-agent | Secret leakage, shell/subprocess injection, URI parsing, crypto weaknesses, TOCTOU races, password-model violations |
+| [`review-remnants.agent.md`](.github/agents/review-remnants.agent.md) | Sub-agent | TODOs, commented-out code, hardcoded values, debug prints, dead imports, misplaced files |
+| [`review-standards.agent.md`](.github/agents/review-standards.agent.md) | Sub-agent | Error wrapping, structured logging, two-password model, shell output safety, subcommand pattern |
+| [`review-tests.agent.md`](.github/agents/review-tests.agent.md) | Sub-agent | Missing/weak tests, race-unsafe tests, missing skip guards for integration tests |
 
-Each agent file contains its own detailed checklist and output format. All four must produce a verdict — even if that verdict is "nothing found".
+The sub-agents have `user-invocable: false` — they are only accessible through the `pr-review` orchestrator, not visible in the agent dropdown.
+
+To trigger a review, assign the **`pr-review`** agent to the pull request or invoke it from the Copilot panel.

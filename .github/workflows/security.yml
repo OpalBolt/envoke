@@ -13,6 +13,8 @@ jobs:
   # govulncheck — Go vulnerability database check
   # Flags known CVEs in direct and transitive dependencies as well as in
   # code paths actually reachable from this module.
+  # Runs via `nix run .#govulncheck` so the environment is identical to local
+  # development and to the rest of CI.
   # ---------------------------------------------------------------------------
   govulncheck:
     name: govulncheck
@@ -20,22 +22,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
+      - uses: cachix/install-nix-action@v31
         with:
-          go-version-file: go.mod
-          cache: true
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
 
       - name: Run govulncheck
-        uses: golang/govulncheck-action@v1
-        with:
-          go-version-file: go.mod
-          go-package: ./...
+        run: nix run .#govulncheck
 
   # ---------------------------------------------------------------------------
   # gosec — static analysis for common Go security mistakes
-  # Checks for things like hard-coded credentials, unsafe use of exec,
-  # weak crypto, path traversal, and more. This tool is especially relevant
-  # for a codebase that handles secrets and spawns privileged subprocesses.
+  # Checks for hard-coded credentials, unsafe exec, weak crypto, path
+  # traversal, and more — especially relevant for a codebase that handles
+  # secrets and spawns privileged subprocesses.
+  # Outputs SARIF so findings appear in the GitHub Security tab.
   # ---------------------------------------------------------------------------
   gosec:
     name: gosec
@@ -45,25 +50,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
+      - uses: cachix/install-nix-action@v31
         with:
-          go-version-file: go.mod
-          cache: true
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
 
       - name: Run gosec
-        uses: securego/gosec@master
-        with:
-          # Output SARIF so findings appear in the Security tab, plus text for
-          # the log. Exclude G304 (file inclusion via variable) — we intentionally
-          # read files from user-supplied paths (config, .env). Revisit if new
-          # patterns are added.
-          args: >-
-            -exclude=G304
-            -fmt sarif
-            -out gosec-results.sarif
-            -stdout
-            -verbose=text
-            ./...
+        run: nix run .#gosec
 
       - name: Upload SARIF to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v3
@@ -73,7 +71,8 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # dependency-review — block PRs that introduce vulnerable dependencies
-  # Uses the GitHub Advisory Database. Runs only on pull_request events.
+  # Uses the GitHub Advisory Database via the GitHub API — no local tooling
+  # required, so no Nix setup needed here.
   # ---------------------------------------------------------------------------
   dependency-review:
     name: Dependency review
@@ -90,3 +89,4 @@ jobs:
           # Fail on any severity; comment a summary on the PR
           fail-on-severity: moderate
           comment-summary-in-pr: always
+
