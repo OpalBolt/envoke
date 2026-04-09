@@ -10,14 +10,17 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/spf13/cobra"
+
 	"github.com/eficode/secure-handling-of-secrets/internal/cleanup"
 	"github.com/eficode/secure-handling-of-secrets/internal/config"
 	"github.com/eficode/secure-handling-of-secrets/internal/kubeconfig"
 	"github.com/eficode/secure-handling-of-secrets/internal/logger"
-	"github.com/eficode/secure-handling-of-secrets/internal/secrets"
+	"github.com/eficode/secure-handling-of-secrets/internal/providers"
+	bw "github.com/eficode/secure-handling-of-secrets/internal/providers/bitwarden"
+	vlt "github.com/eficode/secure-handling-of-secrets/internal/providers/vault"
 	"github.com/eficode/secure-handling-of-secrets/internal/ui"
 	"github.com/eficode/secure-handling-of-secrets/internal/version"
-	"github.com/spf13/cobra"
 )
 
 // NewRootCmd returns the root cobra command for the kctx CLI.
@@ -93,6 +96,41 @@ func NewSubCmd(cfg *config.Config) *cobra.Command {
 	return root
 }
 
+// ── registry ──────────────────────────────────────────────────────────────────
+
+func newRegistry(cfg *config.Config) *providers.Registry {
+	cache := bw.NewCache()
+	cache.MaxAge = cfg.CacheMaxAge()
+	bwClient := &bw.BWClient{
+		Cache:   cache,
+		Timeout: cfg.BitwardenTimeout(),
+	}
+	vaultClient := &vlt.VaultClient{Timeout: cfg.VaultTimeout()}
+
+	reg := providers.NewRegistry()
+	reg.Register(providers.NewBWProvider(bwClient))
+	reg.Register(providers.NewVaultProvider(vaultClient))
+	return reg
+}
+
+// normalizeKubeconfigURI delegates to kubeconfig.NormalizeSourceURI.
+func normalizeKubeconfigURI(source string) string {
+	return kubeconfig.NormalizeSourceURI(source)
+}
+
+// kctxLocalPassword returns the local encryption password for the kubeconfig store.
+// Prefers the password already established by the BW provider (avoiding a second
+// prompt when BW was used). Falls back to a fresh ReadLocalPassword prompt when
+// the registry has no BW provider or no BW resolve has occurred (e.g. Vault path).
+func kctxLocalPassword(reg *providers.Registry) (string, error) {
+	if lp := reg.LocalPassword(); lp != "" {
+		return lp, nil
+	}
+	return bw.ReadLocalPassword()
+}
+
+// ── load ──────────────────────────────────────────────────────────────────────
+
 func loadCmd(cfg *config.Config) *cobra.Command {
 	return &cobra.Command{
 		Use:   "load <name> <bw://item|vault-path>",
@@ -121,58 +159,18 @@ Examples:
 			uid := fmt.Sprintf("%d", os.Getuid())
 			store := kubeconfig.NewNamedStore()
 
-			var kubeconfigData []byte
-			var localPassword string
+			reg := newRegistry(cfg)
+			uri := normalizeKubeconfigURI(source)
 
-			if strings.HasPrefix(source, "bw://") {
-				ref, err := secrets.ParseBWRef(source)
-				if err != nil {
-					return err
-				}
-				cache := secrets.NewCache()
-				cache.MaxAge = cfg.CacheMaxAge()
-				bwClient := &secrets.BWClient{
-					Cache:   cache,
-					Timeout: cfg.BitwardenTimeout(),
-				}
-				val, bwerr := bwClient.Resolve(ref)
-				if bwerr != nil {
-					return bwerr
-				}
-				kubeconfigData = []byte(val)
-				localPassword = bwClient.LocalPassword
-			} else {
-				var vaultRef secrets.VaultRef
-				if strings.HasPrefix(source, "vault://") {
-					if strings.Contains(source, "#") {
-						ref, err := secrets.ParseVaultRef(source)
-						if err != nil {
-							return err
-						}
-						if ref.Field == "" {
-							ref.Field = "kubeconfig"
-						}
-						vaultRef = ref
-					} else {
-						vaultRef = secrets.VaultRef{
-							Path:  strings.TrimPrefix(source, "vault://"),
-							Field: "kubeconfig",
-						}
-					}
-				} else {
-					vaultRef = secrets.VaultRef{Path: source, Field: "kubeconfig"}
-				}
-				vc := &secrets.VaultClient{Timeout: cfg.VaultTimeout()}
-				val, verr := vc.Resolve(vaultRef)
-				if verr != nil {
-					return verr
-				}
-				kubeconfigData = []byte(val)
-				lp, lperr := secrets.ReadLocalPassword()
-				if lperr != nil {
-					return lperr
-				}
-				localPassword = lp
+			val, err := reg.Resolve(uri)
+			if err != nil {
+				return err
+			}
+			kubeconfigData := []byte(val)
+
+			localPassword, err := kctxLocalPassword(reg)
+			if err != nil {
+				return err
 			}
 
 			if err := store.Put(uid, name, localPassword, kubeconfigData); err != nil {
@@ -184,6 +182,8 @@ Examples:
 		},
 	}
 }
+
+// ── switch ────────────────────────────────────────────────────────────────────
 
 func switchCmd(cfg *config.Config) *cobra.Command {
 	return &cobra.Command{
@@ -212,7 +212,7 @@ Examples:
 			var kubeconfigData []byte
 
 			if err := kubeconfig.ValidateStoreName(name); err == nil {
-				lp, lperr := secrets.ReadLocalPassword()
+				lp, lperr := bw.ReadLocalPassword()
 				if lperr != nil {
 					return lperr
 				}
@@ -263,76 +263,13 @@ Examples:
 }
 
 func fetchKubeconfig(cfg *config.Config, source string) ([]byte, error) {
-	if strings.HasPrefix(source, "bw://") {
-		ref, err := secrets.ParseBWRef(source)
-		if err != nil {
-			return nil, err
-		}
-		cache := secrets.NewCache()
-		cache.MaxAge = cfg.CacheMaxAge()
-		bwClient := &secrets.BWClient{
-			Cache:   cache,
-			Timeout: cfg.BitwardenTimeout(),
-		}
-		val, bwerr := bwClient.Resolve(ref)
-		if bwerr != nil {
-			return nil, bwerr
-		}
-		return []byte(val), nil
-	}
-	var vaultRef secrets.VaultRef
-	if strings.HasPrefix(source, "vault://") {
-		if strings.Contains(source, "#") {
-			ref, err := secrets.ParseVaultRef(source)
-			if err != nil {
-				return nil, err
-			}
-			if ref.Field == "" {
-				ref.Field = "kubeconfig"
-			}
-			vaultRef = ref
-		} else {
-			vaultRef = secrets.VaultRef{
-				Path:  strings.TrimPrefix(source, "vault://"),
-				Field: "kubeconfig",
-			}
-		}
-	} else {
-		vaultRef = secrets.VaultRef{Path: source, Field: "kubeconfig"}
-	}
-	vc := &secrets.VaultClient{Timeout: cfg.VaultTimeout()}
-	val, verr := vc.Resolve(vaultRef)
-	if verr != nil {
-		return nil, verr
+	reg := newRegistry(cfg)
+	uri := normalizeKubeconfigURI(source)
+	val, err := reg.Resolve(uri)
+	if err != nil {
+		return nil, err
 	}
 	return []byte(val), nil
-}
-
-func unloadCmd(cfg *config.Config) *cobra.Command {
-	return &cobra.Command{
-		Use:   "unload",
-		Short: "Unset KUBECONFIG and remove tmpfile (only if created by kctx)",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			kubeconfigPath := os.Getenv("KUBECONFIG")
-			slog.Debug("clearing kubeconfig", "path", kubeconfigPath)
-			if kubeconfigPath != "" && isManagedKubeconfig(kubeconfigPath) {
-				_ = os.Remove(kubeconfigPath)
-			}
-			fmt.Println("unset KUBECONFIG")
-
-			if kubeconfigPath == "" {
-				ui.Warn(os.Stderr, "KUBECONFIG was not set")
-			} else {
-				entries := []ui.PanelEntry{{Key: "Removed", Value: kubeconfigPath}}
-				ui.Panel(os.Stderr, "kctx", "Kubeconfig unloaded", entries, cfg.UI.Border)
-			}
-			return nil
-		},
-	}
-}
-
-func isManagedKubeconfig(path string) bool {
-	return kubeconfig.IsManaged(path)
 }
 
 func resolveSourceLabel(name, source string) string {
@@ -342,87 +279,7 @@ func resolveSourceLabel(name, source string) string {
 	return source
 }
 
-func statusCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "status",
-		Short: "Show current KUBECONFIG, kubectl context, and loaded kubeconfigs",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			w := os.Stdout
-			ui.Header(w, "Kubeconfig")
-
-			kc := os.Getenv("KUBECONFIG")
-			if kc == "" {
-				ui.Item(w, "KUBECONFIG", ui.Gray(w, "not set"))
-				ui.Item(w, "Managed by kctx", ui.Gray(w, "no"))
-			} else {
-				ui.Item(w, "KUBECONFIG", ui.Green(w, kc))
-				managed := isManagedKubeconfig(kc)
-				if managed {
-					ui.Item(w, "Managed by kctx", ui.Green(w, "yes"))
-				} else {
-					ui.Item(w, "Managed by kctx", ui.Yellow(w, "no (external)"))
-				}
-
-				if ctx := currentKubectlContext(kc); ctx != "" {
-					ui.Item(w, "Current context", ui.Bold(w, ctx))
-				}
-			}
-
-			uid := fmt.Sprintf("%d", os.Getuid())
-			store := kubeconfig.NewNamedStore()
-			names, err := store.List(uid)
-			if err != nil {
-				slog.Warn("listing named kubeconfigs", "err", err)
-			} else if len(names) > 0 {
-				sort.Strings(names)
-				ui.Header(w, "Loaded kubeconfigs (use 'kctx switch <name>')")
-				ui.List(w, names)
-			}
-			return nil
-		},
-	}
-}
-
-func currentKubectlContext(kubeconfig string) string {
-	cmd := exec.Command("kubectl", "config", "current-context")
-	if kubeconfig != "" {
-		env := make([]string, 0, len(os.Environ())-1)
-		for _, e := range os.Environ() {
-			if !strings.HasPrefix(e, "KUBECONFIG=") {
-				env = append(env, e)
-			}
-		}
-		cmd.Env = append(env, "KUBECONFIG="+kubeconfig)
-	}
-	out, err := cmd.Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
-}
-
-func clearCacheCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "clear-cache",
-		Short: "Remove all kctx cache files and named kubeconfigs",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			uid := fmt.Sprintf("%d", os.Getuid())
-
-			cache := secrets.NewCache()
-			if err := cache.Clear(uid); err != nil {
-				return err
-			}
-
-			store := kubeconfig.NewNamedStore()
-			if err := store.Clear(uid); err != nil {
-				return err
-			}
-
-			ui.Success(os.Stderr, "Cache cleared")
-			return nil
-		},
-	}
-}
+// ── shell-init ────────────────────────────────────────────────────────────────
 
 // ShellSnippet returns the kctx bash/zsh shell init snippet.
 // Exported so envoke can reference it when building the combined shell-init.
@@ -506,6 +363,124 @@ func shellInitCmd() *cobra.Command {
 	}
 }
 
+// ── status ────────────────────────────────────────────────────────────────────
+
+func statusCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "status",
+		Short: "Show current KUBECONFIG, kubectl context, and loaded kubeconfigs",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			w := os.Stdout
+			ui.Header(w, "Kubeconfig")
+
+			kc := os.Getenv("KUBECONFIG")
+			if kc == "" {
+				ui.Item(w, "KUBECONFIG", ui.Gray(w, "not set"))
+				ui.Item(w, "Managed by kctx", ui.Gray(w, "no"))
+			} else {
+				ui.Item(w, "KUBECONFIG", ui.Green(w, kc))
+				managed := isManagedKubeconfig(kc)
+				if managed {
+					ui.Item(w, "Managed by kctx", ui.Green(w, "yes"))
+				} else {
+					ui.Item(w, "Managed by kctx", ui.Yellow(w, "no (external)"))
+				}
+
+				if ctx := currentKubectlContext(kc); ctx != "" {
+					ui.Item(w, "Current context", ui.Bold(w, ctx))
+				}
+			}
+
+			uid := fmt.Sprintf("%d", os.Getuid())
+			store := kubeconfig.NewNamedStore()
+			names, err := store.List(uid)
+			if err != nil {
+				slog.Warn("listing named kubeconfigs", "err", err)
+			} else if len(names) > 0 {
+				sort.Strings(names)
+				ui.Header(w, "Loaded kubeconfigs (use 'kctx switch <name>')")
+				ui.List(w, names)
+			}
+			return nil
+		},
+	}
+}
+
+func currentKubectlContext(kubeconfigPath string) string {
+	cmd := exec.Command("kubectl", "config", "current-context")
+	if kubeconfigPath != "" {
+		env := make([]string, 0, len(os.Environ())-1)
+		for _, e := range os.Environ() {
+			if !strings.HasPrefix(e, "KUBECONFIG=") {
+				env = append(env, e)
+			}
+		}
+		cmd.Env = append(env, "KUBECONFIG="+kubeconfigPath)
+	}
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// ── clear-cache ───────────────────────────────────────────────────────────────
+
+func clearCacheCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "clear-cache",
+		Short: "Remove all kctx cache files and named kubeconfigs",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			uid := fmt.Sprintf("%d", os.Getuid())
+			slog.Debug("clearing kctx cache", "uid", uid)
+
+			cache := bw.NewCache()
+			if err := cache.Clear(uid); err != nil {
+				return err
+			}
+
+			store := kubeconfig.NewNamedStore()
+			if err := store.Clear(uid); err != nil {
+				return err
+			}
+
+			ui.Success(os.Stderr, "Cache cleared")
+			return nil
+		},
+	}
+}
+
+// ── unload ────────────────────────────────────────────────────────────────────
+
+func unloadCmd(cfg *config.Config) *cobra.Command {
+	return &cobra.Command{
+		Use:   "unload",
+		Short: "Unset KUBECONFIG and remove tmpfile (only if created by kctx)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			kubeconfigPath := os.Getenv("KUBECONFIG")
+			slog.Debug("clearing kubeconfig", "path", kubeconfigPath)
+			if kubeconfigPath != "" && isManagedKubeconfig(kubeconfigPath) {
+				_ = os.Remove(kubeconfigPath)
+			}
+			fmt.Println("unset KUBECONFIG")
+
+			if kubeconfigPath == "" {
+				ui.Warn(os.Stderr, "KUBECONFIG was not set")
+			} else {
+				entries := []ui.PanelEntry{{Key: "Removed", Value: kubeconfigPath}}
+				ui.Panel(os.Stderr, "kctx", "Kubeconfig unloaded", entries, cfg.UI.Border)
+			}
+			return nil
+		},
+	}
+}
+
+func isManagedKubeconfig(path string) bool {
+	return kubeconfig.IsManaged(path)
+}
+
+// ── watch ─────────────────────────────────────────────────────────────────────
+
 func watchCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "watch",
@@ -542,7 +517,7 @@ On Windows, event hooks are not yet implemented.`,
 
 			if err := hook.RegisterSleep(func() error {
 				slog.Debug("cleanup: clearing kctx cache and managed kubeconfigs on sleep")
-				cache := secrets.NewCache()
+				cache := bw.NewCache()
 				_ = cache.Clear(uid)
 				store := kubeconfig.NewNamedStore()
 				_ = store.Clear(uid)

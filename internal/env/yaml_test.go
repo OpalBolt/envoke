@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/eficode/secure-handling-of-secrets/internal/secrets"
+	"github.com/eficode/secure-handling-of-secrets/internal/providers"
 )
 
 func TestResolveYAMLString_NoRefs(t *testing.T) {
@@ -14,7 +14,7 @@ database:
   host: localhost
   port: 5432
 `
-	result, err := ResolveYAMLString(input, nil, nil)
+	result, err := ResolveYAMLString(input, providers.NewRegistry())
 	if err != nil {
 		t.Fatalf("ResolveYAMLString: %v", err)
 	}
@@ -37,7 +37,7 @@ list:
   - item0
   - item1
 `
-	doc, err := ResolveYAMLString(input, nil, nil)
+	doc, err := ResolveYAMLString(input, providers.NewRegistry())
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -69,7 +69,7 @@ list:
   - a
   - b
 `
-	doc, err := ResolveYAMLString(input, nil, nil)
+	doc, err := ResolveYAMLString(input, providers.NewRegistry())
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -105,7 +105,7 @@ app:
 		t.Fatalf("writing YAML file: %v", err)
 	}
 
-	result, err := ResolveYAML(path, &secrets.BWClient{}, &secrets.VaultClient{})
+	result, err := ResolveYAML(path, providers.NewRegistry())
 	if err != nil {
 		t.Fatalf("ResolveYAML: %v", err)
 	}
@@ -120,7 +120,7 @@ app:
 }
 
 func TestResolveYAML_NonExistentFile(t *testing.T) {
-	_, err := ResolveYAML("/nonexistent/config.yaml", &secrets.BWClient{}, &secrets.VaultClient{})
+	_, err := ResolveYAML("/nonexistent/config.yaml", providers.NewRegistry())
 	if err == nil {
 		t.Fatal("expected error for non-existent file")
 	}
@@ -138,7 +138,7 @@ func TestMarshalYAML(t *testing.T) {
 		t.Error("MarshalYAML returned empty output")
 	}
 	// Round-trip: unmarshal and verify.
-	doc, err := ResolveYAMLString(string(out), nil, nil)
+	doc, err := ResolveYAMLString(string(out), providers.NewRegistry())
 	if err != nil {
 		t.Fatalf("round-trip parse: %v", err)
 	}
@@ -152,7 +152,7 @@ func TestMarshalYAML(t *testing.T) {
 }
 
 func TestResolveYAMLString_InvalidYAML(t *testing.T) {
-	_, err := ResolveYAMLString(":\tinvalid: [", nil, nil)
+	_, err := ResolveYAMLString(":\tinvalid: [", providers.NewRegistry())
 	if err == nil {
 		t.Fatal("expected error for invalid YAML")
 	}

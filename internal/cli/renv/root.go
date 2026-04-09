@@ -10,15 +10,19 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/spf13/cobra"
+	"golang.org/x/term"
+
 	"github.com/eficode/secure-handling-of-secrets/internal/cleanup"
 	"github.com/eficode/secure-handling-of-secrets/internal/config"
 	"github.com/eficode/secure-handling-of-secrets/internal/env"
 	"github.com/eficode/secure-handling-of-secrets/internal/logger"
-	"github.com/eficode/secure-handling-of-secrets/internal/secrets"
+	"github.com/eficode/secure-handling-of-secrets/internal/providers"
+	bw "github.com/eficode/secure-handling-of-secrets/internal/providers/bitwarden"
+	vlt "github.com/eficode/secure-handling-of-secrets/internal/providers/vault"
+	"github.com/eficode/secure-handling-of-secrets/internal/state"
 	"github.com/eficode/secure-handling-of-secrets/internal/ui"
 	"github.com/eficode/secure-handling-of-secrets/internal/version"
-	"github.com/spf13/cobra"
-	"golang.org/x/term"
 )
 
 // NewRootCmd returns the root cobra command for the renv CLI.
@@ -108,19 +112,27 @@ func NewSubCmd(noCache *bool, cfg *config.Config) *cobra.Command {
 	return root
 }
 
-func newClients(noCache bool, cfg *config.Config) (*secrets.Cache, *secrets.BWClient, *secrets.VaultClient) {
-	cache := secrets.NewCache()
+// ── registry ──────────────────────────────────────────────────────────────────
+
+func newRegistry(noCache bool, cfg *config.Config) *providers.Registry {
+	cache := bw.NewCache()
 	cache.MaxAge = cfg.CacheMaxAge()
 	if noCache {
 		cache.Disabled = true
 	}
-	bwClient := &secrets.BWClient{
+	bwClient := &bw.BWClient{
 		Cache:   cache,
 		Timeout: cfg.BitwardenTimeout(),
 	}
-	vaultClient := &secrets.VaultClient{Timeout: cfg.VaultTimeout()}
-	return cache, bwClient, vaultClient
+	vaultClient := &vlt.VaultClient{Timeout: cfg.VaultTimeout()}
+
+	reg := providers.NewRegistry()
+	reg.Register(providers.NewBWProvider(bwClient))
+	reg.Register(providers.NewVaultProvider(vaultClient))
+	return reg
 }
+
+// ── resolve ───────────────────────────────────────────────────────────────────
 
 func resolveCmd(noCache *bool, cfg *config.Config) *cobra.Command {
 	var file string
@@ -158,9 +170,10 @@ Then in .envrc:
 				ui.Warn(os.Stderr, "stdout is a terminal — output will not be set as env vars.")
 				fmt.Fprintln(os.Stderr, "  use: eval \"$(renv resolve .env)\"")
 			}
-			_, bwClient, vaultClient := newClients(*noCache, cfg)
+			reg := newRegistry(*noCache, cfg)
+			defer reg.Close() //nolint:errcheck // best-effort session cleanup
 
-			entries, err := env.ResolveDotEnv(file, bwClient, vaultClient)
+			entries, err := env.ResolveDotEnv(file, reg)
 			if err != nil {
 				return fmt.Errorf("resolving %s: %w", file, err)
 			}
@@ -176,7 +189,7 @@ Then in .envrc:
 				names[i] = e.Key
 				panelEntries[i] = ui.PanelEntry{Key: e.Key, Source: e.Source}
 			}
-			_ = secrets.SaveVarNames(uid, names)
+			_ = state.SaveVarNames(uid, names)
 
 			headline := fmt.Sprintf("Loaded %s from %s",
 				ui.Bold(os.Stderr, pluralVars(len(entries))),
@@ -202,6 +215,8 @@ Then in .envrc:
 	return cmd
 }
 
+// ── exec ──────────────────────────────────────────────────────────────────────
+
 func execCmd(noCache *bool, cfg *config.Config) *cobra.Command {
 	var file string
 
@@ -219,9 +234,10 @@ The resolved variables override any same-named variables already in the environm
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			slog.Debug("running exec", "file", file, "command", args[0])
-			_, bwClient, vaultClient := newClients(*noCache, cfg)
+			reg := newRegistry(*noCache, cfg)
+			defer reg.Close() //nolint:errcheck // best-effort session cleanup
 
-			entries, err := env.ResolveDotEnv(file, bwClient, vaultClient)
+			entries, err := env.ResolveDotEnv(file, reg)
 			if err != nil {
 				return fmt.Errorf("resolving %s: %w", file, err)
 			}
@@ -242,6 +258,8 @@ The resolved variables override any same-named variables already in the environm
 	cmd.Flags().StringVarP(&file, "env", "e", ".env", "Path to .env file")
 	return cmd
 }
+
+// ── shell-init ────────────────────────────────────────────────────────────────
 
 // BashInitScript is the shell function emitted by `renv shell-init` for bash/zsh.
 // Exported so envoke can reference it when building the combined shell-init.
@@ -362,6 +380,8 @@ All other renv subcommands (exec, yaml, status, …) pass through unchanged.`,
 	return cmd
 }
 
+// ── yaml ──────────────────────────────────────────────────────────────────────
+
 func yamlCmd(cfg *config.Config) *cobra.Command {
 	var file string
 	var key string
@@ -378,9 +398,10 @@ func yamlCmd(cfg *config.Config) *cobra.Command {
 				return fmt.Errorf("--file or positional argument required")
 			}
 			slog.Debug("running yaml resolve", "file", file, "key", key)
-			_, bwClient, vaultClient := newClients(false, cfg)
+			reg := newRegistry(false, cfg)
+			defer reg.Close() //nolint:errcheck // best-effort session cleanup
 
-			data, err := env.ResolveYAML(file, bwClient, vaultClient)
+			data, err := env.ResolveYAML(file, reg)
 			if err != nil {
 				return err
 			}
@@ -407,6 +428,8 @@ func yamlCmd(cfg *config.Config) *cobra.Command {
 	return cmd
 }
 
+// ── clear-cache ───────────────────────────────────────────────────────────────
+
 func clearCacheCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "clear-cache",
@@ -417,16 +440,16 @@ Variable name tracking (used by renv unload) is intentionally preserved so that
 renv unload continues to work after a cache clear — for example when the EXIT
 trap fires inside a direnv subprocess.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cache := secrets.NewCache()
+			cache := bw.NewCache()
 			uid := fmt.Sprintf("%d", os.Getuid())
 			slog.Debug("clearing cache and session", "uid", uid)
 			if err := cache.Clear(uid); err != nil {
 				return fmt.Errorf("clearing cache: %w", err)
 			}
-			if err := secrets.ClearStoredSession(uid); err != nil {
+			if err := bw.ClearStoredSession(uid); err != nil {
 				return fmt.Errorf("clearing session: %w", err)
 			}
-			if err := secrets.ClearStoredLocalPassword(uid); err != nil {
+			if err := bw.ClearStoredLocalPassword(uid); err != nil {
 				return fmt.Errorf("clearing local password: %w", err)
 			}
 			ui.Success(os.Stderr, "Cache cleared")
@@ -434,6 +457,8 @@ trap fires inside a direnv subprocess.`,
 		},
 	}
 }
+
+// ── status ────────────────────────────────────────────────────────────────────
 
 func statusCmd() *cobra.Command {
 	return &cobra.Command{
@@ -444,7 +469,7 @@ func statusCmd() *cobra.Command {
 			uid := fmt.Sprintf("%d", os.Getuid())
 
 			ui.Header(w, "Tracked variables")
-			names, err := secrets.LoadVarNames(uid)
+			names, err := state.LoadVarNames(uid)
 			if err != nil {
 				return err
 			}
@@ -457,9 +482,9 @@ func statusCmd() *cobra.Command {
 			fmt.Fprintln(w)
 
 			ui.Header(w, "Cache")
-			cache := secrets.NewCache()
+			cache := bw.NewCache()
 			ui.Item(w, "Location", cache.Dir)
-			files, ages, err := secrets.CacheStatus(cache)
+			files, ages, err := cache.Status()
 			if err != nil {
 				return err
 			}
@@ -478,6 +503,8 @@ func statusCmd() *cobra.Command {
 	}
 }
 
+// ── unload ────────────────────────────────────────────────────────────────────
+
 func unloadCmd(cfg *config.Config) *cobra.Command {
 	return &cobra.Command{
 		Use:   "unload",
@@ -490,7 +517,7 @@ The output must be evaluated by your shell:
 		RunE: func(cmd *cobra.Command, args []string) error {
 			uid := fmt.Sprintf("%d", os.Getuid())
 			slog.Debug("unloading tracked variables", "uid", uid)
-			names, err := secrets.LoadVarNames(uid)
+			names, err := state.LoadVarNames(uid)
 			if err != nil {
 				return err
 			}
@@ -505,7 +532,7 @@ The output must be evaluated by your shell:
 			if err := env.EmitUnload(os.Stdout, entries); err != nil {
 				return err
 			}
-			_ = secrets.ClearVarNames(uid)
+			_ = state.ClearVarNames(uid)
 
 			panelEntries := make([]ui.PanelEntry, len(names))
 			for i, n := range names {
@@ -517,6 +544,8 @@ The output must be evaluated by your shell:
 		},
 	}
 }
+
+// ── watch ─────────────────────────────────────────────────────────────────────
 
 func watchCmd() *cobra.Command {
 	return &cobra.Command{
@@ -547,7 +576,7 @@ Start manually:
 
 			if err := hook.RegisterLock(func() error {
 				slog.Debug("cleanup: unloading renv variables on lock")
-				_ = secrets.RequestUnload(uid)
+				_ = state.RequestUnload(uid)
 				return nil
 			}); err != nil {
 				return fmt.Errorf("registering lock hook: %w", err)
@@ -555,11 +584,11 @@ Start manually:
 
 			if err := hook.RegisterSleep(func() error {
 				slog.Debug("cleanup: clearing renv cache and session on sleep")
-				cache := secrets.NewCache()
+				cache := bw.NewCache()
 				_ = cache.Clear(uid)
-				_ = secrets.ClearStoredSession(uid)
-				_ = secrets.ClearStoredLocalPassword(uid)
-				_ = secrets.RequestUnload(uid)
+				_ = bw.ClearStoredSession(uid)
+				_ = bw.ClearStoredLocalPassword(uid)
+				_ = state.RequestUnload(uid)
 				return nil
 			}); err != nil {
 				return fmt.Errorf("registering sleep hook: %w", err)
@@ -574,6 +603,8 @@ Start manually:
 		},
 	}
 }
+
+// ── helpers ───────────────────────────────────────────────────────────────────
 
 func pluralVars(n int) string {
 	if n == 1 {

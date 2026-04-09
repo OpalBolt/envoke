@@ -10,6 +10,9 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/spf13/cobra"
+	"golang.org/x/term"
+
 	"github.com/eficode/secure-handling-of-secrets/internal/cleanup"
 	intkctx "github.com/eficode/secure-handling-of-secrets/internal/cli/kctx"
 	intrenv "github.com/eficode/secure-handling-of-secrets/internal/cli/renv"
@@ -17,11 +20,12 @@ import (
 	"github.com/eficode/secure-handling-of-secrets/internal/env"
 	"github.com/eficode/secure-handling-of-secrets/internal/kubeconfig"
 	"github.com/eficode/secure-handling-of-secrets/internal/logger"
-	"github.com/eficode/secure-handling-of-secrets/internal/secrets"
+	"github.com/eficode/secure-handling-of-secrets/internal/providers"
+	bw "github.com/eficode/secure-handling-of-secrets/internal/providers/bitwarden"
+	vlt "github.com/eficode/secure-handling-of-secrets/internal/providers/vault"
+	"github.com/eficode/secure-handling-of-secrets/internal/state"
 	"github.com/eficode/secure-handling-of-secrets/internal/ui"
 	"github.com/eficode/secure-handling-of-secrets/internal/version"
-	"github.com/spf13/cobra"
-	"golang.org/x/term"
 )
 
 func main() {
@@ -81,7 +85,7 @@ entries that load kubeconfigs into the local kctx named store.`,
 	// Embed renv and kctx command trees as subcommands.
 	// Use NewSubCmd (not NewRootCmd) so the sub-trees do not re-register persistent
 	// flags that are already defined on the envoke root — which would cause collisions
-	// via Cobra's inherited persistent-flag merging.  cfg and noCache are populated by
+	// via Cobra's inherited persistent-flag merging. cfg and noCache are populated by
 	// envoke's own PersistentPreRunE before any subcommand's RunE executes.
 	renvRoot := intrenv.NewSubCmd(&noCache, &cfg)
 	kctxRoot := intkctx.NewSubCmd(&cfg)
@@ -98,16 +102,36 @@ entries that load kubeconfigs into the local kctx named store.`,
 	return root
 }
 
-// resolveCmd is the combined resolver: handles both env secrets (bw://, vault://)
-// and kubeconfig directives (KCTX_<name>=bw://... or KCTX_<name>=vault://...).
-//
-// .env format for kubeconfig loading:
-//
-//	KCTX_PROD=bw://kubernetes/prod-cluster
-//	KCTX_STAGING=vault://secret/kubeconfig/staging
-//
-// The kubeconfig name is derived from the key by stripping the KCTX_ prefix
-// and lowercasing: KCTX_PROD → "prod".
+// newRegistry builds a secrets Registry with BW and Vault providers.
+// noCache disables the disk cache; cfg supplies timeouts and cache settings.
+// Use a single registry across the entire resolve operation so that LocalPassword
+// and the BW session are shared and users are prompted at most once per invocation.
+func newRegistry(noCache bool, cfg *config.Config) *providers.Registry {
+	cache := bw.NewCache()
+	cache.MaxAge = cfg.CacheMaxAge()
+	if noCache {
+		cache.Disabled = true
+	}
+	bwClient := &bw.BWClient{
+		Cache:   cache,
+		Timeout: cfg.BitwardenTimeout(),
+	}
+	vaultClient := &vlt.VaultClient{Timeout: cfg.VaultTimeout()}
+
+	reg := providers.NewRegistry()
+	reg.Register(providers.NewBWProvider(bwClient))
+	reg.Register(providers.NewVaultProvider(vaultClient))
+	return reg
+}
+
+// normalizeKubeconfigURI normalises a kubeconfig source URI.
+// Delegates to kubeconfig.NormalizeSourceURI.
+func normalizeKubeconfigURI(source string) string {
+	return kubeconfig.NormalizeSourceURI(source)
+}
+
+// ── resolve ───────────────────────────────────────────────────────────────────
+
 func resolveCmd(noCache *bool, cfg *config.Config) *cobra.Command {
 	var file string
 	var shell string
@@ -120,14 +144,12 @@ func resolveCmd(noCache *bool, cfg *config.Config) *cobra.Command {
 Secret references (bw://, vault://) are resolved and exported as shell variables.
 
 Kubeconfig directives (keys prefixed with KCTX_) load a kubeconfig into the
-local kctx named store without exporting the raw value:
+local kctx named store and automatically set KUBECONFIG to the last loaded one:
 
   KCTX_PROD=bw://kubernetes/prod-cluster     # loads kubeconfig named "prod"
   KCTX_STAGING=vault://secret/kubeconfigs    # loads kubeconfig named "staging"
 
-After envoke resolve, switch to a loaded kubeconfig with:
-
-  kctx prod       (shorthand for: kctx switch prod)
+Use 'kctx switch <name>' to switch between loaded kubeconfigs at any time.
 
 The output must be evaluated by your shell:
 
@@ -166,34 +188,28 @@ The output must be evaluated by your shell:
 				}
 			}
 
-			// Create ONE shared cache+clients for the entire resolve operation.
-			// This ensures LocalPassword (and BW session) are prompted only once,
-			// regardless of how many KCTX_ and bw:// entries the file contains.
-			sharedCache := secrets.NewCache()
-			sharedCache.MaxAge = cfg.CacheMaxAge()
-			if *noCache {
-				sharedCache.Disabled = true
-			}
-			sharedBW := &secrets.BWClient{
-				Cache:   sharedCache,
-				Timeout: cfg.BitwardenTimeout(),
-			}
-			sharedVault := &secrets.VaultClient{Timeout: cfg.VaultTimeout()}
+			// Create ONE shared registry for the entire resolve operation.
+			sharedReg := newRegistry(*noCache, cfg)
+			defer sharedReg.Close() //nolint:errcheck // best-effort session cleanup
 
-			// Handle kubeconfig directives using the shared clients.
+			// Handle kubeconfig directives using the shared registry.
 			var kctxPanelEntries []ui.PanelEntry
+			var kubeconfigPath string
 			if len(kctxEntries) > 0 {
 				uid := fmt.Sprintf("%d", os.Getuid())
 				store := kubeconfig.NewNamedStore()
 				var kctxNames []string
+				var lastKubeconfigData []byte
 				for _, e := range kctxEntries {
 					name := kctxNameFromKey(e.Key)
-					if err := fetchKubeconfigForDirective(sharedBW, sharedVault, name, e.Value, uid, store); err != nil {
-						if errors.Is(err, secrets.ErrInvalidPassword) {
+					data, err := fetchKubeconfigForDirective(sharedReg, name, e.Value, uid, store)
+					if err != nil {
+						if errors.Is(err, bw.ErrInvalidPassword) {
 							return err
 						}
 						return fmt.Errorf("loading kubeconfig %q (%s): %w", name, e.Value, err)
 					}
+					lastKubeconfigData = data
 					kctxNames = append(kctxNames, name)
 					kctxPanelEntries = append(kctxPanelEntries, ui.PanelEntry{
 						Key:    name,
@@ -201,13 +217,20 @@ The output must be evaluated by your shell:
 					})
 					slog.Debug("loaded kubeconfig into kctx store", "name", name, "source", e.Value)
 				}
-				// Persist loaded kctx names for envoke unload.
 				_ = kubeconfig.SaveTrackedNames(uid, kctxNames)
+
+				// Write a tmpfile for the last loaded kubeconfig and emit KUBECONFIG.
+				if lastKubeconfigData != nil {
+					path, werr := kubeconfig.WriteKubeconfig(lastKubeconfigData)
+					if werr != nil {
+						return fmt.Errorf("writing kubeconfig tmpfile: %w", werr)
+					}
+					kubeconfigPath = path
+					slog.Debug("set KUBECONFIG", "path", path)
+				}
 			}
 
-			// Handle env secret entries using the same shared clients.
-			// Because sharedBW already has LocalPassword set (from the kctx step above,
-			// if any), ensureLocalPassword() returns immediately without re-prompting.
+			// Handle env secret entries using the same shared registry.
 			var resolvedEntries []env.EnvEntry
 			if len(envEntries) > 0 {
 				tmpFile, err := writeTempEnv(envEntries)
@@ -216,31 +239,31 @@ The output must be evaluated by your shell:
 				}
 				defer os.Remove(tmpFile)
 
-				resolvedEntries, err = env.ResolveDotEnv(tmpFile, sharedBW, sharedVault)
+				resolvedEntries, err = env.ResolveDotEnv(tmpFile, sharedReg)
 				if err != nil {
-					if errors.Is(err, secrets.ErrInvalidPassword) {
+					if errors.Is(err, bw.ErrInvalidPassword) {
 						return err
 					}
 					return fmt.Errorf("resolving %s: %w", file, err)
 				}
 			}
 
-			// Emit shell exports for env entries.
 			if err := env.EmitExports(os.Stdout, resolvedEntries); err != nil {
 				return err
 			}
+			if kubeconfigPath != "" {
+				fmt.Fprintf(os.Stdout, "export KUBECONFIG=%s\n", kubeconfigPath)
+			}
 
-			// Persist exported key names for envoke renv unload.
 			if len(resolvedEntries) > 0 {
 				uid := fmt.Sprintf("%d", os.Getuid())
 				names := make([]string, len(resolvedEntries))
 				for i, e := range resolvedEntries {
 					names[i] = e.Key
 				}
-				_ = secrets.SaveVarNames(uid, names)
+				_ = state.SaveVarNames(uid, names)
 			}
 
-			// Feedback to stderr.
 			panelEntries := make([]ui.PanelEntry, 0, len(resolvedEntries)+len(kctxPanelEntries))
 			for _, e := range resolvedEntries {
 				panelEntries = append(panelEntries, ui.PanelEntry{Key: e.Key, Source: e.Source})
@@ -265,7 +288,14 @@ The output must be evaluated by your shell:
 				case "fish":
 					fmt.Println("# Fish shell trap not supported via eval; use envoke clear-cache manually")
 				default:
-					fmt.Println("trap 'envoke clear-cache' EXIT")
+					if kubeconfigPath != "" {
+						// KUBECONFIG tmpfile needs cleanup on exit — use unload (which removes
+						// the tmpfile) followed by clear-cache. The shell-init combined trap
+						// already does this; this covers raw eval "$(envoke resolve .env)" usage.
+						fmt.Println("trap 'eval \"$(envoke unload 2>/dev/null)\" 2>/dev/null; envoke clear-cache 2>/dev/null' EXIT")
+					} else {
+						fmt.Println("trap 'envoke clear-cache' EXIT")
+					}
 				}
 			}
 			return nil
@@ -291,62 +321,26 @@ func kctxNameFromKey(key string) string {
 }
 
 // fetchKubeconfigForDirective fetches kubeconfig bytes from a bw:// or vault:// source,
-// stores them in the named store, and ensures the shared bwClient has a LocalPassword set.
-// Using a shared bwClient means LocalPassword is prompted at most once per process.
-func fetchKubeconfigForDirective(bwClient *secrets.BWClient, vaultClient *secrets.VaultClient, name, source, uid string, store *kubeconfig.NamedStore) error {
-	var kubeconfigData []byte
+// stores them in the named store using the registry's shared local password,
+// and returns the kubeconfig bytes so the caller can write a tmpfile.
+func fetchKubeconfigForDirective(reg *providers.Registry, name, source, uid string, store *kubeconfig.NamedStore) ([]byte, error) {
+	uri := normalizeKubeconfigURI(source)
+	val, err := reg.Resolve(uri)
+	if err != nil {
+		return nil, err
+	}
+	kubeconfigData := []byte(val)
 
-	if strings.HasPrefix(source, "bw://") {
-		ref, err := secrets.ParseBWRef(source)
+	localPassword := reg.LocalPassword()
+	if localPassword == "" {
+		lp, err := bw.ReadLocalPassword()
 		if err != nil {
-			return err
+			return nil, err
 		}
-		val, err := bwClient.Resolve(ref)
-		if err != nil {
-			return err
-		}
-		kubeconfigData = []byte(val)
-	} else {
-		// vault:// path
-		var vaultRef secrets.VaultRef
-		if strings.HasPrefix(source, "vault://") {
-			if strings.Contains(source, "#") {
-				ref, err := secrets.ParseVaultRef(source)
-				if err != nil {
-					return err
-				}
-				if ref.Field == "" {
-					ref.Field = "kubeconfig"
-				}
-				vaultRef = ref
-			} else {
-				vaultRef = secrets.VaultRef{
-					Path:  strings.TrimPrefix(source, "vault://"),
-					Field: "kubeconfig",
-				}
-			}
-		} else {
-			vaultRef = secrets.VaultRef{Path: source, Field: "kubeconfig"}
-		}
-		val, err := vaultClient.Resolve(vaultRef)
-		if err != nil {
-			return err
-		}
-		kubeconfigData = []byte(val)
+		localPassword = lp
 	}
 
-	// Ensure LocalPassword is set before calling store.Put, regardless of
-	// whether the cache is enabled. When --no-cache is set, bwClient.Resolve
-	// skips ensureLocalPassword, so LocalPassword may still be empty here.
-	if bwClient.LocalPassword == "" {
-		lp, err := secrets.ReadLocalPassword()
-		if err != nil {
-			return err
-		}
-		bwClient.LocalPassword = lp
-	}
-
-	return store.Put(uid, name, bwClient.LocalPassword, kubeconfigData)
+	return kubeconfigData, store.Put(uid, name, localPassword, kubeconfigData)
 }
 
 // writeTempEnv writes env entries to a temp .env file for processing by ResolveDotEnv.
@@ -357,7 +351,6 @@ func writeTempEnv(entries []env.RawEntry) (string, error) {
 	}
 	defer f.Close()
 	for _, e := range entries {
-		// Write as key='value' to preserve any special characters.
 		if _, err := fmt.Fprintf(f, "%s=%s\n", e.Key, e.Value); err != nil {
 			return "", err
 		}
@@ -365,8 +358,15 @@ func writeTempEnv(entries []env.RawEntry) (string, error) {
 	return f.Name(), nil
 }
 
-// unloadCmd emits shell commands to unset all tracked env vars and KUBECONFIG.
-// Output must be eval'd: eval "$(envoke unload)"
+func pluralItems(n int) string {
+	if n == 1 {
+		return "1 item"
+	}
+	return fmt.Sprintf("%d items", n)
+}
+
+// ── unload ────────────────────────────────────────────────────────────────────
+
 func unloadCmd(cfg *config.Config) *cobra.Command {
 	return &cobra.Command{
 		Use:   "unload",
@@ -385,9 +385,7 @@ When using the envoke shell-init, the shell function handles this automatically.
 
 			var panelEntries []ui.PanelEntry
 
-			// Unload tracked env vars (renv side). Errors here are non-fatal:
-			// we still must emit unset KUBECONFIG below.
-			names, err := secrets.LoadVarNames(uid)
+			names, err := state.LoadVarNames(uid)
 			if err != nil {
 				slog.Warn("loading tracked var names", "err", err)
 			}
@@ -399,15 +397,13 @@ When using the envoke shell-init, the shell function handles this automatically.
 				if emitErr := env.EmitUnload(os.Stdout, entries); emitErr != nil {
 					slog.Warn("emitting unload", "err", emitErr)
 				} else {
-					_ = secrets.ClearVarNames(uid)
+					_ = state.ClearVarNames(uid)
 					for _, n := range names {
 						panelEntries = append(panelEntries, ui.PanelEntry{Key: n})
 					}
 				}
 			}
 
-			// Unload kubeconfig (kctx side) — always emit the unset so the
-			// shell variable is cleared even if we don't own the file.
 			kubeconfigPath := os.Getenv("KUBECONFIG")
 			if kubeconfigPath != "" && kubeconfig.IsManaged(kubeconfigPath) {
 				if err := os.Remove(kubeconfigPath); err != nil && !os.IsNotExist(err) {
@@ -420,7 +416,6 @@ When using the envoke shell-init, the shell function handles this automatically.
 			}
 			fmt.Fprintln(os.Stdout, "unset KUBECONFIG")
 
-			// Remove kctx named store entries loaded by envoke resolve.
 			kctxNames, err := kubeconfig.LoadTrackedNames(uid)
 			if err != nil {
 				slog.Warn("loading tracked kctx names", "err", err)
@@ -452,91 +447,8 @@ When using the envoke shell-init, the shell function handles this automatically.
 	}
 }
 
-// clearCacheCmd clears both renv and kctx caches.
-func clearCacheCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "clear-cache",
-		Short: "Remove all envoke cache files (renv + kctx)",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			uid := fmt.Sprintf("%d", os.Getuid())
-			slog.Debug("clearing all caches", "uid", uid)
+// ── shell-init ────────────────────────────────────────────────────────────────
 
-			cache := secrets.NewCache()
-			if err := cache.Clear(uid); err != nil {
-				return fmt.Errorf("clearing secret cache: %w", err)
-			}
-			if err := secrets.ClearStoredSession(uid); err != nil {
-				return fmt.Errorf("clearing session: %w", err)
-			}
-			if err := secrets.ClearStoredLocalPassword(uid); err != nil {
-				return fmt.Errorf("clearing local password: %w", err)
-			}
-
-			store := kubeconfig.NewNamedStore()
-			if err := store.Clear(uid); err != nil {
-				return fmt.Errorf("clearing kubeconfig store: %w", err)
-			}
-
-			ui.Success(os.Stderr, "All caches cleared")
-			return nil
-		},
-	}
-}
-
-// watchCmd runs a combined watcher that handles both renv and kctx cleanup.
-func watchCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "watch",
-		Short: "Watch for sleep/lock events and manage secrets and kubeconfigs",
-		Long: `Run in the background to manage secrets and kubeconfigs when the system
-sleeps or the screen is locked. Normally started automatically by shell-init.
-
-On lock: secret variables are unloaded and kubeconfig tmpfiles are removed.
-On sleep: all caches are cleared, requiring full re-authentication after wake.`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			detachFromTerminal()
-			uid := fmt.Sprintf("%d", os.Getuid())
-			slog.Debug("starting envoke watcher", "uid", uid)
-
-			hook := cleanup.New()
-
-			if err := hook.RegisterLock(func() error {
-				slog.Debug("cleanup: unloading renv variables and kctx kubeconfigs on lock")
-				_ = secrets.RequestUnload(uid)
-				kubeconfig.ClearManaged()
-				_ = kubeconfig.RequestUnload(uid)
-				return nil
-			}); err != nil {
-				return fmt.Errorf("registering lock hook: %w", err)
-			}
-
-			if err := hook.RegisterSleep(func() error {
-				slog.Debug("cleanup: clearing all caches on sleep")
-				cache := secrets.NewCache()
-				_ = cache.Clear(uid)
-				_ = secrets.ClearStoredSession(uid)
-				_ = secrets.ClearStoredLocalPassword(uid)
-				_ = secrets.RequestUnload(uid)
-				store := kubeconfig.NewNamedStore()
-				_ = store.Clear(uid)
-				kubeconfig.ClearManaged()
-				_ = kubeconfig.RequestUnload(uid)
-				return nil
-			}); err != nil {
-				return fmt.Errorf("registering sleep hook: %w", err)
-			}
-
-			defer hook.Unregister()
-
-			sigCh := make(chan os.Signal, 1)
-			signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
-			<-sigCh
-			return nil
-		},
-	}
-}
-
-// shellInitCmd emits the combined envoke shell-init snippet.
 func shellInitCmd() *cobra.Command {
 	var shell string
 
@@ -842,9 +754,86 @@ function _envoke_cleanup --on-event fish_exit
 end
 `
 
-func pluralItems(n int) string {
-	if n == 1 {
-		return "1 item"
+// ── clear-cache + watch ───────────────────────────────────────────────────────
+
+func clearCacheCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "clear-cache",
+		Short: "Remove all envoke cache files (renv + kctx)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			uid := fmt.Sprintf("%d", os.Getuid())
+			slog.Debug("clearing all caches", "uid", uid)
+
+			cache := bw.NewCache()
+			if err := cache.Clear(uid); err != nil {
+				return fmt.Errorf("clearing secret cache: %w", err)
+			}
+			if err := bw.ClearStoredSession(uid); err != nil {
+				return fmt.Errorf("clearing session: %w", err)
+			}
+			if err := bw.ClearStoredLocalPassword(uid); err != nil {
+				return fmt.Errorf("clearing local password: %w", err)
+			}
+
+			store := kubeconfig.NewNamedStore()
+			if err := store.Clear(uid); err != nil {
+				return fmt.Errorf("clearing kubeconfig store: %w", err)
+			}
+
+			ui.Success(os.Stderr, "All caches cleared")
+			return nil
+		},
 	}
-	return fmt.Sprintf("%d items", n)
+}
+
+func watchCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "watch",
+		Short: "Watch for sleep/lock events and manage secrets and kubeconfigs",
+		Long: `Run in the background to manage secrets and kubeconfigs when the system
+sleeps or the screen is locked. Normally started automatically by shell-init.
+
+On lock: secret variables are unloaded and kubeconfig tmpfiles are removed.
+On sleep: all caches are cleared, requiring full re-authentication after wake.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			detachFromTerminal()
+			uid := fmt.Sprintf("%d", os.Getuid())
+			slog.Debug("starting envoke watcher", "uid", uid)
+
+			hook := cleanup.New()
+
+			if err := hook.RegisterLock(func() error {
+				slog.Debug("cleanup: unloading renv variables and kctx kubeconfigs on lock")
+				_ = state.RequestUnload(uid)
+				kubeconfig.ClearManaged()
+				_ = kubeconfig.RequestUnload(uid)
+				return nil
+			}); err != nil {
+				return fmt.Errorf("registering lock hook: %w", err)
+			}
+
+			if err := hook.RegisterSleep(func() error {
+				slog.Debug("cleanup: clearing all caches on sleep")
+				cache := bw.NewCache()
+				_ = cache.Clear(uid)
+				_ = bw.ClearStoredSession(uid)
+				_ = bw.ClearStoredLocalPassword(uid)
+				_ = state.RequestUnload(uid)
+				store := kubeconfig.NewNamedStore()
+				_ = store.Clear(uid)
+				kubeconfig.ClearManaged()
+				_ = kubeconfig.RequestUnload(uid)
+				return nil
+			}); err != nil {
+				return fmt.Errorf("registering sleep hook: %w", err)
+			}
+
+			defer hook.Unregister()
+
+			sigCh := make(chan os.Signal, 1)
+			signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
+			<-sigCh
+			return nil
+		},
+	}
 }

@@ -1,7 +1,8 @@
-package secrets
+package bitwarden
 
 import (
 	"encoding/json"
+	appcache "github.com/eficode/secure-handling-of-secrets/internal/cache"
 	"os"
 	"path/filepath"
 	"testing"
@@ -36,7 +37,7 @@ func mockBWBin(t *testing.T, responses map[string]string) func() {
 // WARN log (not a silent miss) and then falls back to Bitwarden.
 func TestFolderItemsCacheWrongPassword(t *testing.T) {
 	dir := t.TempDir()
-	cache := &Cache{Dir: dir, MaxAge: 8 * time.Hour}
+	cache := &appcache.Cache{Dir: dir, MaxAge: 8 * time.Hour}
 
 	const folderName = "myfolder"
 	const folderID = "fid1"
@@ -51,7 +52,7 @@ func TestFolderItemsCacheWrongPassword(t *testing.T) {
 	_ = statusJSON
 
 	// Seed the cache with the correct password.
-	if err := cache.Put("1000", "acct1", folderName, "correct-pw", itemsJSON); err != nil {
+	if err := cache.Put("1000", bwCacheKey("1000", "acct1", folderName), "correct-pw", itemsJSON); err != nil {
 		t.Fatalf("seed cache: %v", err)
 	}
 
@@ -106,16 +107,15 @@ func TestBWClientResolvePassword(t *testing.T) {
 
 	itemsJSON, _ := json.Marshal(items)
 	foldersJSON, _ := json.Marshal(folders)
-	statusJSON := `{"userEmail":"test@example.com","serverUrl":"https://bitwarden.com"}`
 
 	cleanup := mockBWBin(t, map[string]string{
-		"status": statusJSON,
+		"status": `{"userEmail":"test@example.com","serverUrl":"https://bitwarden.com"}`,
 		"list":   string(itemsJSON), // simplified — real mock would need arg parsing
 		"unlock": "fake-session-token",
 	})
 	defer cleanup()
 
-	cache := &Cache{Dir: t.TempDir(), MaxAge: 8 * time.Hour}
+	cache := &appcache.Cache{Dir: t.TempDir(), MaxAge: 8 * time.Hour}
 	_ = foldersJSON // mock doesn't parse args but covers the path
 
 	// The real mock needs to handle "list folders" vs "list items" separately.
