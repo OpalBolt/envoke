@@ -108,7 +108,8 @@
             go mod verify
           '';
 
-          govulncheck = mkApp "govulncheck" [ pkgs.govulncheck ] ''
+          govulncheck = mkApp "govulncheck" [ pkgs.go pkgs.govulncheck ] ''
+            export CGO_ENABLED=0
             govulncheck ./...
           '';
 
@@ -121,8 +122,8 @@
           #   G703 — path traversal: os.Remove calls are guarded by IsManaged()/isManagedKubeconfig()
           #   G115 — integer overflow: int(fd) safe (fds are small non-negative), uint32(pid) safe
           #          (Linux PID max 4194304 < 2^32), byte(padding) safe (PKCS7 padding 1-16)
-          gosec = mkApp "gosec" [ pkgs.gosec ] ''
-            gosec -exclude=G304,G104,G204,G706,G703,G115 -fmt text -stdout -verbose=text ./...
+          gosec = mkApp "gosec" [ pkgs.go pkgs.gosec ] ''
+            gosec -exclude=G304,G104,G204,G706,G703,G115 -fmt text -stdout ./...
           '';
 
           clean = mkApp "clean" [ ] ''
