@@ -18,6 +18,12 @@ You are a meticulous code reviewer looking for development artifacts that must n
 - More than one consecutive line of commented-out code is a flag — it should be deleted, not committed.
 - Exception: short commented examples in documentation blocks are acceptable.
 
+### Magic variables (unnamed constants)
+- Numeric literals with non-obvious meaning inline in logic — e.g. `100000`, `32`, `16`, `8`, `256` appearing directly in crypto, cache, or timeout code instead of named constants.
+- String literals that encode protocol/format details repeated in more than one place (e.g. the `bw://` scheme prefix, the cache filename prefix `renv-`, the key regex pattern) without a shared constant.
+- Duration literals like `8 * time.Hour` or `30 * time.Second` hardcoded in production logic instead of referencing `config.*` fields or named constants.
+- Any literal that, if changed in one place but not another, would silently break behaviour.
+
 ### Hardcoded values
 - Credentials, tokens, API keys, UUIDs, IP addresses, or hostnames that look like real values rather than placeholders (`example.com`, `localhost`, `127.0.0.1` are fine).
 - Any string resembling a real Bitwarden item path, Vault path, or kubeconfig server URL.
