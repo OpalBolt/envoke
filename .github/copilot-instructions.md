@@ -133,82 +133,15 @@ Shell scripts must pass `shellcheck --severity=warning`.
 
 ---
 
-## Code Review Agents
+## Code Review
 
-When reviewing pull requests, Copilot must apply **all four review agents** below. Each agent has a distinct focus. Run them independently and surface findings under a clearly labelled heading per agent.
+When reviewing a pull request, Copilot must apply **all four review agents** defined in `.github/instructions/`. Run each agent independently and surface findings under a clearly labelled heading per agent.
 
----
+| Agent file | Focus |
+|---|---|
+| [`review-security.instructions.md`](.github/instructions/review-security.instructions.md) | Secret leakage, shell/subprocess injection, URI parsing, crypto weaknesses, TOCTOU races, password model violations |
+| [`review-remnants.instructions.md`](.github/instructions/review-remnants.instructions.md) | TODOs, commented-out code, hardcoded values, debug prints, dead imports, misplaced files |
+| [`review-standards.instructions.md`](.github/instructions/review-standards.instructions.md) | Error wrapping, structured logging, two-password model, shell output safety, subcommand pattern, test presence |
+| [`review-tests.instructions.md`](.github/instructions/review-tests.instructions.md) | Missing/weak tests, race-unsafe tests, missing skip guards for integration tests, benchmark quality |
 
-### Agent: Security & Exploit Analysis
-
-**Goal**: Find ways the new or changed code could be exploited, misused, or cause unintended secret disclosure.
-
-Focus areas specific to this codebase:
-
-- **Secret leakage** — Could a secret value end up in a log line, error message, stack trace, or temp file outside `/dev/shm`? Check `slog.*` calls near secret values. Check `fmt.Errorf` wrapping of errors that carry secret content.
-- **Shell injection** — `EmitExports` eval-safety: are new env-key or env-value paths properly validated and single-quote-escaped before being written to stdout? Any new code that writes to a shell-eval'd stream must pass through the existing sanitisation pipeline.
-- **URI/reference parsing** — New `bw://` or `vault://` URI parsers: do they reject path traversal (`../`), null bytes, or oversized inputs? Could a crafted URI cause a subprocess to receive unexpected arguments?
-- **Subprocess argument injection** — Any call to `exec.Command` must not interpolate user-controlled strings directly into argument slices without validation. `bw` and `vault` CLI arguments must be checked.
-- **Crypto downgrade / weaknesses** — New code touching the AES-256-CBC cache (PBKDF2-SHA256, 100k iterations) must not reduce iteration counts, shorten salt, or change the key-derivation path in a way that weakens stored secrets.
-- **Password/credential handling** — Passwords must only flow via stdin to subprocesses, never via CLI flags, env vars printed to logs, or written to disk outside the encrypted cache. Check any new `cmd.Args` or `cmd.Env` usage.
-- **Race conditions on shared state** — The `/dev/shm` password-sharing file is uid-keyed. New concurrent code paths must not introduce TOCTOU on that file. Check for missing locks.
-- **Privilege / scope creep** — Does new code request more Bitwarden/Vault access than the referenced item requires? Is the minimum scope principle upheld?
-
-Verdict: list each finding as `[CRITICAL]`, `[HIGH]`, `[MEDIUM]`, or `[INFO]`. If none found, state "No security issues found."
-
----
-
-### Agent: Code Remnants & Cleanliness
-
-**Goal**: Identify leftover development artifacts that must not ship.
-
-Check for:
-
-- `TODO`, `FIXME`, `HACK`, `XXX`, `TEMP`, `WIP` comments in new or changed lines.
-- Commented-out code blocks (more than one line commented out consecutively is suspicious).
-- Hardcoded credentials, tokens, UUIDs, IP addresses, or hostnames (anything that looks like a real value rather than a placeholder).
-- Debug `fmt.Print*` / `log.Print*` statements — all diagnostic output must go through `slog`.
-- Leftover test helpers, `t.Skip(...)` with no explanation, or `_ = someVar` used to silence unused-variable errors in production code.
-- Dead imports (`_ "pkg"` in non-test files that have no clear side-effect justification).
-- Unused exported symbols added in this PR that have no callers yet.
-- Files that belong in `snippets/` (standalone scripts) accidentally placed in `internal/` or `cmd/`.
-
-Verdict: list each finding with file + line. If none found, state "No remnants found."
-
----
-
-### Agent: Coding Standards Compliance
-
-**Goal**: Verify the PR follows this project's conventions exactly as documented in these instructions.
-
-Check every changed `.go` file against:
-
-1. **Concrete types, not interfaces** — `BWClient`, `VaultClient`, and provider structs must remain concrete. New abstractions need explicit justification.
-2. **Error wrapping** — Every `return err` without context is a violation. Must be `fmt.Errorf("doing X: %w", err)`.
-3. **Structured logging** — `slog.Debug/Info/Warn/Error("message", "key", value)` only. No `fmt.Printf` for diagnostics, no bare `log.Println`.
-4. **Best-effort cleanup** — Post-success cleanup failures (cache writes, temp-file removal) must be logged with `slog.Warn`, not returned as errors.
-5. **Two-password model integrity** — `BWPassword` and `LocalPassword` must never be mixed up. Passwords passed to subprocesses go via `cmd.Stdin` only.
-6. **Shell output safety** — Keys emitted via `EmitExports` must pass the `^[A-Za-z_][A-Za-z0-9_]*$` regex check. Values must be single-quote escaped.
-7. **Subcommand pattern** — New commands follow the `func xxxCmd(...) *cobra.Command` pattern closing over config/flag pointers. No global state.
-8. **Test coverage** — New exported functions and non-trivial logic paths must have at least one table-driven test. Tests use `t.Parallel()` where safe.
-9. **`go vet` / `gofmt` cleanliness** — No formatting drift; CI enforces this but flag it if obvious.
-
-Verdict: list each violation with file + line + rule number above. If none found, state "Standards compliant."
-
----
-
-### Agent: Test Quality & Coverage
-
-**Goal**: Ensure new logic is adequately tested and tests are trustworthy.
-
-Check for:
-
-- New exported functions or non-trivial code paths with **no corresponding test**.
-- Tests that only test the happy path — are error paths and edge cases (empty input, malformed URIs, cache miss, subprocess failure) covered?
-- Tests that mock or stub in ways that make them pass trivially without exercising real logic.
-- Race-condition-prone tests: shared state, missing `t.Parallel()`, or missing `-race` compatibility.
-- Tests that read from real `/dev/shm`, real Bitwarden, or real Vault without a clear skip guard (`t.Skipf("requires BW_SESSION")` etc.).
-- Assert quality: vague `if err != nil { t.Fatal }` without checking the specific error value when the specific error matters.
-- Benchmark additions that are missing a baseline comparison or don't call `b.ReportAllocs()`.
-
-Verdict: list gaps as `[MISSING TEST]` or `[WEAK TEST]` with function/file. If coverage is adequate, state "Test coverage adequate."
+Each agent file contains its own detailed checklist and output format. All four must produce a verdict — even if that verdict is "nothing found".
