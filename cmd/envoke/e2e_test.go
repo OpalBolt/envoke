@@ -1,4 +1,4 @@
-//go:build e2e
+//go:build e2e && !windows
 
 package main_test
 
@@ -117,7 +117,7 @@ esac
 	// BW_SESSION causes BWClient.Session() to return immediately without unlock.
 	cmd := exec.Command(envokeBin, "renv", "resolve", "--no-cache", envFile)
 	cmd.Env = append(os.Environ(),
-		"PATH="+dir+":"+os.Getenv("PATH"),
+		"PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"BW_SESSION=test-tok",
 	)
 
