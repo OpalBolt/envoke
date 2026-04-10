@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/eficode/secure-handling-of-secrets/internal/secrets"
+	"github.com/eficode/envoke/internal/secrets"
 )
 
 func TestResolveYAMLString_NoRefs(t *testing.T) {

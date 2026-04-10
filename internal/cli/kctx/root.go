@@ -10,13 +10,13 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/eficode/secure-handling-of-secrets/internal/cleanup"
-	"github.com/eficode/secure-handling-of-secrets/internal/config"
-	"github.com/eficode/secure-handling-of-secrets/internal/kubeconfig"
-	"github.com/eficode/secure-handling-of-secrets/internal/logger"
-	"github.com/eficode/secure-handling-of-secrets/internal/secrets"
-	"github.com/eficode/secure-handling-of-secrets/internal/ui"
-	"github.com/eficode/secure-handling-of-secrets/internal/version"
+	"github.com/eficode/envoke/internal/cleanup"
+	"github.com/eficode/envoke/internal/config"
+	"github.com/eficode/envoke/internal/kubeconfig"
+	"github.com/eficode/envoke/internal/logger"
+	"github.com/eficode/envoke/internal/secrets"
+	"github.com/eficode/envoke/internal/ui"
+	"github.com/eficode/envoke/internal/version"
 	"github.com/spf13/cobra"
 )
 

@@ -11,7 +11,7 @@
 The simplest path if you have Go installed:
 
 ```bash
-go install github.com/eficode/secure-handling-of-secrets/cmd/envoke@latest
+go install github.com/eficode/envoke/cmd/envoke@latest
 ```
 
 This installs the `envoke` binary to `$GOPATH/bin` (typically `~/go/bin`). Make sure that directory is in your `PATH`:
@@ -24,8 +24,8 @@ export PATH="$HOME/go/bin:$PATH"
 ## Build from source
 
 ```bash
-git clone https://github.com/eficode/secure-handling-of-secrets.git
-cd secure-handling-of-secrets
+git clone https://github.com/eficode/envoke.git
+cd envoke
 make build          # outputs to bin/envoke
 ```
 
@@ -57,17 +57,17 @@ If you use Nix flakes:
 
 ```bash
 # Run directly without installing
-nix run github:eficode/secure-handling-of-secrets
+nix run github:eficode/envoke
 
 # Add to your system flake
-inputs.envoke.url = "github:eficode/secure-handling-of-secrets";
+inputs.envoke.url = "github:eficode/envoke";
 ```
 
 ### NixOS / Home Manager
 
 ```nix
 # flake.nix (inputs)
-inputs.envoke.url = "github:eficode/secure-handling-of-secrets";
+inputs.envoke.url = "github:eficode/envoke";
 
 # packages
 environment.systemPackages = [ inputs.envoke.packages.${system}.envoke ];

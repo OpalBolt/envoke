@@ -1,4 +1,4 @@
-module github.com/eficode/secure-handling-of-secrets
+module github.com/eficode/envoke
 
 go 1.25.0
 
