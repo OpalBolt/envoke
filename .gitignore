@@ -36,4 +36,6 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
-envoke
+
+# Binary if accidentally built in repo root (normal output goes to bin/ which is already ignored above)
+/envoke

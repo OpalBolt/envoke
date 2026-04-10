@@ -64,48 +64,46 @@
           # nix run → envoke
           default = flake-utils.lib.mkApp { drv = envoke; };
 
-          test = mkApp "test" [ pkgs.go ] ''
+          test = mkApp "test" [ pkgs.go pkgs.gnumake ] ''
             export CGO_ENABLED=0
-            go test ./...
+            make test
           '';
 
-          # Race detector requires CGO — do NOT set CGO_ENABLED=0 here.
-          test-race = mkApp "test-race" [ pkgs.go ] ''
-            go test -race ./...
+          # Race detector requires CGO — make test-race overrides CGO_ENABLED=0.
+          test-race = mkApp "test-race" [ pkgs.go pkgs.gnumake ] ''
+            make test-race
           '';
 
-          test-cover = mkApp "test-cover" [ pkgs.go ] ''
+          test-cover = mkApp "test-cover" [ pkgs.go pkgs.gnumake ] ''
             export CGO_ENABLED=0
-            go test -coverprofile=coverage.out ./...
-            go tool cover -html=coverage.out -o coverage.html
+            make test-cover
           '';
 
-          lint = mkApp "lint" [ pkgs.go ] ''
+          test-e2e = mkApp "test-e2e" [ pkgs.go pkgs.gnumake ] ''
             export CGO_ENABLED=0
-            go vet ./...
+            make test-e2e
           '';
 
-          fmt = mkApp "fmt" [ pkgs.go ] ''
-            gofmt -w .
-          '';
-
-          fmt-check = mkApp "fmt-check" [ pkgs.go ] ''
-            unformatted=$(gofmt -l .)
-            if [ -n "$unformatted" ]; then
-              echo "The following files need formatting:"
-              echo "$unformatted"
-              exit 1
-            fi
-          '';
-
-          shellcheck = mkApp "shellcheck" [ pkgs.shellcheck ] ''
-            find snippets -name '*.sh' -print0 | xargs -0 shellcheck --severity=warning
-          '';
-
-          tidy = mkApp "tidy" [ pkgs.go ] ''
+          lint = mkApp "lint" [ pkgs.go pkgs.gnumake ] ''
             export CGO_ENABLED=0
-            go mod tidy
-            go mod verify
+            make lint
+          '';
+
+          fmt = mkApp "fmt" [ pkgs.go pkgs.gnumake ] ''
+            make fmt
+          '';
+
+          fmt-check = mkApp "fmt-check" [ pkgs.go pkgs.gnumake ] ''
+            make fmt-check
+          '';
+
+          shellcheck = mkApp "shellcheck" [ pkgs.shellcheck pkgs.gnumake ] ''
+            make shellcheck
+          '';
+
+          tidy = mkApp "tidy" [ pkgs.go pkgs.gnumake ] ''
+            export CGO_ENABLED=0
+            make tidy
           '';
 
           govulncheck = mkApp "govulncheck" [ pkgs.govulncheck ] ''
@@ -125,13 +123,13 @@
             gosec -exclude=G304,G104,G204,G706,G703,G115 -fmt text -stdout -verbose=text ./...
           '';
 
-          clean = mkApp "clean" [ ] ''
-            rm -rf bin coverage.out coverage.html
+          clean = mkApp "clean" [ pkgs.gnumake ] ''
+            make clean
           '';
 
-          release = mkApp "release" [ pkgs.go pkgs.goreleaser ] ''
+          release = mkApp "release" [ pkgs.go pkgs.goreleaser pkgs.gnumake ] ''
             export CGO_ENABLED=0
-            goreleaser build --snapshot --clean
+            make release
           '';
         };
 
@@ -144,6 +142,7 @@
             goreleaser
             govulncheck
             gosec
+            gnumake
           ] ++ [ envoke ];
 
           shellHook = ''
