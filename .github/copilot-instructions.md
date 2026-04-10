@@ -22,15 +22,16 @@ go test -run TestParseBWRef ./internal/secrets/...
 go test -race -run TestCacheRoundtrip ./internal/secrets/...
 ```
 
-CI runs: `nix run .#test-race`, `nix run .#lint`, `nix run .#fmt-check`, `nix run .#shellcheck`.  
+CI runs: `make test-race`, `make lint`, `make fmt-check`, `make shellcheck`.  
 Shell scripts under `snippets/` are checked with `shellcheck --severity=warning`.
 
 ### Updating Go dependencies
 
 After any `go.mod` change:
-1. Set `vendorHash = pkgs.lib.fakeHash;` in `flake.nix` (`common` block)
-2. Run `nix build` — it fails printing the correct hash
-3. Replace with the reported `sha256-…` value
+1. Run `go mod tidy && go mod verify` (or `make tidy`)
+2. Set `vendorHash = pkgs.lib.fakeHash;` in `flake.nix`
+3. Run `nix build` — it fails printing the correct hash
+4. Replace with the reported `sha256-…` value
 
 ## Architecture
 
@@ -130,3 +131,21 @@ Cache files are named `renv-<uid>-<first16hex(SHA256(uid:acctTag:folder))>.enc` 
 - `kubeconfig-merge.sh` — utility for merging kubeconfig files
 
 Shell scripts must pass `shellcheck --severity=warning`.
+
+---
+
+## Code Review
+
+PR reviews are handled by the **`pr-review`** custom agent (`.github/agents/pr-review.agent.md`), which runs four specialised sub-agents **in parallel** and synthesises their findings.
+
+| Agent file | Role | Focus |
+|---|---|---|
+| [`pr-review.agent.md`](.github/agents/pr-review.agent.md) | Orchestrator | Spawns all sub-agents in parallel; synthesises findings |
+| [`review-security.agent.md`](.github/agents/review-security.agent.md) | Sub-agent | Secret leakage, shell/subprocess injection, URI parsing, crypto weaknesses, TOCTOU races, password-model violations |
+| [`review-remnants.agent.md`](.github/agents/review-remnants.agent.md) | Sub-agent | TODOs, commented-out code, hardcoded values, debug prints, dead imports, misplaced files |
+| [`review-standards.agent.md`](.github/agents/review-standards.agent.md) | Sub-agent | Error wrapping, structured logging, two-password model, shell output safety, subcommand pattern |
+| [`review-tests.agent.md`](.github/agents/review-tests.agent.md) | Sub-agent | Missing/weak tests, race-unsafe tests, missing skip guards for integration tests |
+
+The sub-agents have `user-invocable: false` — they are only accessible through the `pr-review` orchestrator, not visible in the agent dropdown.
+
+To trigger a review, assign the **`pr-review`** agent to the pull request or invoke it from the Copilot panel.

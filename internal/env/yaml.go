@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/eficode/secure-handling-of-secrets/internal/providers"
+	"github.com/eficode/envoke/internal/providers"
 	"gopkg.in/yaml.v3"
 )
 

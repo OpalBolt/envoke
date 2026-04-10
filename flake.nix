@@ -11,22 +11,15 @@
       let
         pkgs = nixpkgs.legacyPackages.${system};
 
-        # Wrap a shell script as a runnable flake app (nix run .#<name>).
-        mkApp = name: runtimeInputs: text:
-          let
-            drv = pkgs.writeShellApplication { inherit name runtimeInputs text; };
-          in
-          { type = "app"; program = "${drv}/bin/${name}"; };
-
         # Single source of truth for the version number — kept in sync with git tags.
         # `git tag v0.2.0 && echo -n 0.2.0 > VERSION` is the release workflow.
         releaseVersion = builtins.replaceStrings [ "\n" " " ] [ "" "" ] (builtins.readFile ./VERSION);
-        versionPkg = "github.com/eficode/secure-handling-of-secrets/internal/version";
+        versionPkg = "github.com/eficode/envoke/internal/version";
 
         # self.shortRev is the 7-char git commit hash; falls back to "dirty" when the
         # working tree has uncommitted changes (Nix won't set rev on a dirty tree).
         commitHash = self.shortRev or "dirty";
-        # Dev builds embed the commit so `renv --version` shows e.g. "0.1.0-dev+aeda2e9".
+        # Dev builds embed the commit so `envoke --version` shows e.g. "0.1.0-dev+aeda2e9".
         # Goreleaser handles tagged release builds separately (see .goreleaser.yaml).
         nixVersion = "${releaseVersion}-dev+${commitHash}";
         # self.lastModifiedDate is "YYYYMMDDHHmmss"; reformat to ISO 8601 to match `make build` output.
@@ -36,14 +29,11 @@
           else
             "${builtins.substring 0 4 raw}-${builtins.substring 4 2 raw}-${builtins.substring 6 2 raw}T${builtins.substring 8 2 raw}:${builtins.substring 10 2 raw}:${builtins.substring 12 2 raw}Z";
 
-        common = {
-          src = ./.;
-          vendorHash = "sha256-U5ObZjq8TzaBKP8AbmoX/3Ylt5feuNMXM7JfGXF2NyA=";
-        };
-
-        envoke = pkgs.buildGoModule (common // {
+        envoke = pkgs.buildGoModule {
           pname = "envoke";
           version = releaseVersion;
+          src = ./.;
+          vendorHash = "sha256-U5ObZjq8TzaBKP8AbmoX/3Ylt5feuNMXM7JfGXF2NyA=";
           subPackages = [ "cmd/envoke" ];
           ldflags = [
             "-s" "-w"
@@ -51,9 +41,10 @@
             "-X ${versionPkg}.Commit=${commitHash}"
             "-X ${versionPkg}.BuildDate=${buildDate}"
           ];
-        });
+        };
       in
       {
+        # `nix build` / `nix profile install` / `nix run`
         packages = {
           inherit envoke;
           default = envoke;
@@ -61,63 +52,11 @@
 
         apps = {
           envoke = flake-utils.lib.mkApp { drv = envoke; };
-          # nix run → envoke
           default = flake-utils.lib.mkApp { drv = envoke; };
-
-          test = mkApp "test" [ pkgs.go ] ''
-            export CGO_ENABLED=0
-            go test ./...
-          '';
-
-          # Race detector requires CGO — do NOT set CGO_ENABLED=0 here.
-          test-race = mkApp "test-race" [ pkgs.go ] ''
-            go test -race ./...
-          '';
-
-          test-cover = mkApp "test-cover" [ pkgs.go ] ''
-            export CGO_ENABLED=0
-            go test -coverprofile=coverage.out ./...
-            go tool cover -html=coverage.out -o coverage.html
-          '';
-
-          lint = mkApp "lint" [ pkgs.go ] ''
-            export CGO_ENABLED=0
-            go vet ./...
-          '';
-
-          fmt = mkApp "fmt" [ pkgs.go ] ''
-            gofmt -w .
-          '';
-
-          fmt-check = mkApp "fmt-check" [ pkgs.go ] ''
-            unformatted=$(gofmt -l .)
-            if [ -n "$unformatted" ]; then
-              echo "The following files need formatting:"
-              echo "$unformatted"
-              exit 1
-            fi
-          '';
-
-          shellcheck = mkApp "shellcheck" [ pkgs.shellcheck ] ''
-            find snippets -name '*.sh' -print0 | xargs -0 shellcheck --severity=warning
-          '';
-
-          tidy = mkApp "tidy" [ pkgs.go ] ''
-            export CGO_ENABLED=0
-            go mod tidy
-            go mod verify
-          '';
-
-          clean = mkApp "clean" [ ] ''
-            rm -rf bin coverage.out coverage.html
-          '';
-
-          release = mkApp "release" [ pkgs.go pkgs.goreleaser ] ''
-            export CGO_ENABLED=0
-            goreleaser build --snapshot --clean
-          '';
         };
 
+        # `nix develop` — provides the full Go toolchain and dev tools.
+        # Run make targets directly: make build, make test-race, make lint, etc.
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
             go
@@ -125,12 +64,18 @@
             gopls
             go-tools  # staticcheck
             goreleaser
-          ] ++ [ envoke ];
+            govulncheck
+            gosec
+            gnumake
+            shellcheck
+          ];
 
           shellHook = ''
             export CGO_ENABLED=0
+            export PATH="$PWD/bin:$PATH"
           '';
         };
       }
     );
 }
+

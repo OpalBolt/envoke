@@ -13,9 +13,9 @@ builds:
       - CGO_ENABLED=0
     ldflags:
       - -s -w
-      - -X github.com/eficode/secure-handling-of-secrets/internal/version.Version={{.Version}}
-      - -X github.com/eficode/secure-handling-of-secrets/internal/version.Commit={{.ShortCommit}}
-      - -X github.com/eficode/secure-handling-of-secrets/internal/version.BuildDate={{.Date}}
+      - -X github.com/eficode/envoke/internal/version.Version={{.Version}}
+      - -X github.com/eficode/envoke/internal/version.Commit={{.ShortCommit}}
+      - -X github.com/eficode/envoke/internal/version.BuildDate={{.Date}}
     goos:
       - linux
       - darwin
@@ -38,4 +38,7 @@ checksum:
   name_template: "checksums.txt"
 
 release:
-  draft: true
+  # release-please owns the GitHub release (creates it with the changelog).
+  # goreleaser uploads binary artifacts to that existing release.
+  # replace_existing_artifacts allows re-running goreleaser without failing.
+  replace_existing_artifacts: true
