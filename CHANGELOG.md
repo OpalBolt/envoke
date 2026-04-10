@@ -1,0 +1,35 @@
+# Changelog
+
+## [0.3.0](https://github.com/eficode/envoke/compare/v0.2.0...v0.3.0) (2026-04-10)
+
+
+### Features
+
+* add kctx.sh snippet for ephemeral Vault-backed kubeconfig switching ([deb2d9a](https://github.com/eficode/envoke/commit/deb2d9a4f409a44f1a7d625605a28c3f7b1f6f1a))
+* Add nix flake ([b760f88](https://github.com/eficode/envoke/commit/b760f88ac4c0f50527865ece146a2d3feff30207))
+* add Python drop-in and bash resolve_yaml_value for script usage ([b210061](https://github.com/eficode/envoke/commit/b2100611be981abee65bb26ad387a7f1673ecdba))
+* add shell auto-detection and env tracking to resolve-env-refs.sh ([72a3bf2](https://github.com/eficode/envoke/commit/72a3bf2de8643799cfa26908a7aaa38ff4e8b7a8))
+* **ai:** Add copilot-instructions ([ad9a7f3](https://github.com/eficode/envoke/commit/ad9a7f3dfe93b9c05850d17ac4b8c76dc028d096))
+* Bitwarden SDK examples, .env reference pattern, resolve-env-refs.sh ([3ab5ee7](https://github.com/eficode/envoke/commit/3ab5ee7812c7c29684eacef227a81c84a6200b9d))
+* **cleanup:** wire up sleep/lock hooks via renv/kctx watch subcommand ([7584079](https://github.com/eficode/envoke/commit/75840793219a85f0874686798ad21fb4834fe71a)), closes [#1](https://github.com/eficode/envoke/issues/1)
+* **cleanup:** wire up sleep/lock hooks via renv/kctx watch subcommand ([#8](https://github.com/eficode/envoke/issues/8)) ([41c10e8](https://github.com/eficode/envoke/commit/41c10e8a0a23e5c0d45bd538dc4f8cda086c5d50))
+* envoke unified binary v0.2.0 ([#18](https://github.com/eficode/envoke/issues/18)) ([01b8789](https://github.com/eficode/envoke/commit/01b878953464d453c6bc37ca2d25b89895d9f5f1))
+* implement secure secrets handling resource repository ([9cc9c0f](https://github.com/eficode/envoke/commit/9cc9c0f7fa8c61e82fe5720408d6fc465220ed2e))
+* improve CLI feedback with colors and richer status ([52823da](https://github.com/eficode/envoke/commit/52823daa2c60a329880776cb1757d8fb8f7969c2))
+* **kctx:** add install script, README, caching, and Bitwarden support ([ecbd8f7](https://github.com/eficode/envoke/commit/ecbd8f7005e9585ec335fb4470707fbbe3ef1e00))
+* **kctx:** named kubeconfig loading with kctx load / kctx switch ([#13](https://github.com/eficode/envoke/issues/13)) ([7f95bb3](https://github.com/eficode/envoke/commit/7f95bb30f891d03b062456378b897f642debcc63))
+* **kctx:** use AES-256-CBC encrypted cache (same as resolve-env-refs) ([6c4fa38](https://github.com/eficode/envoke/commit/6c4fa385e1a1b5f6c69c217c6998e0b94747e742))
+* rich colored output with lipgloss + docs revamp ([#14](https://github.com/eficode/envoke/issues/14)) ([55097a7](https://github.com/eficode/envoke/commit/55097a78ba18805cec2e9c94975c6cfb26b0a368))
+* simplify to single resolve-env-refs.sh pattern ([f3ba425](https://github.com/eficode/envoke/commit/f3ba42569b7e6fcbb821c426bc4ebb3f8cba370c))
+
+
+### Bug Fixes
+
+* address registry lifecycle, Close deduplication, and misleading comments ([#24](https://github.com/eficode/envoke/issues/24)) ([2d9723a](https://github.com/eficode/envoke/commit/2d9723a4dd2cbbe7a0b1ec34ab0db010a355cab2))
+* correct two regressions in _bw_ensure_session ([504d664](https://github.com/eficode/envoke/commit/504d664824cda17fff6db66170b3be210658c239))
+* handle unauthenticated BW state in _bw_ensure_session ([0586eda](https://github.com/eficode/envoke/commit/0586eda5a9bca6cae13766ee9fa302e0fc58216f))
+* **kctx:** shell function routing and stale-sentinel unload race ([107b4bd](https://github.com/eficode/envoke/commit/107b4bd7ee172df10056558bb36bfc3d51e0a56c))
+* **kctx:** show root help for no-args; guard EXIT trap on switch failure ([338063f](https://github.com/eficode/envoke/commit/338063f7f7309d61273d3736c969aa40883e1c6f))
+* **kctx:** strip trap from eval; move EXIT cleanup to top-level trap ([#16](https://github.com/eficode/envoke/issues/16)) ([39b992d](https://github.com/eficode/envoke/commit/39b992dc4ab8e41bf28e493cfc0c23b22e03256f))
+* surface bw unlock errors and fix silent secret-resolution failures ([7062be8](https://github.com/eficode/envoke/commit/7062be8778154d0fdda3d6498b7d981d0050e0ba))
+* use bw list items to avoid org-key null-pointer crash ([db95617](https://github.com/eficode/envoke/commit/db95617da42a3fea1306ae25c1d813f94c5bc135))
