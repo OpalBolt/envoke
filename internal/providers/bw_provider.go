@@ -1,7 +1,7 @@
 package providers
 
 import (
-	bw "github.com/eficode/secure-handling-of-secrets/internal/providers/bitwarden"
+	bw "github.com/eficode/envoke/internal/providers/bitwarden"
 )
 
 // BWProvider wraps BWClient to implement the Provider interface.

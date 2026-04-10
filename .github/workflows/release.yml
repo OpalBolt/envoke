@@ -1,0 +1,56 @@
+name: Release
+
+on:
+  push:
+    branches: ["main"]
+
+jobs:
+  # ── 1. Release Please ─────────────────────────────────────────────────────
+  # Reads Conventional Commits since the last release and maintains a
+  # "Release PR" that bumps VERSION and generates CHANGELOG.md.
+  # When that PR is merged, release-please creates the tag + GitHub release.
+  release-please:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write        # required by release-please-action for labelling
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name:        ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          config-file:   .release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  # ── 2. GoReleaser ─────────────────────────────────────────────────────────
+  # Only runs when release-please just created a release (i.e. the Release PR
+  # was merged). Builds cross-platform binaries and uploads them to the
+  # GitHub release that release-please already created.
+  goreleaser:
+    needs: release-please
+    # Bracket notation required: job ID contains a hyphen.
+    if: ${{ needs['release-please'].outputs.release_created == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write      # upload release assets
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # goreleaser needs full history to generate accurate changelogs and
+          # to resolve the tag that release-please just created.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: latest
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

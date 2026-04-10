@@ -13,16 +13,16 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
-	"github.com/eficode/secure-handling-of-secrets/internal/cleanup"
-	"github.com/eficode/secure-handling-of-secrets/internal/config"
-	"github.com/eficode/secure-handling-of-secrets/internal/env"
-	"github.com/eficode/secure-handling-of-secrets/internal/logger"
-	"github.com/eficode/secure-handling-of-secrets/internal/providers"
-	bw "github.com/eficode/secure-handling-of-secrets/internal/providers/bitwarden"
-	vlt "github.com/eficode/secure-handling-of-secrets/internal/providers/vault"
-	"github.com/eficode/secure-handling-of-secrets/internal/state"
-	"github.com/eficode/secure-handling-of-secrets/internal/ui"
-	"github.com/eficode/secure-handling-of-secrets/internal/version"
+	"github.com/eficode/envoke/internal/cleanup"
+	"github.com/eficode/envoke/internal/config"
+	"github.com/eficode/envoke/internal/env"
+	"github.com/eficode/envoke/internal/logger"
+	"github.com/eficode/envoke/internal/providers"
+	bw "github.com/eficode/envoke/internal/providers/bitwarden"
+	vlt "github.com/eficode/envoke/internal/providers/vault"
+	"github.com/eficode/envoke/internal/state"
+	"github.com/eficode/envoke/internal/ui"
+	"github.com/eficode/envoke/internal/version"
 )
 
 // NewRootCmd returns the root cobra command for the renv CLI.

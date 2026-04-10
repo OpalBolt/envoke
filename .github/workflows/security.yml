@@ -1,0 +1,60 @@
+name: Security
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  schedule:
+    # Run weekly on Monday at 07:00 UTC to catch newly published CVEs
+    - cron: "0 7 * * 1"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # govulncheck — Go vulnerability database check
+  # Flags known CVEs in direct and transitive dependencies as well as in
+  # code paths actually reachable from this module.
+  # Uses @latest intentionally: you always want the newest vulnerability DB.
+  # ---------------------------------------------------------------------------
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Run govulncheck
+        run: make govulncheck
+
+  # ---------------------------------------------------------------------------
+  # gosec — static analysis for common Go security mistakes
+  # Checks for hard-coded credentials, unsafe exec, weak crypto, path
+  # traversal, and more — especially relevant for a codebase that handles
+  # secrets and spawns privileged subprocesses.
+  # Outputs findings as text to the job log. The job fails if gosec finds
+  # any issues (SARIF/code-scanning upload requires GHAS, which is not
+  # available).
+  # Uses @latest intentionally: you always want the newest security rules.
+  # ---------------------------------------------------------------------------
+  gosec:
+    name: gosec
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install gosec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+
+      - name: Run gosec
+        run: make gosec

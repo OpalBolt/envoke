@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/eficode/secure-handling-of-secrets/internal/providers"
+	"github.com/eficode/envoke/internal/providers"
 )
 
 func TestParseDotEnv(t *testing.T) {

@@ -4,7 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 
-	appcache "github.com/eficode/secure-handling-of-secrets/internal/cache"
+	appcache "github.com/eficode/envoke/internal/cache"
 )
 
 // NewCache creates the shared application cache used to store resolved BW item JSON.

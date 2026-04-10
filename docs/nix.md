@@ -22,7 +22,7 @@ You can install envoke as part of your project's development shell:
 {
   inputs = {
     nixpkgs.url     = "github:NixOS/nixpkgs/nixos-unstable";
-    envoke.url      = "github:eficode/secure-handling-of-secrets";
+    envoke.url      = "github:eficode/envoke";
   };
 
   outputs = { nixpkgs, envoke, ... }:

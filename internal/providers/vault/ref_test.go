@@ -3,7 +3,7 @@ package vault_test
 import (
 	"testing"
 
-	"github.com/eficode/secure-handling-of-secrets/internal/providers/vault"
+	"github.com/eficode/envoke/internal/providers/vault"
 )
 
 func TestParseVaultRef(t *testing.T) {
