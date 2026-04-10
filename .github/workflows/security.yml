@@ -13,8 +13,7 @@ jobs:
   # govulncheck — Go vulnerability database check
   # Flags known CVEs in direct and transitive dependencies as well as in
   # code paths actually reachable from this module.
-  # Runs via `nix run .#govulncheck` so the environment is identical to local
-  # development and to the rest of CI.
+  # Uses @latest intentionally: you always want the newest vulnerability DB.
   # ---------------------------------------------------------------------------
   govulncheck:
     name: govulncheck
@@ -22,18 +21,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: cachix/install-nix-action@v31
+      - uses: actions/setup-go@v5
         with:
-          extra_nix_config: |
-            experimental-features = nix-command flakes
+          go-version-file: go.mod
+          cache: true
 
-      - uses: nix-community/cache-nix-action@v7
-        with:
-          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock') }}
-          restore-prefixes-first-match: nix-${{ runner.os }}-
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
 
       - name: Run govulncheck
-        run: nix run .#govulncheck
+        run: make govulncheck
 
   # ---------------------------------------------------------------------------
   # gosec — static analysis for common Go security mistakes
@@ -43,6 +40,7 @@ jobs:
   # Outputs findings as text to the job log. The job fails if gosec finds
   # any issues (SARIF/code-scanning upload requires GHAS, which is not
   # available).
+  # Uses @latest intentionally: you always want the newest security rules.
   # ---------------------------------------------------------------------------
   gosec:
     name: gosec
@@ -50,16 +48,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: cachix/install-nix-action@v31
+      - uses: actions/setup-go@v5
         with:
-          extra_nix_config: |
-            experimental-features = nix-command flakes
+          go-version-file: go.mod
+          cache: true
 
-      - uses: nix-community/cache-nix-action@v7
-        with:
-          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock') }}
-          restore-prefixes-first-match: nix-${{ runner.os }}-
+      - name: Install gosec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
 
       - name: Run gosec
-        run: nix run .#gosec
-
+        run: make gosec

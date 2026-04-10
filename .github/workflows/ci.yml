@@ -11,49 +11,37 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Install Nix with flakes enabled. All tooling (Go, shellcheck, make, etc.) is
-      # provided by the flake — nothing is installed directly on the runner.
-      - uses: cachix/install-nix-action@v31
+      # Go version is read from go.mod — no separate version pin needed.
+      - uses: actions/setup-go@v5
         with:
-          extra_nix_config: |
-            experimental-features = nix-command flakes
+          go-version-file: go.mod
+          cache: true
 
-      # Cache the Nix store between runs, keyed on flake.lock so the cache is
-      # invalidated whenever dependencies change. The restore prefix allows a
-      # partial hit (e.g. after a dep bump) rather than a cold build every time.
-      - uses: nix-community/cache-nix-action@v7
-        with:
-          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock') }}
-          restore-prefixes-first-match: nix-${{ runner.os }}-
-
-      # Each step runs a flake app defined in flake.nix via `nix run .#<name>`.
-      # Nix resolves the exact Go version and dependencies from the lock file,
-      # so the environment here is identical to a local `nix develop` shell.
-      # All flake apps delegate to `make`, so the Makefile is the single source
-      # of truth for what each target does.
-
-      # nix build — ensures the binary compiles. Catches build breaks that tests
-      # alone won't surface (e.g. unreachable code, missing imports in main).
+      # Ensure the binary compiles. Catches build breaks that tests alone
+      # won't surface (e.g. unreachable code, missing imports in main).
       - name: Build
-        run: nix build
+        run: make build
 
-      # make test-race (via flake app) — go test -race ./... with CGO enabled
+      # go test -race ./... with CGO enabled (race detector requires CGO).
       - name: Test
-        run: nix run .#test-race
+        run: make test-race
 
-      # make lint — go vet ./...
+      # go vet ./...
       - name: Lint
-        run: nix run .#lint
+        run: make lint
 
-      # make fmt-check — gofmt -l . fails if any files are unformatted
+      # gofmt -l — fails if any files are unformatted.
       - name: Format check
-        run: nix run .#fmt-check
+        run: make fmt-check
 
-      # shellcheck --severity=warning on all *.sh files under snippets/
+      # shellcheck --severity=warning on all *.sh files under snippets/.
+      - name: Install shellcheck
+        run: sudo apt-get install -y shellcheck
+
       - name: Shellcheck
-        run: nix run .#shellcheck
+        run: make shellcheck
 
       # go test -tags=e2e ./cmd/envoke/... — builds the binary and runs smoke
       # tests against a mock bw/vault CLI, confirming end-to-end output format.
       - name: E2E tests
-        run: nix run .#test-e2e
+        run: make test-e2e
