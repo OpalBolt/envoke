@@ -14,7 +14,7 @@
         # Single source of truth for the version number — kept in sync with git tags.
         # `git tag v0.2.0 && echo -n 0.2.0 > VERSION` is the release workflow.
         releaseVersion = builtins.replaceStrings [ "\n" " " ] [ "" "" ] (builtins.readFile ./VERSION);
-        versionPkg = "github.com/eficode/envoke/internal/version";
+        versionPkg = "github.com/opalbolt/envoke/internal/version";
 
         # self.shortRev is the 7-char git commit hash; falls back to "dirty" when the
         # working tree has uncommitted changes (Nix won't set rev on a dirty tree).

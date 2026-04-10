@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/eficode/envoke/internal/providers/bitwarden"
+	"github.com/opalbolt/envoke/internal/providers/bitwarden"
 )
 
 func TestCacheRoundtrip(t *testing.T) {

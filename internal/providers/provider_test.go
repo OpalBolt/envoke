@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/eficode/envoke/internal/providers"
+	"github.com/opalbolt/envoke/internal/providers"
 )
 
 // mockProvider is a test double that implements Provider.

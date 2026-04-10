@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	appcache "github.com/eficode/envoke/internal/cache"
+	appcache "github.com/opalbolt/envoke/internal/cache"
 	"golang.org/x/term"
 )
 

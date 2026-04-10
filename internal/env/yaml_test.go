@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/eficode/envoke/internal/providers"
+	"github.com/opalbolt/envoke/internal/providers"
 )
 
 func TestResolveYAMLString_NoRefs(t *testing.T) {

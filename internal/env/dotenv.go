@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/eficode/envoke/internal/providers"
+	"github.com/opalbolt/envoke/internal/providers"
 )
 
 // EnvEntry represents a single key-value pair from a .env file.

@@ -37,7 +37,7 @@ openssl dgst -sha256 -binary snippets/resolve-env-refs.sh | base64
 _script="${HOME}/.cache/resolve-env-refs-<SHA>.sh"
 _expected_hash="sha256-<HASH>"
 if [[ ! -f "$_script" ]]; then
-  gh api repos/eficode/secure-handling-of-secrets/contents/snippets/resolve-env-refs.sh?ref=<SHA> \
+  gh api repos/opalbolt/envoke/contents/snippets/resolve-env-refs.sh?ref=<SHA> \
     -H "Accept: application/vnd.github.raw" > "$_script"
   _actual=$(openssl dgst -sha256 -binary "$_script" | base64)
   [[ "sha256-$_actual" == "$_expected_hash" ]] \
@@ -65,7 +65,7 @@ Put the loader as line 1 of your `.env`. Uses `gh api` for private-repo access. 
 
 ```bash
 # .env
-source <(gh api repos/eficode/secure-handling-of-secrets/contents/snippets/resolve-env-refs.sh?ref=<SHA> \
+source <(gh api repos/opalbolt/envoke/contents/snippets/resolve-env-refs.sh?ref=<SHA> \
   -H "Accept: application/vnd.github.raw") \
   && declare -f _load_self_env &>/dev/null \
   && _load_self_env \
