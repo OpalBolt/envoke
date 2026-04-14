@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"golang.org/x/crypto/pbkdf2"
+
+	"github.com/opalbolt/envoke/internal/tmpdir"
 )
 
 const (
@@ -30,24 +32,16 @@ const (
 var validStoreName = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
 
 // NamedStore stores named kubeconfig data, encrypted with a local password.
-// Files are stored as kctx-kc-<uid>-<name>.enc in /dev/shm (preferred) or /tmp.
+// Files are stored as kctx-kc-<uid>-<name>.enc in /dev/shm (preferred) or os.TempDir().
 // Encryption: AES-256-CBC, key derived via PBKDF2-SHA256.
 type NamedStore struct {
 	Dir    string
 	MaxAge time.Duration
 }
 
-// NewNamedStore picks /dev/shm if available and writable, else /tmp.
+// NewNamedStore picks /dev/shm if available and writable, else os.TempDir().
 func NewNamedStore() *NamedStore {
-	dir := "/tmp"
-	if fi, err := os.Stat("/dev/shm"); err == nil && fi.IsDir() {
-		testPath := filepath.Join("/dev/shm", ".kctx-ns-test")
-		if f, err := os.OpenFile(testPath, os.O_CREATE|os.O_WRONLY, 0600); err == nil {
-			f.Close()
-			os.Remove(testPath)
-			dir = "/dev/shm"
-		}
-	}
+	dir := tmpdir.PreferredWritable(".kctx-ns-test")
 	return &NamedStore{Dir: dir, MaxAge: 8 * time.Hour}
 }
 

@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/opalbolt/envoke/internal/tmpdir"
 )
 
 func TestUnloadRequestFile(t *testing.T) {
@@ -11,8 +13,17 @@ func TestUnloadRequestFile(t *testing.T) {
 	if path == "" {
 		t.Fatal("UnloadRequestFile returned empty string")
 	}
-	if len(path) < 8 || (path[:8] != "/dev/shm" && path[:4] != "/tmp") {
-		t.Errorf("unexpected base dir in path %q", path)
+	dir := filepath.Dir(path)
+	validDirs := tmpdir.Dirs()
+	found := false
+	for _, d := range validDirs {
+		if dir == d {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("unexpected base dir in path %q (expected one of %v)", path, validDirs)
 	}
 }
 
@@ -62,11 +73,12 @@ func TestRequestUnload_RejectsSymlink(t *testing.T) {
 }
 
 func TestClearManaged(t *testing.T) {
-	// Create a few fake kctx-*.tmp files in /tmp.
-	// ClearManaged searches /dev/shm and /tmp specifically.
+	// Create a few fake kctx-*.tmp files in os.TempDir().
+	// ClearManaged searches all known tmp locations.
+	tmpDir := os.TempDir()
 	paths := []string{
-		filepath.Join("/tmp", "kctx-test-clear-managed-1.tmp"),
-		filepath.Join("/tmp", "kctx-test-clear-managed-2.tmp"),
+		filepath.Join(tmpDir, "kctx-test-clear-managed-1.tmp"),
+		filepath.Join(tmpDir, "kctx-test-clear-managed-2.tmp"),
 	}
 	for _, p := range paths {
 		if err := os.WriteFile(p, []byte("test"), 0600); err != nil {
@@ -99,7 +111,7 @@ func TestClearManaged(t *testing.T) {
 
 func TestClearManaged_NonKctxFilesUntouched(t *testing.T) {
 	// Create a non-kctx file that should NOT be removed.
-	notKctx := filepath.Join("/tmp", "renv-test-not-kctx.tmp")
+	notKctx := filepath.Join(os.TempDir(), "renv-test-not-kctx.tmp")
 	if err := os.WriteFile(notKctx, []byte("keep"), 0600); err != nil {
 		t.Fatalf("creating file: %v", err)
 	}

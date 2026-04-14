@@ -279,7 +279,7 @@ const BashInitScript = `renv() {
 # Return a token that changes whenever the unload sentinel is refreshed.
 _renv_unload_token() {
   local f="/dev/shm/renv-${UID}-unload-requested"
-  [ -f "$f" ] || f="/tmp/renv-${UID}-unload-requested"
+  [ -f "$f" ] || f="${TMPDIR:-/tmp}/renv-${UID}-unload-requested"
   [ -f "$f" ] || return 1
   stat -c '%Y:%i:%s' "$f" 2>/dev/null || stat -f '%m:%i:%z' "$f" 2>/dev/null
 }
@@ -319,7 +319,10 @@ end
 
 function _renv_unload_token
   set -l f /dev/shm/renv-(id -u)-unload-requested
-  test -f $f; or set f /tmp/renv-(id -u)-unload-requested
+  if not test -f $f
+    set -l _tmpdir (if set -q TMPDIR; echo $TMPDIR; else; echo /tmp; end)
+    set f $_tmpdir/renv-(id -u)-unload-requested
+  end
   test -f $f; or return 1
   stat -c '%Y:%i:%s' $f 2>/dev/null; or stat -f '%m:%i:%z' $f 2>/dev/null
 end

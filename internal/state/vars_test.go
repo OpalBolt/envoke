@@ -2,9 +2,12 @@ package state
 
 import (
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/opalbolt/envoke/internal/tmpdir"
 )
 
 func TestSaveAndLoadVarNames(t *testing.T) {
@@ -83,9 +86,18 @@ func TestVarsFilePath(t *testing.T) {
 	if path == "" {
 		t.Fatal("varsFilePath returned empty string")
 	}
-	// Should reside in /dev/shm or /tmp.
-	if path[:8] != "/dev/shm" && path[:4] != "/tmp" {
-		t.Errorf("unexpected base dir in path %q", path)
+	// Should reside in one of the known tmpdir locations.
+	dir := filepath.Dir(path)
+	validDirs := tmpdir.Dirs()
+	found := false
+	for _, d := range validDirs {
+		if dir == d {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("unexpected base dir in path %q (expected one of %v)", path, validDirs)
 	}
 	// Should contain the uid.
 	const uid = "1234"
@@ -99,9 +111,18 @@ func TestUnloadRequestFile(t *testing.T) {
 	if path == "" {
 		t.Fatal("UnloadRequestFile returned empty string")
 	}
-	// Should reside in /dev/shm or /tmp.
-	if len(path) < 8 || (path[:8] != "/dev/shm" && path[:4] != "/tmp") {
-		t.Errorf("unexpected base dir in path %q", path)
+	// Should reside in one of the known tmpdir locations.
+	dir := filepath.Dir(path)
+	validDirs := tmpdir.Dirs()
+	found := false
+	for _, d := range validDirs {
+		if dir == d {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("unexpected base dir in path %q (expected one of %v)", path, validDirs)
 	}
 	// Should contain the uid.
 	const uid = "9999"

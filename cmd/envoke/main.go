@@ -589,7 +589,7 @@ envoke() {
 # ── renv unload token ──────────────────────────────────────────────────────────
 _renv_unload_token() {
   local f="/dev/shm/renv-${UID}-unload-requested"
-  [ -f "$f" ] || f="/tmp/renv-${UID}-unload-requested"
+  [ -f "$f" ] || f="${TMPDIR:-/tmp}/renv-${UID}-unload-requested"
   [ -f "$f" ] || return 1
   stat -c '%Y:%i:%s' "$f" 2>/dev/null || stat -f '%m:%i:%z' "$f" 2>/dev/null
 }
@@ -606,7 +606,7 @@ _RENV_LAST_UNLOAD_TOKEN="$(_renv_unload_token 2>/dev/null || true)"
 # ── kctx unload token ──────────────────────────────────────────────────────────
 _kctx_unload_token() {
   local f="/dev/shm/kctx-${UID}-unload-requested"
-  [ -f "$f" ] || f="/tmp/kctx-${UID}-unload-requested"
+  [ -f "$f" ] || f="${TMPDIR:-/tmp}/kctx-${UID}-unload-requested"
   [ -f "$f" ] || return 1
   stat -c '%Y:%i:%s' "$f" 2>/dev/null || stat -f '%m:%i:%z' "$f" 2>/dev/null
 }
@@ -712,14 +712,20 @@ end
 
 function _renv_unload_token
   set -l f /dev/shm/renv-(id -u)-unload-requested
-  test -f $f; or set f /tmp/renv-(id -u)-unload-requested
+  if not test -f $f
+    set -l _tmpdir (if set -q TMPDIR; echo $TMPDIR; else; echo /tmp; end)
+    set f $_tmpdir/renv-(id -u)-unload-requested
+  end
   test -f $f; or return 1
   stat -c '%Y:%i:%s' $f 2>/dev/null; or stat -f '%m:%i:%z' $f 2>/dev/null
 end
 
 function _kctx_unload_token
   set -l f /dev/shm/kctx-(id -u)-unload-requested
-  test -f $f; or set f /tmp/kctx-(id -u)-unload-requested
+  if not test -f $f
+    set -l _tmpdir (if set -q TMPDIR; echo $TMPDIR; else; echo /tmp; end)
+    set f $_tmpdir/kctx-(id -u)-unload-requested
+  end
   test -f $f; or return 1
   stat -c '%Y:%i:%s' $f 2>/dev/null; or stat -f '%m:%i:%z' $f 2>/dev/null
 end

@@ -1,7 +1,8 @@
 // Package cache provides an encrypted disk cache for resolved secret values.
 // It is provider-agnostic: callers supply an opaque string key and a password
 // used to derive the AES-256-CBC encryption key via PBKDF2-SHA256.
-// Files are stored in /dev/shm (Linux tmpfs) when available, falling back to /tmp.
+// Files are stored in /dev/shm (Linux tmpfs) when available, falling back to
+// os.TempDir() (which honours $TMPDIR on Unix/macOS).
 package cache
 
 import (
@@ -18,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/opalbolt/envoke/internal/tmpdir"
 	"golang.org/x/crypto/pbkdf2"
 )
 
@@ -40,17 +42,9 @@ type Cache struct {
 	Disabled bool // when true, Put and Get are no-ops (--no-cache flag)
 }
 
-// New picks /dev/shm if available and writable, else /tmp.
+// New picks /dev/shm if available and writable, else os.TempDir().
 func New() *Cache {
-	dir := "/tmp"
-	if fi, err := os.Stat("/dev/shm"); err == nil && fi.IsDir() {
-		testFile := filepath.Join("/dev/shm", ".envoke-cache-test")
-		if f, err := os.OpenFile(testFile, os.O_CREATE|os.O_WRONLY, 0600); err == nil {
-			f.Close()
-			os.Remove(testFile)
-			dir = "/dev/shm"
-		}
-	}
+	dir := tmpdir.PreferredWritable(".envoke-cache-test")
 	return &Cache{Dir: dir, MaxAge: 8 * time.Hour}
 }
 

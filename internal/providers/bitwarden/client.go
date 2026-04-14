@@ -16,6 +16,7 @@ import (
 	"time"
 
 	appcache "github.com/opalbolt/envoke/internal/cache"
+	"github.com/opalbolt/envoke/internal/tmpdir"
 	"golang.org/x/term"
 )
 
@@ -236,32 +237,21 @@ func (c *BWClient) Session() (string, error) {
 // sessionStorePath returns the path where a legacy plaintext BW session may exist.
 // Used only by ClearStoredSession to clean up files left by older versions.
 func sessionStorePath(uid string) string {
-	dir := "/tmp"
-	if fi, err := os.Stat("/dev/shm"); err == nil && fi.IsDir() {
-		dir = "/dev/shm"
-	}
-	return filepath.Join(dir, "renv-bw-session-"+uid)
+	return filepath.Join(tmpdir.Preferred(), "renv-bw-session-"+uid)
 }
 
 // localKeyStorePath returns the legacy path where the shared LocalPassword was
 // stored by older versions of renv. LocalPassword is no longer written to disk;
 // this helper exists only so ClearStoredLocalPassword can remove any leftover files.
 func localKeyStorePath(uid string) string {
-	dir := "/tmp"
-	if fi, err := os.Stat("/dev/shm"); err == nil && fi.IsDir() {
-		dir = "/dev/shm"
-	}
-	return filepath.Join(dir, "renv-local-key-"+uid)
+	return filepath.Join(tmpdir.Preferred(), "renv-local-key-"+uid)
 }
 
 // ClearStoredLocalPassword removes any local password files left by previous
 // versions of renv. The password is no longer written to disk, but legacy files
 // may still exist on systems that ran an older version.
 func ClearStoredLocalPassword(uid string) error {
-	dir := "/tmp"
-	if fi, err := os.Stat("/dev/shm"); err == nil && fi.IsDir() {
-		dir = "/dev/shm"
-	}
+	dir := tmpdir.Preferred()
 	// Remove shared store.
 	sharedPath := localKeyStorePath(uid)
 	slog.Debug("clearing stored local password", "path", sharedPath)
@@ -279,11 +269,7 @@ func ClearStoredLocalPassword(uid string) error {
 
 // acctTagStorePath returns the path where the BW account tag is persisted between process invocations.
 func acctTagStorePath(uid string) string {
-	dir := "/tmp"
-	if fi, err := os.Stat("/dev/shm"); err == nil && fi.IsDir() {
-		dir = "/dev/shm"
-	}
-	return filepath.Join(dir, "renv-bw-acct-tag-"+uid)
+	return filepath.Join(tmpdir.Preferred(), "renv-bw-acct-tag-"+uid)
 }
 
 // loadStoredAccountTag reads a previously saved BW account tag from disk.
