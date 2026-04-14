@@ -2,7 +2,7 @@ package bitwarden
 
 import (
 	"encoding/json"
-	appcache "github.com/eficode/envoke/internal/cache"
+	appcache "github.com/opalbolt/envoke/internal/cache"
 	"os"
 	"path/filepath"
 	"testing"

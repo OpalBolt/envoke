@@ -26,7 +26,7 @@ func TestMain(m *testing.M) {
 	// Build from the full import path so this works regardless of working directory.
 	out, buildErr := exec.Command(
 		"go", "build", "-o", envokeBin,
-		"github.com/eficode/envoke/cmd/envoke",
+		"github.com/opalbolt/envoke/cmd/envoke",
 	).CombinedOutput()
 	if buildErr != nil {
 		os.RemoveAll(dir)

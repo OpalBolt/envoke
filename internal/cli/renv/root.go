@@ -13,16 +13,16 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
-	"github.com/eficode/envoke/internal/cleanup"
-	"github.com/eficode/envoke/internal/config"
-	"github.com/eficode/envoke/internal/env"
-	"github.com/eficode/envoke/internal/logger"
-	"github.com/eficode/envoke/internal/providers"
-	bw "github.com/eficode/envoke/internal/providers/bitwarden"
-	vlt "github.com/eficode/envoke/internal/providers/vault"
-	"github.com/eficode/envoke/internal/state"
-	"github.com/eficode/envoke/internal/ui"
-	"github.com/eficode/envoke/internal/version"
+	"github.com/opalbolt/envoke/internal/cleanup"
+	"github.com/opalbolt/envoke/internal/config"
+	"github.com/opalbolt/envoke/internal/env"
+	"github.com/opalbolt/envoke/internal/logger"
+	"github.com/opalbolt/envoke/internal/providers"
+	bw "github.com/opalbolt/envoke/internal/providers/bitwarden"
+	vlt "github.com/opalbolt/envoke/internal/providers/vault"
+	"github.com/opalbolt/envoke/internal/state"
+	"github.com/opalbolt/envoke/internal/ui"
+	"github.com/opalbolt/envoke/internal/version"
 )
 
 // NewRootCmd returns the root cobra command for the renv CLI.

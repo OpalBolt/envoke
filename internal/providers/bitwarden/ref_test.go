@@ -3,7 +3,7 @@ package bitwarden_test
 import (
 	"testing"
 
-	"github.com/eficode/envoke/internal/providers/bitwarden"
+	"github.com/opalbolt/envoke/internal/providers/bitwarden"
 )
 
 func TestParseBWRef(t *testing.T) {

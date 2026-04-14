@@ -1,4 +1,4 @@
-module github.com/eficode/envoke
+module github.com/opalbolt/envoke
 
 go 1.25.0
 

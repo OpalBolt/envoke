@@ -16,7 +16,7 @@ VERSION       := $(shell \
 		echo "$(_BASE_VERSION)-dev+$(COMMIT)"; \
 	fi)
 DATE    := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
-PKG     := github.com/eficode/envoke/internal/version
+PKG     := github.com/opalbolt/envoke/internal/version
 LDFLAGS := -s -w \
 	-X $(PKG).Version=$(VERSION) \
 	-X $(PKG).Commit=$(COMMIT) \

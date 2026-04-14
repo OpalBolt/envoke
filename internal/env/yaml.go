@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/eficode/envoke/internal/providers"
+	"github.com/opalbolt/envoke/internal/providers"
 	"gopkg.in/yaml.v3"
 )
 

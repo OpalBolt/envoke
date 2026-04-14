@@ -1,7 +1,7 @@
 package providers
 
 import (
-	vlt "github.com/eficode/envoke/internal/providers/vault"
+	vlt "github.com/opalbolt/envoke/internal/providers/vault"
 )
 
 // VaultProvider wraps VaultClient to implement the Provider interface.
