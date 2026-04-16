@@ -21,14 +21,20 @@ func Preferred() string {
 }
 
 // PreferredWritable is like Preferred but also verifies the directory is
-// writable by creating and immediately removing a probe file named testName.
+// writable by creating and immediately removing a uniquely named probe file.
+// patternHint is an optional base name used to customise the probe filename
+// pattern (e.g. ".envoke-cache-test" → ".envoke-cache-test-*").
 // If /dev/shm exists but is not writable it falls back to os.TempDir().
-func PreferredWritable(testName string) string {
+func PreferredWritable(patternHint string) string {
 	if fi, err := os.Stat("/dev/shm"); err == nil && fi.IsDir() {
-		probe := filepath.Join("/dev/shm", testName)
-		if f, err := os.OpenFile(probe, os.O_CREATE|os.O_WRONLY, 0600); err == nil {
+		pattern := "tmpdir-probe-*"
+		if base := filepath.Base(patternHint); base != "" && base != "." {
+			pattern = base + "-*"
+		}
+		if f, err := os.CreateTemp("/dev/shm", pattern); err == nil {
+			name := f.Name()
 			f.Close()
-			os.Remove(probe)
+			os.Remove(name)
 			return "/dev/shm"
 		}
 	}
@@ -36,12 +42,27 @@ func PreferredWritable(testName string) string {
 }
 
 // Dirs returns the deduplicated list of directories to search when looking for
-// files that may have been written by any version of envoke (which may have
-// used either /dev/shm or os.TempDir()). Always contains at least one entry.
+// envoke files (which may have been written to /dev/shm or os.TempDir()).
+// Always contains at least one entry.
 func Dirs() []string {
-	tmpDir := os.TempDir()
-	if tmpDir != "/dev/shm" {
-		return []string{"/dev/shm", tmpDir}
+	candidates := []string{"/dev/shm", os.TempDir()}
+	dirs := make([]string, 0, len(candidates))
+	seen := make(map[string]struct{}, len(candidates))
+
+	for _, dir := range candidates {
+		cleaned := filepath.Clean(dir)
+		if cleaned == "" {
+			continue
+		}
+		if _, ok := seen[cleaned]; ok {
+			continue
+		}
+		seen[cleaned] = struct{}{}
+		dirs = append(dirs, cleaned)
 	}
-	return []string{"/dev/shm"}
+
+	if len(dirs) == 0 {
+		dirs = append(dirs, os.TempDir())
+	}
+	return dirs
 }
