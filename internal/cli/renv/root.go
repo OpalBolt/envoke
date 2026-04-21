@@ -28,7 +28,6 @@ import (
 // NewRootCmd returns the root cobra command for the renv CLI.
 func NewRootCmd() *cobra.Command {
 	var verbose bool
-	var noCache bool
 	var cfgFile string
 	var logLevel string
 	var cfg config.Config
@@ -64,7 +63,6 @@ func NewRootCmd() *cobra.Command {
 	}
 
 	root.PersistentFlags().BoolVar(&verbose, "verbose", false, "Enable debug logging (shorthand for --log-level=debug)")
-	root.PersistentFlags().BoolVar(&noCache, "no-cache", false, "Disable encrypted cache")
 	root.PersistentFlags().StringVar(&cfgFile, "config", "", "Config file path (default: $XDG_CONFIG_HOME/renv/config.yaml)")
 	root.PersistentFlags().StringVar(&logLevel, "log-level", "", "Log level: debug, info, warn, error")
 	root.SetVersionTemplate("{{.Name}} {{.Version}}\n")
@@ -78,8 +76,8 @@ func NewRootCmd() *cobra.Command {
 	_ = root.PersistentFlags().MarkDeprecated("password-grace-period", "this flag no longer has any effect and will be removed in a future release")
 
 	root.AddCommand(
-		resolveCmd(&noCache, &cfg),
-		execCmd(&noCache, &cfg),
+		resolveCmd(&cfg),
+		execCmd(&cfg),
 		shellInitCmd(),
 		yamlCmd(&cfg),
 		clearCacheCmd(),
@@ -93,15 +91,15 @@ func NewRootCmd() *cobra.Command {
 // NewSubCmd returns the renv subcommand tree for embedding under another root (e.g. envoke).
 // Unlike NewRootCmd, it does not register persistent flags (those are inherited from the parent)
 // and does not install its own PersistentPreRunE (the parent's runs instead).
-// noCache and cfg are pointers owned by the parent, populated before any subcommand runs.
-func NewSubCmd(noCache *bool, cfg *config.Config) *cobra.Command {
+// cfg is a pointer owned by the parent, populated before any subcommand runs.
+func NewSubCmd(cfg *config.Config) *cobra.Command {
 	root := &cobra.Command{
 		Use:   "renv",
 		Short: "Resolve secret references in .env and YAML files",
 	}
 	root.AddCommand(
-		resolveCmd(noCache, cfg),
-		execCmd(noCache, cfg),
+		resolveCmd(cfg),
+		execCmd(cfg),
 		shellInitCmd(),
 		yamlCmd(cfg),
 		clearCacheCmd(),
@@ -114,14 +112,8 @@ func NewSubCmd(noCache *bool, cfg *config.Config) *cobra.Command {
 
 // ── registry ──────────────────────────────────────────────────────────────────
 
-func newRegistry(noCache bool, cfg *config.Config) *providers.Registry {
-	cache := bw.NewCache()
-	cache.MaxAge = cfg.CacheMaxAge()
-	if noCache {
-		cache.Disabled = true
-	}
+func newRegistry(cfg *config.Config) *providers.Registry {
 	bwClient := &bw.BWClient{
-		Cache:   cache,
 		Timeout: cfg.BitwardenTimeout(),
 	}
 	vaultClient := &vlt.VaultClient{Timeout: cfg.VaultTimeout()}
@@ -134,7 +126,7 @@ func newRegistry(noCache bool, cfg *config.Config) *providers.Registry {
 
 // ── resolve ───────────────────────────────────────────────────────────────────
 
-func resolveCmd(noCache *bool, cfg *config.Config) *cobra.Command {
+func resolveCmd(cfg *config.Config) *cobra.Command {
 	var file string
 	var shell string
 
@@ -170,7 +162,7 @@ Then in .envrc:
 				ui.Warn(os.Stderr, "stdout is a terminal — output will not be set as env vars.")
 				fmt.Fprintln(os.Stderr, "  use: eval \"$(renv resolve .env)\"")
 			}
-			reg := newRegistry(*noCache, cfg)
+			reg := newRegistry(cfg)
 			defer reg.Close() //nolint:errcheck // best-effort session cleanup
 
 			entries, err := env.ResolveDotEnv(file, reg)
@@ -217,7 +209,7 @@ Then in .envrc:
 
 // ── exec ──────────────────────────────────────────────────────────────────────
 
-func execCmd(noCache *bool, cfg *config.Config) *cobra.Command {
+func execCmd(cfg *config.Config) *cobra.Command {
 	var file string
 
 	cmd := &cobra.Command{
@@ -234,7 +226,7 @@ The resolved variables override any same-named variables already in the environm
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			slog.Debug("running exec", "file", file, "command", args[0])
-			reg := newRegistry(*noCache, cfg)
+			reg := newRegistry(cfg)
 			defer reg.Close() //nolint:errcheck // best-effort session cleanup
 
 			entries, err := env.ResolveDotEnv(file, reg)
@@ -398,7 +390,7 @@ func yamlCmd(cfg *config.Config) *cobra.Command {
 				return fmt.Errorf("--file or positional argument required")
 			}
 			slog.Debug("running yaml resolve", "file", file, "key", key)
-			reg := newRegistry(false, cfg)
+			reg := newRegistry(cfg)
 			defer reg.Close() //nolint:errcheck // best-effort session cleanup
 
 			data, err := env.ResolveYAML(file, reg)
@@ -433,26 +425,19 @@ func yamlCmd(cfg *config.Config) *cobra.Command {
 func clearCacheCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "clear-cache",
-		Short: "Remove all renv cache files and stored session",
-		Long: `Remove the encrypted secret cache and stored Bitwarden session.
+		Short: "Remove stored Bitwarden session",
+		Long: `Remove the stored Bitwarden session.
 
 Variable name tracking (used by renv unload) is intentionally preserved so that
 renv unload continues to work after a cache clear — for example when the EXIT
 trap fires inside a direnv subprocess.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cache := bw.NewCache()
 			uid := fmt.Sprintf("%d", os.Getuid())
-			slog.Debug("clearing cache and session", "uid", uid)
-			if err := cache.Clear(uid); err != nil {
-				return fmt.Errorf("clearing cache: %w", err)
-			}
+			slog.Debug("clearing session", "uid", uid)
 			if err := bw.ClearStoredSession(uid); err != nil {
 				return fmt.Errorf("clearing session: %w", err)
 			}
-			if err := bw.ClearStoredLocalPassword(uid); err != nil {
-				return fmt.Errorf("clearing local password: %w", err)
-			}
-			ui.Success(os.Stderr, "Cache cleared")
+			ui.Success(os.Stderr, "Session cleared")
 			return nil
 		},
 	}
@@ -463,7 +448,7 @@ trap fires inside a direnv subprocess.`,
 func statusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
-		Short: "Show cache and loaded variable status",
+		Short: "Show loaded variable status",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			w := os.Stdout
 			uid := fmt.Sprintf("%d", os.Getuid())
@@ -480,23 +465,6 @@ func statusCmd() *cobra.Command {
 				ui.List(w, names)
 			}
 			fmt.Fprintln(w)
-
-			ui.Header(w, "Cache")
-			cache := bw.NewCache()
-			ui.Item(w, "Location", cache.Dir)
-			files, ages, err := cache.Status()
-			if err != nil {
-				return err
-			}
-			if len(files) == 0 {
-				ui.Item(w, "Files", ui.Gray(w, "none"))
-			} else {
-				for i, f := range files {
-					age, err := time.ParseDuration(ages[i])
-					ageStr := colorAge(w, ages[i], age, err)
-					ui.Item(w, f, ageStr)
-				}
-			}
 
 			return nil
 		},
@@ -554,12 +522,9 @@ func watchCmd() *cobra.Command {
 		Long: `Run in the background to manage secrets when the system sleeps or the screen
 is locked. Normally started automatically by shell-init.
 
-On lock: secret environment variables are unloaded from open shells. The
-encrypted cache is kept so secrets can be quickly re-resolved after unlock
-without re-entering passwords.
+On lock: secret environment variables are unloaded from open shells.
 
-On sleep: the encrypted cache, stored session, and local passwords are cleared,
-requiring full re-authentication after wake.
+On sleep: the stored session is cleared, requiring re-authentication after wake.
 
 On Linux, sleep and screen-lock events are detected via D-Bus (systemd-logind).
 On macOS, sleep is detected via timer drift; screen lock requires a launchd agent.
@@ -583,11 +548,8 @@ Start manually:
 			}
 
 			if err := hook.RegisterSleep(func() error {
-				slog.Debug("cleanup: clearing renv cache and session on sleep")
-				cache := bw.NewCache()
-				_ = cache.Clear(uid)
+				slog.Debug("cleanup: clearing renv session on sleep")
 				_ = bw.ClearStoredSession(uid)
-				_ = bw.ClearStoredLocalPassword(uid)
 				_ = state.RequestUnload(uid)
 				return nil
 			}); err != nil {

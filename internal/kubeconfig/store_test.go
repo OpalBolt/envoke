@@ -19,13 +19,12 @@ func newTestStore(t *testing.T) (*NamedStore, string) {
 func TestNamedStore_PutGet_RoundTrip(t *testing.T) {
 	store, uid := newTestStore(t)
 	data := []byte("apiVersion: v1\nclusters: []\n")
-	pw := "test-password"
 
-	if err := store.Put(uid, "prod", pw, data); err != nil {
+	if err := store.Put(uid, "prod", data); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 
-	got, err := store.Get(uid, "prod", pw)
+	got, err := store.Get(uid, "prod")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -34,24 +33,10 @@ func TestNamedStore_PutGet_RoundTrip(t *testing.T) {
 	}
 }
 
-func TestNamedStore_Get_WrongPassword(t *testing.T) {
-	store, uid := newTestStore(t)
-	data := []byte("apiVersion: v1\n")
-
-	if err := store.Put(uid, "prod", "correct", data); err != nil {
-		t.Fatalf("Put: %v", err)
-	}
-
-	_, err := store.Get(uid, "prod", "wrong")
-	if err == nil {
-		t.Fatal("expected error with wrong password, got nil")
-	}
-}
-
 func TestNamedStore_Get_Miss(t *testing.T) {
 	store, uid := newTestStore(t)
 
-	got, err := store.Get(uid, "nonexistent", "pw")
+	got, err := store.Get(uid, "nonexistent")
 	if err != nil {
 		t.Fatalf("unexpected error on miss: %v", err)
 	}
@@ -64,7 +49,7 @@ func TestNamedStore_Get_Expired(t *testing.T) {
 	store, uid := newTestStore(t)
 
 	data := []byte("apiVersion: v1\n")
-	if err := store.Put(uid, "prod", "pw", data); err != nil {
+	if err := store.Put(uid, "prod", data); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 
@@ -75,7 +60,7 @@ func TestNamedStore_Get_Expired(t *testing.T) {
 		t.Fatalf("Chtimes: %v", err)
 	}
 
-	got, err := store.Get(uid, "prod", "pw")
+	got, err := store.Get(uid, "prod")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -91,16 +76,15 @@ func TestNamedStore_Get_Expired(t *testing.T) {
 
 func TestNamedStore_Put_Overwrite(t *testing.T) {
 	store, uid := newTestStore(t)
-	pw := "pw"
 
-	if err := store.Put(uid, "prod", pw, []byte("v1")); err != nil {
+	if err := store.Put(uid, "prod", []byte("v1")); err != nil {
 		t.Fatalf("first Put: %v", err)
 	}
-	if err := store.Put(uid, "prod", pw, []byte("v2")); err != nil {
+	if err := store.Put(uid, "prod", []byte("v2")); err != nil {
 		t.Fatalf("second Put: %v", err)
 	}
 
-	got, err := store.Get(uid, "prod", pw)
+	got, err := store.Get(uid, "prod")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -111,10 +95,9 @@ func TestNamedStore_Put_Overwrite(t *testing.T) {
 
 func TestNamedStore_List(t *testing.T) {
 	store, uid := newTestStore(t)
-	pw := "pw"
 
 	for _, name := range []string{"prod", "staging", "dev"} {
-		if err := store.Put(uid, name, pw, []byte("data")); err != nil {
+		if err := store.Put(uid, name, []byte("data")); err != nil {
 			t.Fatalf("Put %q: %v", name, err)
 		}
 	}
@@ -139,9 +122,8 @@ func TestNamedStore_List_ExcludesExpired(t *testing.T) {
 	dir := t.TempDir()
 	store := &NamedStore{Dir: dir, MaxAge: time.Hour}
 	uid := "testuid"
-	pw := "pw"
 
-	if err := store.Put(uid, "old", pw, []byte("data")); err != nil {
+	if err := store.Put(uid, "old", []byte("data")); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 
@@ -171,16 +153,15 @@ func TestNamedStore_List_ExcludesExpired(t *testing.T) {
 
 func TestNamedStore_Remove(t *testing.T) {
 	store, uid := newTestStore(t)
-	pw := "pw"
 
-	if err := store.Put(uid, "prod", pw, []byte("data")); err != nil {
+	if err := store.Put(uid, "prod", []byte("data")); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 	if err := store.Remove(uid, "prod"); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
 
-	got, err := store.Get(uid, "prod", pw)
+	got, err := store.Get(uid, "prod")
 	if err != nil {
 		t.Fatalf("Get after Remove: %v", err)
 	}
@@ -199,15 +180,14 @@ func TestNamedStore_Remove_NotExist(t *testing.T) {
 
 func TestNamedStore_Clear(t *testing.T) {
 	store, uid := newTestStore(t)
-	pw := "pw"
 
 	for _, name := range []string{"prod", "staging"} {
-		if err := store.Put(uid, name, pw, []byte("data")); err != nil {
+		if err := store.Put(uid, name, []byte("data")); err != nil {
 			t.Fatalf("Put %q: %v", name, err)
 		}
 	}
 	// A file belonging to a different uid — must NOT be removed.
-	otherFile := filepath.Join(store.Dir, storePrefix+"otheruid-prod.enc")
+	otherFile := filepath.Join(store.Dir, storePrefix+"otheruid-prod.yaml")
 	if err := os.WriteFile(otherFile, []byte("x"), 0600); err != nil {
 		t.Fatalf("creating other uid file: %v", err)
 	}
@@ -246,7 +226,7 @@ func TestValidateStoreName(t *testing.T) {
 func TestNamedStore_FileMode(t *testing.T) {
 	store, uid := newTestStore(t)
 
-	if err := store.Put(uid, "prod", "pw", []byte("data")); err != nil {
+	if err := store.Put(uid, "prod", []byte("data")); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 

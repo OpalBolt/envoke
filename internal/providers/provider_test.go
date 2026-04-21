@@ -134,13 +134,6 @@ func TestRegistry_ProviderFor(t *testing.T) {
 	}
 }
 
-func TestRegistry_LocalPassword_NoBWProvider(t *testing.T) {
-	reg := providers.NewRegistry()
-	if got := reg.LocalPassword(); got != "" {
-		t.Errorf("LocalPassword() = %q, want empty string when no BW provider", got)
-	}
-}
-
 func TestRegistry_IsSecretRef(t *testing.T) {
 	reg := providers.NewRegistry()
 	reg.Register(newMockProvider([]string{"bw"}, nil))

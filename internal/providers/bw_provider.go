@@ -6,10 +6,6 @@ import (
 
 // BWProvider wraps BWClient to implement the Provider interface.
 // URI parsing is handled here so that callers only see the generic Resolve(uri) method.
-//
-// BWProvider additionally exposes LocalPassword() which is needed by callers that
-// store kubeconfigs via kubeconfig.NamedStore.Put using the same encryption password
-// as the BW cache.
 type BWProvider struct {
 	client *bw.BWClient
 }
@@ -35,12 +31,6 @@ func (p *BWProvider) Resolve(uri string) (string, error) {
 func (p *BWProvider) Close() error {
 	p.client.Close()
 	return nil
-}
-
-// LocalPassword returns the local cache encryption password held by the underlying
-// BWClient. Empty until the first BW Resolve call has prompted (or read from env).
-func (p *BWProvider) LocalPassword() string {
-	return p.client.LocalPassword
 }
 
 // Client returns the underlying BWClient.
