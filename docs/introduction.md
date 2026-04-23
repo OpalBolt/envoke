@@ -2,12 +2,12 @@
 
 ## What is envoke?
 
-**envoke** *(env + invoke)* is a CLI tool for securely loading secrets into your shell. It reads a `.env` file, resolves any secret references against Bitwarden or HashiCorp Vault, and emits `export` statements you evaluate in your shell. It also manages named encrypted contexts (such as kubeconfigs) the same way.
+**envoke** *(env + invoke)* is a CLI tool for securely loading secrets into your shell. It reads a `.env` file, resolves any secret references against Bitwarden, and emits `export` statements you evaluate in your shell. It also manages named encrypted contexts (such as kubeconfigs) the same way.
 
 The tool ships as a single binary (`envoke`) with two logical subcommands:
 
 - **renv** *(remote env)* — resolves environment secrets from `.env` files
-- **kctx** *(Keyless ConTeXt)* — manages named contexts fetched from Bitwarden or Vault
+- **kctx** *(Keyless ConTeXt)* — manages named contexts fetched from Bitwarden
 
 You can use `envoke resolve` to handle both in one pass, or call `envoke renv` / `envoke kctx` for each individually.
 
@@ -30,7 +30,6 @@ A `.env` file can contain literal values or secret references:
 ```bash
 PLAIN=literal
 DB_PASSWORD=bw://database/prod-db
-API_TOKEN=vault://secret/api#token
 ```
 
 References are resolved at load time. Only the resolved value reaches your shell.
@@ -46,20 +45,13 @@ bw://folder/item/field:custom_name  # custom field
 bw://collection:name/item           # item in a collection
 ```
 
-### Vault URI format
-
-```
-vault://path#field                  # KV v2 — #field fragment is required for env var refs
-vault://path                        # for KCTX_ kubeconfig refs, #field defaults to "kubeconfig"
-```
-
 ### Kubeconfig directives
 
 Lines prefixed with `KCTX_` in a `.env` file are treated as named context sources, not environment variables:
 
 ```bash
 KCTX_PROD=bw://kubernetes/prod-cluster
-KCTX_STAGING=vault://secret/kubeconfig/staging   # #kubeconfig is the default field
+KCTX_STAGING=bw://kubernetes/staging-cluster
 ```
 
 `envoke resolve` will load each item into a named local store instead of exporting it as a variable. You then switch between them with `kctx prod` / `kctx staging`.

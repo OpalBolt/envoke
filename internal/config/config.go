@@ -47,10 +47,8 @@ type CacheConfig struct {
 
 // TimeoutConfig controls subprocess call timeouts.
 type TimeoutConfig struct {
-	// Bitwarden is the timeout for bw CLI subprocess calls (Go duration string).
-	Bitwarden string `yaml:"bitwarden"`
-	// Vault is the timeout for vault CLI subprocess calls (Go duration string).
-	Vault string `yaml:"vault"`
+	// Secrets is the timeout for secret manager CLI subprocess calls (Go duration string).
+	Secrets string `yaml:"secrets"`
 }
 
 // Defaults returns a Config with all fields set to safe defaults.
@@ -64,8 +62,7 @@ func Defaults() Config {
 			MaxAge: "8h",
 		},
 		Timeouts: TimeoutConfig{
-			Bitwarden: "30s",
-			Vault:     "30s",
+			Secrets: "30s",
 		},
 		UI: UIConfig{
 			Border: true,
@@ -120,11 +117,8 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("RENV_CACHE_MAX_AGE"); v != "" {
 		cfg.Cache.MaxAge = v
 	}
-	if v := os.Getenv("RENV_TIMEOUT_BITWARDEN"); v != "" {
-		cfg.Timeouts.Bitwarden = v
-	}
-	if v := os.Getenv("RENV_TIMEOUT_VAULT"); v != "" {
-		cfg.Timeouts.Vault = v
+	if v := os.Getenv("RENV_TIMEOUT_SECRETS"); v != "" {
+		cfg.Timeouts.Secrets = v
 	}
 	if v := os.Getenv("RENV_UI_BORDER"); v != "" {
 		cfg.UI.Border = v != "false" && v != "0"
@@ -136,14 +130,9 @@ func (c *Config) CacheMaxAge() time.Duration {
 	return parseDuration(c.Cache.MaxAge, 8*time.Hour)
 }
 
-// BitwardenTimeout parses and returns the Bitwarden subprocess timeout.
-func (c *Config) BitwardenTimeout() time.Duration {
-	return parseDuration(c.Timeouts.Bitwarden, 30*time.Second)
-}
-
-// VaultTimeout parses and returns the Vault subprocess timeout.
-func (c *Config) VaultTimeout() time.Duration {
-	return parseDuration(c.Timeouts.Vault, 30*time.Second)
+// SecretsTimeout parses and returns the secret manager subprocess timeout.
+func (c *Config) SecretsTimeout() time.Duration {
+	return parseDuration(c.Timeouts.Secrets, 30*time.Second)
 }
 
 func parseDuration(s string, fallback time.Duration) time.Duration {

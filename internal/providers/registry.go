@@ -7,13 +7,12 @@ import (
 
 // Registry routes secret URIs to the correct Provider by URI scheme.
 // Build one registry at startup and pass it to all callers instead of
-// threading concrete BWClient / VaultClient types throughout the codebase.
+// threading concrete provider types throughout the codebase.
 //
 // Usage:
 //
 //	reg := providers.NewRegistry()
 //	reg.Register(providers.NewBWProvider(bwClient))
-//	reg.Register(providers.NewVaultProvider(vaultClient))
 //	value, err := reg.Resolve("bw://folder/item")
 type Registry struct {
 	providers map[string]Provider // scheme → provider

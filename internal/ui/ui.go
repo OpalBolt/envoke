@@ -17,7 +17,7 @@ import (
 type PanelEntry struct {
 	Key    string // variable or item name
 	Value  string // display value (may be empty)
-	Source string // origin URI, e.g. "bw://folder/item" or "vault://path#field"; empty = literal
+	Source string // origin URI, e.g. "bw://folder/item"; empty = literal
 }
 
 // rendererFor returns a lipgloss Renderer for w.

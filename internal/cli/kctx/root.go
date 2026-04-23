@@ -18,7 +18,6 @@ import (
 	"github.com/opalbolt/envoke/internal/logger"
 	"github.com/opalbolt/envoke/internal/providers"
 	bw "github.com/opalbolt/envoke/internal/providers/bitwarden"
-	vlt "github.com/opalbolt/envoke/internal/providers/vault"
 	"github.com/opalbolt/envoke/internal/securedir"
 	"github.com/opalbolt/envoke/internal/ui"
 	"github.com/opalbolt/envoke/internal/version"
@@ -33,7 +32,7 @@ func NewRootCmd() *cobra.Command {
 
 	root := &cobra.Command{
 		Use:          "kctx",
-		Short:        "Ephemeral kubeconfig switcher via Vault or Bitwarden",
+		Short:        "Ephemeral kubeconfig switcher",
 		Version:      version.String(),
 		SilenceUsage: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
@@ -52,8 +51,7 @@ func NewRootCmd() *cobra.Command {
 			slog.Debug("config loaded",
 				"log_level", cfg.Log.Level,
 				"log_format", cfg.Log.Format,
-				"timeout_vault", cfg.Timeouts.Vault,
-				"timeout_bitwarden", cfg.Timeouts.Bitwarden,
+				"timeout_secrets", cfg.Timeouts.Secrets,
 			)
 			return nil
 		},
@@ -82,7 +80,7 @@ func NewRootCmd() *cobra.Command {
 func NewSubCmd(cfg *config.Config) *cobra.Command {
 	root := &cobra.Command{
 		Use:   "kctx",
-		Short: "Ephemeral kubeconfig switcher via Vault or Bitwarden",
+		Short: "Ephemeral kubeconfig switcher",
 	}
 	root.AddCommand(
 		loadCmd(cfg),
@@ -99,13 +97,11 @@ func NewSubCmd(cfg *config.Config) *cobra.Command {
 
 func newRegistry(cfg *config.Config) *providers.Registry {
 	bwClient := &bw.BWClient{
-		Timeout: cfg.BitwardenTimeout(),
+		Timeout: cfg.SecretsTimeout(),
 	}
-	vaultClient := &vlt.VaultClient{Timeout: cfg.VaultTimeout()}
 
 	reg := providers.NewRegistry()
 	reg.Register(providers.NewBWProvider(bwClient))
-	reg.Register(providers.NewVaultProvider(vaultClient))
 	return reg
 }
 
@@ -118,9 +114,9 @@ func normalizeKubeconfigURI(source string) string {
 
 func loadCmd(cfg *config.Config) *cobra.Command {
 	return &cobra.Command{
-		Use:   "load <name> <bw://item|vault-path>",
+		Use:   "load <name> <bw://item>",
 		Short: "Fetch a kubeconfig and cache it under a local name",
-		Long: `Fetch a kubeconfig from Bitwarden or Vault and store it in the local
+		Long: `Fetch a kubeconfig from Bitwarden and store it in the local
 named store so that 'kctx switch <name>' can load it without re-fetching.
 
 Place multiple kctx load calls in your .env file to pre-load all configs.
@@ -128,8 +124,7 @@ The Bitwarden password is prompted fresh on every call — no passwords are
 persisted or shared between invocations.
 
 Examples:
-  kctx load prod bw://kubernetes/prod
-  kctx load staging vault://secret/kubeconfig/staging`,
+  kctx load prod bw://kubernetes/prod`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
@@ -167,12 +162,12 @@ Examples:
 
 func switchCmd(cfg *config.Config) *cobra.Command {
 	return &cobra.Command{
-		Use:   "switch <name> [bw://item|vault-path]",
+		Use:   "switch <name> [bw://item]",
 		Short: "Switch to a named kubeconfig (or fetch one if a source is given)",
 		Long: `Switch KUBECONFIG to a named kubeconfig previously loaded with 'kctx load'.
 
-If the named kubeconfig is not in the local store, a source (bw:// or vault
-path) may be provided to fetch it on the fly.
+If the named kubeconfig is not in the local store, a source (bw://) may be
+provided to fetch it on the fly.
 
 Examples:
   kctx switch prod                          # use pre-loaded 'prod'
@@ -205,7 +200,7 @@ Examples:
 				if source == "" {
 					return fmt.Errorf(
 						"no pre-loaded kubeconfig named %q found\n"+
-							"Run: kctx load %s <bw://item|vault-path>",
+							"Run: kctx load %s <bw://item>",
 						name, name,
 					)
 				}

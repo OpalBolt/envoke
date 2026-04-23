@@ -34,7 +34,6 @@ You can install envoke as part of your project's development shell:
         packages = [
           envoke.packages.${system}.envoke
           pkgs.bitwarden-cli
-          pkgs.vault
           pkgs.kubectl
         ];
 
@@ -57,7 +56,7 @@ nix run .                 # run envoke directly
 
 ## Development shell
 
-The repository's own dev shell includes Go tools, goreleaser, `bw`, `vault`, and `envoke`:
+The repository's own dev shell includes Go tools, goreleaser, `bw`, and `envoke`:
 
 ```bash
 nix develop

@@ -3,7 +3,6 @@
 ## Requirements
 
 - **Bitwarden CLI** (`bw`) — required for `bw://` references ([install guide](https://bitwarden.com/help/cli/))
-- **Vault CLI** (`vault`) — required for `vault://` references ([install guide](https://developer.hashicorp.com/vault/docs/install))
 - **kubectl** — optional; only needed to show the current context in `kctx status` output
 
 ## Install with Go
@@ -76,7 +75,7 @@ environment.systemPackages = [ inputs.envoke.packages.${system}.envoke ];
 ### Development shell
 
 ```bash
-nix develop    # enters dev shell with Go, goreleaser, bw, vault, and envoke
+nix develop    # enters dev shell with Go, goreleaser, bw, and envoke
 ```
 
 ### Available Nix outputs

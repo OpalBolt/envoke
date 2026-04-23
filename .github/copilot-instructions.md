@@ -5,7 +5,7 @@
 Go is not in `PATH` by default — use `nix develop` to enter the dev shell, or prefix commands with `nix shell nixpkgs#go nixpkgs#gotools --command`.
 
 ```bash
-nix develop              # enter dev shell (Go, goreleaser, bw, vault, renv, kctx)
+nix develop              # enter dev shell (Go, goreleaser, bw, renv, kctx)
 make build               # build renv and kctx → bin/
 make test                # go test ./...
 make test-race           # go test -race ./...  (used in CI)
@@ -17,9 +17,9 @@ make tidy                # go mod tidy && go mod verify
 Run a single test package or test function:
 ```bash
 # inside nix develop (CGO_ENABLED=0 is already set by shellHook)
-go test ./internal/secrets/...
-go test -run TestParseBWRef ./internal/secrets/...
-go test -race -run TestCacheRoundtrip ./internal/secrets/...
+go test ./internal/providers/...
+go test -run TestParseBWRef ./internal/providers/bitwarden/...
+go test -race -run TestCacheRoundtrip ./internal/cache/...
 ```
 
 CI runs: `make test-race`, `make lint`, `make fmt-check`, `make shellcheck`.  
@@ -38,23 +38,25 @@ After any `go.mod` change:
 Two CLI binaries (`cmd/renv`, `cmd/kctx`) share the `internal/` packages. Both use [cobra](https://github.com/spf13/cobra) for subcommand dispatch and load config via `internal/config` in a `PersistentPreRunE` hook.
 
 **Secret resolution flow (renv)**:
-1. `env.ResolveDotEnv` parses `.env` → finds `bw://` / `vault://` values
-2. `secrets.ParseBWRef` / `secrets.ParseVaultRef` parse the URIs
-3. `BWClient.Resolve` or `VaultClient.Resolve` fetch the value
-4. For Bitwarden: check encrypted cache → on miss, prompt passwords → run `bw unlock` / `bw list items` subprocess → encrypt result → write to `/dev/shm`
-5. `env.EmitExports` writes `export KEY='value'` to stdout (shell-quoted, key validated against `^[A-Za-z_][A-Za-z0-9_]*$`)
-6. Caller `eval`s the output; `renv init` installs a shell wrapper that does this automatically
+1. `env.ResolveDotEnv` parses `.env` → finds `bw://` values
+2. The `providers.Registry` dispatches to the registered `BWProvider`
+3. For Bitwarden: check encrypted cache → on miss, prompt passwords → run `bw unlock` / `bw list items` subprocess → encrypt result → write to `/dev/shm`
+4. `env.EmitExports` writes `export KEY='value'` to stdout (shell-quoted, key validated against `^[A-Za-z_][A-Za-z0-9_]*$`)
+5. Caller `eval`s the output; `renv init` installs a shell wrapper that does this automatically
 
-**kctx flow**: fetch kubeconfig bytes from Vault or Bitwarden → `kubeconfig.WriteKubeconfig` writes an AES-encrypted tmpfile to `/dev/shm` with a `kctx-` prefix → emits `export KUBECONFIG=<path>` + `trap 'kctx clear' EXIT`.
+**kctx flow**: fetch kubeconfig bytes from Bitwarden → `kubeconfig.WriteKubeconfig` writes an AES-encrypted tmpfile to `/dev/shm` with a `kctx-` prefix → emits `export KUBECONFIG=<path>` + `trap 'kctx clear' EXIT`.
 
 **Internal packages**:
 | Package | Purpose |
 |---------|---------|
-| `internal/secrets` | `BWClient`, `VaultClient`, `Cache` (AES-256-CBC), URI parsing (`BWRef`, `VaultRef`), var-name tracking |
+| `internal/providers` | `Provider` interface, `Registry` dispatcher |
+| `internal/providers/bitwarden` | `BWClient`, URI parsing (`BWRef`), BW subprocess interaction |
+| `internal/cache` | AES-256-CBC encrypted cache in `/dev/shm` |
+| `internal/state` | Var-name tracking file for `unload` |
 | `internal/env` | `.env` parsing, YAML resolution, `EmitExports`/`EmitUnload` |
 | `internal/config` | Shared `Config` struct; load order: defaults → YAML file → `RENV_*` env vars → CLI flags |
 | `internal/kubeconfig` | Tmpfile write + kubeconfig merge |
-| `internal/cleanup` | Platform-specific tmpdir helpers (Linux/macOS/Windows) |
+| `internal/securedir` | Platform-aware secure storage dir (`/run/user/<uid>` → `/dev/shm` → `/tmp`) |
 | `internal/logger` | `slog`-based logger initialisation |
 | `internal/version` | Version/commit/date strings injected via ldflags |
 
@@ -73,7 +75,6 @@ bw://folder/item/note
 bw://folder/item/totp
 bw://folder/item/field:custom_name
 bw://collection:name/item
-vault://secret/path#field          # KV v2; #field fragment required
 ```
 
 ### Shell output safety
@@ -92,7 +93,7 @@ Defaults → `$XDG_CONFIG_HOME/renv/config.yaml` → `RENV_*` env vars → CLI f
 `renv resolve` skips emitting the EXIT trap when `DIRENV_DIR`, `DIRENV_FILE`, or `IN_NIX_SHELL` is set, since in those environments the process exits immediately after `.envrc` evaluation.
 
 ### Subcommand pattern
-Each subcommand is a standalone `func xxxCmd(...) *cobra.Command` that closes over config/flag pointers passed from `rootCmd`. `newClients()` in `cmd/renv/main.go` is the single place that constructs `Cache`, `BWClient`, and `VaultClient`.
+Each subcommand is a standalone `func xxxCmd(...) *cobra.Command` that closes over config/flag pointers passed from `rootCmd`. `newRegistry()` in `cmd/envoke/main.go` is the single place that constructs the `providers.Registry` with the `BWProvider`.
 
 ### Version injection
 `internal/version` fields (`Version`, `Commit`, `BuildDate`) are empty strings at compile time and set by `-ldflags "-X ..."` in both `Makefile` and `flake.nix`. The `VERSION` file is the release source of truth.
@@ -104,21 +105,18 @@ Each subcommand is a standalone `func xxxCmd(...) *cobra.Command` that closes ov
 | `RENV_BW_PASSWORD` | Bitwarden master password (non-interactive / CI) |
 | `RENV_LOCAL_PASSWORD` | Local cache encryption password (skips prompt) |
 | `BW_SESSION` | Pre-existing Bitwarden session token (skips `bw unlock`) |
-| `VAULT_ADDR` | Vault server address |
-| `VAULT_TOKEN` | Vault authentication token |
 | `RENV_LOG_LEVEL` | `debug`/`info`/`warn`/`error` |
 | `RENV_LOG_FORMAT` | `text` or `json` |
 | `RENV_CACHE_MAX_AGE` | Cache TTL (Go duration, e.g. `"8h"`) |
 | `RENV_ISOLATED` | `true`/`1` — per-terminal auth, no sharing |
 | `RENV_PASSWORD_GRACE_PERIOD` | Re-prompt grace period (Go duration) |
-| `RENV_TIMEOUT_BITWARDEN` | bw subprocess timeout |
-| `RENV_TIMEOUT_VAULT` | vault subprocess timeout |
+| `RENV_TIMEOUT_SECRETS` | secret manager subprocess timeout |
 
 Cache files are named `renv-<uid>-<first16hex(SHA256(uid:acctTag:folder))>.enc` in `/dev/shm` (or `/tmp`).
 
 ### Coding conventions
 
-- **Concrete types, not interfaces**: `BWClient` and `VaultClient` are structs, not interfaces — keep it that way unless a clear need arises.
+- **Concrete types, not interfaces**: `BWClient` is a struct — keep it that way unless a clear need arises.
 - **Structured logging**: `slog.Debug("message", "key", value, ...)` throughout; never `fmt.Print` for diagnostics.
 - **Best-effort cleanup**: operations that fail after a successful main action are logged with `slog.Warn` but don't return errors (e.g. cache writes after a successful Bitwarden fetch).
 - **Errors via `%w`**: always wrap with context — `fmt.Errorf("resolving %s: %w", file, err)`.

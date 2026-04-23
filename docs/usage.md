@@ -20,11 +20,9 @@ DB_HOST=postgres.internal
 
 # Secret references are resolved at load time
 DB_PASSWORD=bw://database/prod-db
-API_TOKEN=vault://secret/api#token
 
 # KCTX_ lines load kubeconfigs into named stores (not exported as env vars)
 KCTX_PROD=bw://kubernetes/prod-cluster
-KCTX_STAGING=vault://secret/kubeconfig/staging#kubeconfig
 ```
 
 With shell-init active, no explicit `eval` is needed:
@@ -109,7 +107,7 @@ envoke renv yaml config.yaml
 envoke renv yaml config.yaml --key database.password
 ```
 
-Any `bw://` or `vault://` values found anywhere in the YAML are resolved inline. Use `--key` to extract a single value using dot notation.
+Any `bw://` values found anywhere in the YAML are resolved inline. Use `--key` to extract a single value using dot notation.
 
 ### renv unload
 
@@ -143,7 +141,7 @@ envoke renv clear-cache
 
 ## kctx *(Keyless ConTeXt)*
 
-`kctx` manages named contexts fetched from Bitwarden or Vault — currently focused on kubeconfigs, with support for additional context types planned. All kctx commands are available as `envoke kctx <subcommand>`.
+`kctx` manages named contexts fetched from Bitwarden — currently focused on kubeconfigs, with support for additional context types planned. All kctx commands are available as `envoke kctx <subcommand>`.
 
 ### kctx load
 
@@ -151,7 +149,6 @@ Fetches a kubeconfig and stores it encrypted in `/dev/shm` under a local name.
 
 ```bash
 envoke kctx load prod bw://kubernetes/prod-cluster
-envoke kctx load staging vault://secret/kubeconfig/staging#kubeconfig
 envoke kctx load dev bw://collection:k8s/dev-cluster
 ```
 
@@ -226,20 +223,10 @@ KEY=bw://folder/item/field:custom_name  # custom field by name
 KEY=bw://collection:name/item           # item in a named collection
 ```
 
-### Vault reference format
-
-```bash
-KEY=vault://secret/path#field           # KV v2; #field fragment is required for env vars
-```
-
-`VAULT_ADDR` and `VAULT_TOKEN` must be set in the environment.
-
 ### Kubeconfig directives (envoke only)
 
 ```bash
 KCTX_NAME=bw://folder/item              # loaded into kctx named store as "name"
-KCTX_NAME=vault://secret/path#field     # same, from Vault — #field is optional; defaults to "kubeconfig"
-KCTX_NAME=vault://secret/kubeconfig/staging  # equivalent to vault://...#kubeconfig
 ```
 
 The `KCTX_` prefix is stripped and the remainder is lowercased to form the store name: `KCTX_PROD` → `prod`.

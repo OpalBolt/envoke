@@ -20,7 +20,6 @@ import (
 	"github.com/opalbolt/envoke/internal/logger"
 	"github.com/opalbolt/envoke/internal/providers"
 	bw "github.com/opalbolt/envoke/internal/providers/bitwarden"
-	vlt "github.com/opalbolt/envoke/internal/providers/vault"
 	"github.com/opalbolt/envoke/internal/securedir"
 	"github.com/opalbolt/envoke/internal/state"
 	"github.com/opalbolt/envoke/internal/ui"
@@ -57,8 +56,7 @@ func NewRootCmd() *cobra.Command {
 				"log_level", cfg.Log.Level,
 				"log_format", cfg.Log.Format,
 				"cache_max_age", cfg.Cache.MaxAge,
-				"timeout_bitwarden", cfg.Timeouts.Bitwarden,
-				"timeout_vault", cfg.Timeouts.Vault,
+				"timeout_secrets", cfg.Timeouts.Secrets,
 			)
 			return nil
 		},
@@ -116,13 +114,11 @@ func NewSubCmd(cfg *config.Config) *cobra.Command {
 
 func newRegistry(cfg *config.Config) *providers.Registry {
 	bwClient := &bw.BWClient{
-		Timeout: cfg.BitwardenTimeout(),
+		Timeout: cfg.SecretsTimeout(),
 	}
-	vaultClient := &vlt.VaultClient{Timeout: cfg.VaultTimeout()}
 
 	reg := providers.NewRegistry()
 	reg.Register(providers.NewBWProvider(bwClient))
-	reg.Register(providers.NewVaultProvider(vaultClient))
 	return reg
 }
 

@@ -12,7 +12,7 @@ import (
 )
 
 // ResolveYAML reads a YAML file, walks all scalar string values, resolves
-// any bw:// or vault:// references, and returns the resolved data structure.
+// any bw:// references, and returns the resolved data structure.
 func ResolveYAML(path string, reg *providers.Registry) (interface{}, error) {
 	slog.Debug("reading YAML file", "path", path)
 	data, err := os.ReadFile(path)

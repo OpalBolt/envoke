@@ -18,11 +18,8 @@ func TestDefaults(t *testing.T) {
 	if cfg.Cache.MaxAge != "8h" {
 		t.Errorf("Cache.MaxAge: got %q, want %q", cfg.Cache.MaxAge, "8h")
 	}
-	if cfg.Timeouts.Bitwarden != "30s" {
-		t.Errorf("Timeouts.Bitwarden: got %q, want %q", cfg.Timeouts.Bitwarden, "30s")
-	}
-	if cfg.Timeouts.Vault != "30s" {
-		t.Errorf("Timeouts.Vault: got %q, want %q", cfg.Timeouts.Vault, "30s")
+	if cfg.Timeouts.Secrets != "30s" {
+		t.Errorf("Timeouts.Secrets: got %q, want %q", cfg.Timeouts.Secrets, "30s")
 	}
 	if !cfg.UI.Border {
 		t.Error("UI.Border: got false, want true (default on)")
@@ -54,8 +51,7 @@ log:
 cache:
   max_age: 2h
 timeouts:
-  bitwarden: 60s
-  vault: 45s
+  secrets: 60s
 `
 	if err := os.WriteFile(cfgFile, []byte(content), 0600); err != nil {
 		t.Fatalf("writing config file: %v", err)
@@ -74,11 +70,8 @@ timeouts:
 	if cfg.Cache.MaxAge != "2h" {
 		t.Errorf("Cache.MaxAge: got %q, want %q", cfg.Cache.MaxAge, "2h")
 	}
-	if cfg.Timeouts.Bitwarden != "60s" {
-		t.Errorf("Timeouts.Bitwarden: got %q, want %q", cfg.Timeouts.Bitwarden, "60s")
-	}
-	if cfg.Timeouts.Vault != "45s" {
-		t.Errorf("Timeouts.Vault: got %q, want %q", cfg.Timeouts.Vault, "45s")
+	if cfg.Timeouts.Secrets != "60s" {
+		t.Errorf("Timeouts.Secrets: got %q, want %q", cfg.Timeouts.Secrets, "60s")
 	}
 }
 
@@ -110,11 +103,10 @@ func TestLoad_EmptyPathUsesDefault(t *testing.T) {
 func TestApplyEnv(t *testing.T) {
 	// Isolate env var changes to this test.
 	vars := map[string]string{
-		"RENV_LOG_LEVEL":         "debug",
-		"RENV_LOG_FORMAT":        "json",
-		"RENV_CACHE_MAX_AGE":     "4h",
-		"RENV_TIMEOUT_BITWARDEN": "10s",
-		"RENV_TIMEOUT_VAULT":     "15s",
+		"RENV_LOG_LEVEL":       "debug",
+		"RENV_LOG_FORMAT":      "json",
+		"RENV_CACHE_MAX_AGE":   "4h",
+		"RENV_TIMEOUT_SECRETS": "10s",
 	}
 	for k, v := range vars {
 		t.Setenv(k, v)
@@ -132,11 +124,8 @@ func TestApplyEnv(t *testing.T) {
 	if cfg.Cache.MaxAge != "4h" {
 		t.Errorf("Cache.MaxAge: got %q, want 4h", cfg.Cache.MaxAge)
 	}
-	if cfg.Timeouts.Bitwarden != "10s" {
-		t.Errorf("Timeouts.Bitwarden: got %q, want 10s", cfg.Timeouts.Bitwarden)
-	}
-	if cfg.Timeouts.Vault != "15s" {
-		t.Errorf("Timeouts.Vault: got %q, want 15s", cfg.Timeouts.Vault)
+	if cfg.Timeouts.Secrets != "10s" {
+		t.Errorf("Timeouts.Secrets: got %q, want 10s", cfg.Timeouts.Secrets)
 	}
 }
 
@@ -202,7 +191,7 @@ func TestCacheMaxAge(t *testing.T) {
 	}
 }
 
-func TestBitwardenTimeout(t *testing.T) {
+func TestSecretsTimeout(t *testing.T) {
 	tests := []struct {
 		input string
 		want  time.Duration
@@ -214,30 +203,10 @@ func TestBitwardenTimeout(t *testing.T) {
 	}
 	for _, tt := range tests {
 		cfg := Defaults()
-		cfg.Timeouts.Bitwarden = tt.input
-		got := cfg.BitwardenTimeout()
+		cfg.Timeouts.Secrets = tt.input
+		got := cfg.SecretsTimeout()
 		if got != tt.want {
-			t.Errorf("BitwardenTimeout(%q) = %v, want %v", tt.input, got, tt.want)
-		}
-	}
-}
-
-func TestVaultTimeout(t *testing.T) {
-	tests := []struct {
-		input string
-		want  time.Duration
-	}{
-		{"30s", 30 * time.Second},
-		{"2m", 2 * time.Minute},
-		{"", 30 * time.Second},
-		{"oops", 30 * time.Second},
-	}
-	for _, tt := range tests {
-		cfg := Defaults()
-		cfg.Timeouts.Vault = tt.input
-		got := cfg.VaultTimeout()
-		if got != tt.want {
-			t.Errorf("VaultTimeout(%q) = %v, want %v", tt.input, got, tt.want)
+			t.Errorf("SecretsTimeout(%q) = %v, want %v", tt.input, got, tt.want)
 		}
 	}
 }

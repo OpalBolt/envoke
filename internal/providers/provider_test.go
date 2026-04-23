@@ -137,14 +137,14 @@ func TestRegistry_ProviderFor(t *testing.T) {
 func TestRegistry_IsSecretRef(t *testing.T) {
 	reg := providers.NewRegistry()
 	reg.Register(newMockProvider([]string{"bw"}, nil))
-	reg.Register(newMockProvider([]string{"vault"}, nil))
+	reg.Register(newMockProvider([]string{"mock"}, nil))
 
 	tests := []struct {
 		input string
 		want  bool
 	}{
 		{"bw://folder/item", true},
-		{"vault://path#field", true},
+		{"mock://path#field", true},
 		{"plaintext", false},
 		{"https://example.com", false},
 		{"", false},
