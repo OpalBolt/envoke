@@ -67,28 +67,6 @@ func (r *Registry) IsSecretRef(uri string) bool {
 	return ok
 }
 
-// LocalPassword returns the local cache encryption password from the Bitwarden
-// provider (if one is registered). This is needed by callers that store
-// kubeconfigs via kubeconfig.NamedStore.Put, which requires the same password
-// used for BW cache encryption.
-//
-// Returns "" if no BW provider is registered or the password has not yet been
-// set (i.e. no BW resolve has occurred yet).
-//
-// Uses a structural interface assertion so the registry can obtain the
-// password from any registered provider that exposes LocalPassword() string
-// without depending on a specific concrete provider type.
-func (r *Registry) LocalPassword() string {
-	p, ok := r.providers["bw"]
-	if !ok {
-		return ""
-	}
-	if lpp, ok := p.(interface{ LocalPassword() string }); ok {
-		return lpp.LocalPassword()
-	}
-	return ""
-}
-
 // Close calls Close on every registered provider exactly once.
 // If a provider is registered for multiple schemes it is still closed only once.
 // A non-nil error from one provider does not stop the others from being closed.

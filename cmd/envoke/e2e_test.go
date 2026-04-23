@@ -33,6 +33,11 @@ func TestMain(m *testing.M) {
 		panic("building envoke: " + buildErr.Error() + "\n" + string(out))
 	}
 
+	// Point XDG_CONFIG_HOME at the temp dir so the binary never tries to read
+	// the real user config — keeps tests hermetic and avoids permission errors
+	// in sandboxed environments.
+	os.Setenv("XDG_CONFIG_HOME", dir)
+
 	// os.Exit skips deferred calls — capture the code, clean up, then exit.
 	code := m.Run()
 	os.RemoveAll(dir)
@@ -61,7 +66,7 @@ func TestResolveNoSecrets(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cmd := exec.Command(envokeBin, "renv", "resolve", "--no-cache", envFile)
+	cmd := exec.Command(envokeBin, "renv", "resolve", envFile)
 	out, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("resolve: %v\nstderr: %s", err, stderrFromErr(err))
@@ -81,7 +86,6 @@ func TestResolveNoSecrets(t *testing.T) {
 //
 // A mock bw binary serves fixture JSON so no real Bitwarden account is needed.
 // BW_SESSION is pre-set so the unlock step is skipped entirely.
-// --no-cache disables the encrypted cache so no local-password prompt occurs.
 func TestResolveBWRef(t *testing.T) {
 	dir := t.TempDir()
 
@@ -115,7 +119,7 @@ esac
 
 	// Prepend the mock directory to PATH so our bw stub is found first.
 	// BW_SESSION causes BWClient.Session() to return immediately without unlock.
-	cmd := exec.Command(envokeBin, "renv", "resolve", "--no-cache", envFile)
+	cmd := exec.Command(envokeBin, "renv", "resolve", envFile)
 	cmd.Env = append(os.Environ(),
 		"PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"BW_SESSION=test-tok",

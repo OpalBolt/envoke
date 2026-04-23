@@ -1,27 +1,16 @@
 package kubeconfig
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
-	"crypto/sha256"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
-
-	"golang.org/x/crypto/pbkdf2"
 )
 
 const (
-	storeKeyLen    = 32
-	storeSaltLen   = 32
-	storeIVLen     = 16
-	storeIter      = 100_000
 	storeFilePerms = 0600
 	storePrefix    = "kctx-kc-"
 )
@@ -29,9 +18,8 @@ const (
 // validStoreName matches safe kubeconfig names (alphanumeric, dash, underscore, dot).
 var validStoreName = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
 
-// NamedStore stores named kubeconfig data, encrypted with a local password.
-// Files are stored as kctx-kc-<uid>-<name>.enc in /dev/shm (preferred) or /tmp.
-// Encryption: AES-256-CBC, key derived via PBKDF2-SHA256.
+// NamedStore stores named kubeconfig data as plaintext files.
+// Files are stored as kctx-kc-<uid>-<name>.yaml in /dev/shm (preferred) or /tmp.
 type NamedStore struct {
 	Dir    string
 	MaxAge time.Duration
@@ -64,35 +52,22 @@ func ValidateStoreName(name string) error {
 
 // storePath returns the on-disk path for a named kubeconfig.
 func (s *NamedStore) storePath(uid, name string) string {
-	return filepath.Join(s.Dir, storePrefix+uid+"-"+name+".enc")
+	return filepath.Join(s.Dir, storePrefix+uid+"-"+name+".yaml")
 }
 
-// Put encrypts data and writes it as the named kubeconfig for uid.
+// Path returns the on-disk path for a named kubeconfig.
+// The file may or may not exist yet.
+func (s *NamedStore) Path(uid, name string) string {
+	return s.storePath(uid, name)
+}
+
+// Put writes the kubeconfig data as plaintext to a file for uid/name.
 // Existing entries with the same name are overwritten.
-func (s *NamedStore) Put(uid, name, password string, data []byte) error {
+// Uses atomic write (tmp file + rename) for safety.
+func (s *NamedStore) Put(uid, name string, data []byte) error {
 	if err := ValidateStoreName(name); err != nil {
 		return err
 	}
-
-	salt := make([]byte, storeSaltLen)
-	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
-		return fmt.Errorf("store: generating salt: %w", err)
-	}
-	iv := make([]byte, storeIVLen)
-	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
-		return fmt.Errorf("store: generating IV: %w", err)
-	}
-
-	key := pbkdf2.Key([]byte(password), salt, storeIter, storeKeyLen, sha256.New)
-	defer storeZeroBytes(key)
-
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return fmt.Errorf("store: creating cipher: %w", err)
-	}
-	padded := storePkcs7Pad(data, aes.BlockSize)
-	ciphertext := make([]byte, len(padded))
-	cipher.NewCBCEncrypter(block, iv).CryptBlocks(ciphertext, padded)
 
 	path := s.storePath(uid, name)
 	slog.Debug("named store put", "path", path, "name", name)
@@ -113,11 +88,9 @@ func (s *NamedStore) Put(uid, name, password string, data []byte) error {
 		_ = tmp.Close()
 		return fmt.Errorf("store: setting temp file permissions: %w", err)
 	}
-	for _, chunk := range [][]byte{salt, iv, ciphertext} {
-		if _, err := tmp.Write(chunk); err != nil {
-			_ = tmp.Close()
-			return fmt.Errorf("store: writing temp file: %w", err)
-		}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("store: writing temp file: %w", err)
 	}
 	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()
@@ -133,9 +106,9 @@ func (s *NamedStore) Put(uid, name, password string, data []byte) error {
 	return nil
 }
 
-// Get decrypts and returns the stored kubeconfig for uid/name.
+// Get returns the stored kubeconfig for uid/name.
 // Returns (nil, nil) on cache miss or expiry.
-func (s *NamedStore) Get(uid, name, password string) ([]byte, error) {
+func (s *NamedStore) Get(uid, name string) ([]byte, error) {
 	if err := ValidateStoreName(name); err != nil {
 		return nil, err
 	}
@@ -154,41 +127,16 @@ func (s *NamedStore) Get(uid, name, password string) ([]byte, error) {
 		return nil, nil
 	}
 
-	raw, err := os.ReadFile(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("store: reading file: %w", err)
 	}
-	if len(raw) < storeSaltLen+storeIVLen+aes.BlockSize {
-		return nil, fmt.Errorf("store: file too short")
-	}
-
-	salt := raw[:storeSaltLen]
-	iv := raw[storeSaltLen : storeSaltLen+storeIVLen]
-	ciphertext := raw[storeSaltLen+storeIVLen:]
-
-	key := pbkdf2.Key([]byte(password), salt, storeIter, storeKeyLen, sha256.New)
-	defer storeZeroBytes(key)
-
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, fmt.Errorf("store: creating cipher: %w", err)
-	}
-	if len(ciphertext)%aes.BlockSize != 0 {
-		return nil, fmt.Errorf("store: ciphertext not block-aligned")
-	}
-	plaintext := make([]byte, len(ciphertext))
-	cipher.NewCBCDecrypter(block, iv).CryptBlocks(plaintext, ciphertext)
-
-	unpadded, err := storePkcs7Unpad(plaintext)
-	if err != nil {
-		return nil, fmt.Errorf("store: wrong password or corrupted data: %w", err)
-	}
-	return unpadded, nil
+	return data, nil
 }
 
 // List returns the names of all non-expired named kubeconfigs for uid.
 func (s *NamedStore) List(uid string) ([]string, error) {
-	pattern := filepath.Join(s.Dir, storePrefix+uid+"-*.enc")
+	pattern := filepath.Join(s.Dir, storePrefix+uid+"-*.yaml")
 	matches, err := filepath.Glob(pattern)
 	if err != nil {
 		return nil, fmt.Errorf("store: glob: %w", err)
@@ -198,7 +146,7 @@ func (s *NamedStore) List(uid string) ([]string, error) {
 	for _, m := range matches {
 		base := filepath.Base(m)
 		name := strings.TrimPrefix(base, prefix)
-		name = strings.TrimSuffix(name, ".enc")
+		name = strings.TrimSuffix(name, ".yaml")
 		if !validStoreName.MatchString(name) {
 			continue
 		}
@@ -227,7 +175,7 @@ func (s *NamedStore) Remove(uid, name string) error {
 
 // Clear removes all named kubeconfigs for uid.
 func (s *NamedStore) Clear(uid string) error {
-	pattern := filepath.Join(s.Dir, storePrefix+uid+"-*.enc")
+	pattern := filepath.Join(s.Dir, storePrefix+uid+"-*.yaml")
 	matches, err := filepath.Glob(pattern)
 	if err != nil {
 		return fmt.Errorf("store: glob: %w", err)
@@ -238,38 +186,4 @@ func (s *NamedStore) Clear(uid string) error {
 		}
 	}
 	return nil
-}
-
-// --- crypto helpers (self-contained, matching the secrets/cache.go approach) ---
-
-func storeZeroBytes(b []byte) {
-	for i := range b {
-		b[i] = 0
-	}
-}
-
-func storePkcs7Pad(data []byte, blockSize int) []byte {
-	padding := blockSize - len(data)%blockSize
-	padded := make([]byte, len(data)+padding)
-	copy(padded, data)
-	for i := len(data); i < len(padded); i++ {
-		padded[i] = byte(padding)
-	}
-	return padded
-}
-
-func storePkcs7Unpad(data []byte) ([]byte, error) {
-	if len(data) == 0 {
-		return nil, fmt.Errorf("empty data")
-	}
-	padding := int(data[len(data)-1])
-	if padding > aes.BlockSize || padding == 0 {
-		return nil, fmt.Errorf("invalid padding byte: %d", padding)
-	}
-	for i := len(data) - padding; i < len(data); i++ {
-		if data[i] != byte(padding) {
-			return nil, fmt.Errorf("invalid padding")
-		}
-	}
-	return data[:len(data)-padding], nil
 }

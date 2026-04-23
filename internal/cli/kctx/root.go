@@ -68,7 +68,6 @@ func NewRootCmd() *cobra.Command {
 		switchCmd(&cfg),
 		unloadCmd(&cfg),
 		statusCmd(),
-		clearCacheCmd(),
 		shellInitCmd(),
 		watchCmd(),
 	)
@@ -89,7 +88,6 @@ func NewSubCmd(cfg *config.Config) *cobra.Command {
 		switchCmd(cfg),
 		unloadCmd(cfg),
 		statusCmd(),
-		clearCacheCmd(),
 		shellInitCmd(),
 		watchCmd(),
 	)
@@ -99,10 +97,7 @@ func NewSubCmd(cfg *config.Config) *cobra.Command {
 // ── registry ──────────────────────────────────────────────────────────────────
 
 func newRegistry(cfg *config.Config) *providers.Registry {
-	cache := bw.NewCache()
-	cache.MaxAge = cfg.CacheMaxAge()
 	bwClient := &bw.BWClient{
-		Cache:   cache,
 		Timeout: cfg.BitwardenTimeout(),
 	}
 	vaultClient := &vlt.VaultClient{Timeout: cfg.VaultTimeout()}
@@ -118,29 +113,18 @@ func normalizeKubeconfigURI(source string) string {
 	return kubeconfig.NormalizeSourceURI(source)
 }
 
-// kctxLocalPassword returns the local encryption password for the kubeconfig store.
-// Prefers the password already established by the BW provider (avoiding a second
-// prompt when BW was used). Falls back to a fresh ReadLocalPassword prompt when
-// the registry has no BW provider or no BW resolve has occurred (e.g. Vault path).
-func kctxLocalPassword(reg *providers.Registry) (string, error) {
-	if lp := reg.LocalPassword(); lp != "" {
-		return lp, nil
-	}
-	return bw.ReadLocalPassword()
-}
-
 // ── load ──────────────────────────────────────────────────────────────────────
 
 func loadCmd(cfg *config.Config) *cobra.Command {
 	return &cobra.Command{
 		Use:   "load <name> <bw://item|vault-path>",
 		Short: "Fetch a kubeconfig and cache it under a local name",
-		Long: `Fetch a kubeconfig from Bitwarden or Vault and encrypt it in the local
+		Long: `Fetch a kubeconfig from Bitwarden or Vault and store it in the local
 named store so that 'kctx switch <name>' can load it without re-fetching.
 
 Place multiple kctx load calls in your .env file to pre-load all configs.
-Both the local password and the Bitwarden password are prompted fresh on
-every call — no passwords are persisted or shared between invocations.
+The Bitwarden password is prompted fresh on every call — no passwords are
+persisted or shared between invocations.
 
 Examples:
   kctx load prod bw://kubernetes/prod
@@ -168,12 +152,7 @@ Examples:
 			}
 			kubeconfigData := []byte(val)
 
-			localPassword, err := kctxLocalPassword(reg)
-			if err != nil {
-				return err
-			}
-
-			if err := store.Put(uid, name, localPassword, kubeconfigData); err != nil {
+			if err := store.Put(uid, name, kubeconfigData); err != nil {
 				return fmt.Errorf("storing kubeconfig %q: %w", name, err)
 			}
 
@@ -212,11 +191,7 @@ Examples:
 			var kubeconfigData []byte
 
 			if err := kubeconfig.ValidateStoreName(name); err == nil {
-				lp, lperr := bw.ReadLocalPassword()
-				if lperr != nil {
-					return lperr
-				}
-				data, err := store.Get(uid, name, lp)
+				data, err := store.Get(uid, name)
 				if err != nil {
 					return fmt.Errorf("reading named kubeconfig %q: %w", name, err)
 				}
@@ -238,12 +213,12 @@ Examples:
 				if err != nil {
 					return fmt.Errorf("fetching kubeconfig for %q: %w", name, err)
 				}
+				if err := store.Put(uid, name, kubeconfigData); err != nil {
+					return fmt.Errorf("caching kubeconfig %q: %w", name, err)
+				}
 			}
 
-			path, werr := kubeconfig.WriteKubeconfig(kubeconfigData)
-			if werr != nil {
-				return fmt.Errorf("writing kubeconfig: %w", werr)
-			}
+			path := store.Path(uid, name)
 
 			fmt.Printf("export KUBECONFIG=%s\n", path)
 			fmt.Printf("trap 'kctx unload' EXIT\n")
@@ -305,7 +280,7 @@ kctx() {
     unload)
       eval "$(command kctx unload)"
       ;;
-    status|clear-cache|watch|shell-init)
+    status|watch|shell-init)
       command kctx "$@"
       ;;
     --version|--help|-h)
@@ -348,7 +323,7 @@ fi
 if [ -z "${_KCTX_WATCH_PID:-}" ]; then
   command kctx watch &
   _KCTX_WATCH_PID=$!
-  trap 'command kctx unload >/dev/null 2>&1; kill "${_KCTX_WATCH_PID:-}" 2>/dev/null; command kctx clear-cache 2>/dev/null' EXIT
+  trap 'command kctx unload >/dev/null 2>&1; kill "${_KCTX_WATCH_PID:-}" 2>/dev/null' EXIT
 fi
 `
 }
@@ -424,50 +399,31 @@ func currentKubectlContext(kubeconfigPath string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// ── clear-cache ───────────────────────────────────────────────────────────────
-
-func clearCacheCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "clear-cache",
-		Short: "Remove all kctx cache files and named kubeconfigs",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			uid := fmt.Sprintf("%d", os.Getuid())
-			slog.Debug("clearing kctx cache", "uid", uid)
-
-			cache := bw.NewCache()
-			if err := cache.Clear(uid); err != nil {
-				return err
-			}
-
-			store := kubeconfig.NewNamedStore()
-			if err := store.Clear(uid); err != nil {
-				return err
-			}
-
-			ui.Success(os.Stderr, "Cache cleared")
-			return nil
-		},
-	}
-}
-
 // ── unload ────────────────────────────────────────────────────────────────────
 
 func unloadCmd(cfg *config.Config) *cobra.Command {
 	return &cobra.Command{
 		Use:   "unload",
-		Short: "Unset KUBECONFIG and remove tmpfile (only if created by kctx)",
+		Short: "Unset KUBECONFIG and clear all cached kubeconfigs",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			kubeconfigPath := os.Getenv("KUBECONFIG")
 			slog.Debug("clearing kubeconfig", "path", kubeconfigPath)
-			if kubeconfigPath != "" && isManagedKubeconfig(kubeconfigPath) {
+			// Remove tmpfiles if present (legacy or external callers).
+			if kubeconfig.IsManagedTemp(kubeconfigPath) {
 				_ = os.Remove(kubeconfigPath)
 			}
 			fmt.Println("unset KUBECONFIG")
 
+			// Clear all named store kubeconfigs and any remaining tmpfiles.
+			uid := fmt.Sprintf("%d", os.Getuid())
+			store := kubeconfig.NewNamedStore()
+			_ = store.Clear(uid)
+			kubeconfig.ClearManaged()
+
 			if kubeconfigPath == "" {
 				ui.Warn(os.Stderr, "KUBECONFIG was not set")
 			} else {
-				entries := []ui.PanelEntry{{Key: "Removed", Value: kubeconfigPath}}
+				entries := []ui.PanelEntry{{Key: "KUBECONFIG", Value: kubeconfigPath}}
 				ui.Panel(os.Stderr, "kctx", "Kubeconfig unloaded", entries, cfg.UI.Border)
 			}
 			return nil
@@ -485,16 +441,13 @@ func watchCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "watch",
 		Short: "Watch for sleep/lock events and manage kubeconfigs (run in background by shell-init)",
-		Long: `Run in the background to manage kubeconfig tmpfiles and the secret cache
-when the system sleeps or the screen is locked. Normally started automatically
-by shell-init.
+		Long: `Run in the background to manage kubeconfig tmpfiles when the system sleeps
+or the screen is locked. Normally started automatically by shell-init.
 
 On lock: managed kubeconfig tmpfiles are removed and open shells are signalled
-to unset KUBECONFIG. The encrypted cache is kept so configs can be quickly
-re-resolved after unlock without re-entering passwords.
+to unset KUBECONFIG.
 
-On sleep: the encrypted cache is also cleared, requiring full re-authentication
-after wake.
+On sleep: managed kubeconfig tmpfiles and named kubeconfigs are cleared.
 
 On Linux, sleep and screen-lock events are detected via D-Bus (systemd-logind).
 On macOS, sleep is detected via timer drift; screen lock requires a launchd agent.
@@ -516,9 +469,7 @@ On Windows, event hooks are not yet implemented.`,
 			}
 
 			if err := hook.RegisterSleep(func() error {
-				slog.Debug("cleanup: clearing kctx cache and managed kubeconfigs on sleep")
-				cache := bw.NewCache()
-				_ = cache.Clear(uid)
+				slog.Debug("cleanup: clearing named and managed kubeconfigs on sleep")
 				store := kubeconfig.NewNamedStore()
 				_ = store.Clear(uid)
 				kubeconfig.ClearManaged()
