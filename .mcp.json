@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "context7": {
+      "command": "context7-mcp"
+    },
+    "mcp-nixos": {
+      "command": "mcp-nixos"
+    },
+    "mcp-server-git": {
+      "command": "mcp-server-git"
+    },
+    "memory": {
+      "command": "mcp-server-memory"
+    }
+  }
+}
