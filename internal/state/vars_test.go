@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/opalbolt/envoke/internal/securedir"
 )
 
 func TestSaveAndLoadVarNames(t *testing.T) {
@@ -83,13 +85,11 @@ func TestVarsFilePath(t *testing.T) {
 	if path == "" {
 		t.Fatal("varsFilePath returned empty string")
 	}
-	// Should reside in /dev/shm or /tmp.
-	if path[:8] != "/dev/shm" && path[:4] != "/tmp" {
-		t.Errorf("unexpected base dir in path %q", path)
+	if !strings.HasPrefix(path, securedir.Dir()) {
+		t.Errorf("unexpected base dir in path %q (want prefix %q)", path, securedir.Dir())
 	}
-	// Should contain the uid.
 	const uid = "1234"
-	if len(path) < len(uid) {
+	if !strings.Contains(path, uid) {
 		t.Errorf("path %q does not contain uid %q", path, uid)
 	}
 }
@@ -99,11 +99,9 @@ func TestUnloadRequestFile(t *testing.T) {
 	if path == "" {
 		t.Fatal("UnloadRequestFile returned empty string")
 	}
-	// Should reside in /dev/shm or /tmp.
-	if len(path) < 8 || (path[:8] != "/dev/shm" && path[:4] != "/tmp") {
-		t.Errorf("unexpected base dir in path %q", path)
+	if !strings.HasPrefix(path, securedir.Dir()) {
+		t.Errorf("unexpected base dir in path %q (want prefix %q)", path, securedir.Dir())
 	}
-	// Should contain the uid.
 	const uid = "9999"
 	if !strings.Contains(path, uid) {
 		t.Errorf("path %q does not contain uid %q", path, uid)

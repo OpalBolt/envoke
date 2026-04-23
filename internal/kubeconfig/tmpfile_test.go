@@ -3,7 +3,10 @@ package kubeconfig
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/opalbolt/envoke/internal/securedir"
 )
 
 func TestUnloadRequestFile(t *testing.T) {
@@ -11,8 +14,8 @@ func TestUnloadRequestFile(t *testing.T) {
 	if path == "" {
 		t.Fatal("UnloadRequestFile returned empty string")
 	}
-	if len(path) < 8 || (path[:8] != "/dev/shm" && path[:4] != "/tmp") {
-		t.Errorf("unexpected base dir in path %q", path)
+	if !strings.HasPrefix(path, securedir.Dir()) {
+		t.Errorf("unexpected base dir in path %q (want prefix %q)", path, securedir.Dir())
 	}
 }
 
@@ -62,11 +65,10 @@ func TestRequestUnload_RejectsSymlink(t *testing.T) {
 }
 
 func TestClearManaged(t *testing.T) {
-	// Create a few fake kctx-*.tmp files in /tmp.
-	// ClearManaged searches /dev/shm and /tmp specifically.
+	// Create a few fake kctx-*.tmp files in the secure directory.
 	paths := []string{
-		filepath.Join("/tmp", "kctx-test-clear-managed-1.tmp"),
-		filepath.Join("/tmp", "kctx-test-clear-managed-2.tmp"),
+		filepath.Join(securedir.Dir(), "kctx-test-clear-managed-1.tmp"),
+		filepath.Join(securedir.Dir(), "kctx-test-clear-managed-2.tmp"),
 	}
 	for _, p := range paths {
 		if err := os.WriteFile(p, []byte("test"), 0600); err != nil {
