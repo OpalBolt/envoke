@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/OpalBolt/envoke/compare/v0.3.0...v0.4.0) (2026-04-23)
+
+
+### Features
+
+* **securedir:** platform-aware secure storage abstraction ([#34](https://github.com/OpalBolt/envoke/issues/34)) ([#44](https://github.com/OpalBolt/envoke/issues/44)) ([1b6141c](https://github.com/OpalBolt/envoke/commit/1b6141c5d6a23536190c7ea5db6f41c711b7e791))
+
 ## [0.3.0](https://github.com/eficode/envoke/compare/v0.2.0...v0.3.0) (2026-04-10)
 
 
