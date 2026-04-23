@@ -33,7 +33,7 @@
           pname = "envoke";
           version = releaseVersion;
           src = ./.;
-          vendorHash = "sha256-U5ObZjq8TzaBKP8AbmoX/3Ylt5feuNMXM7JfGXF2NyA=";
+          vendorHash = "sha256-qhStGkBdR1ClZp3Wb0pI9uVZWxejFrvT1G9ujPw8Ubg=";
           subPackages = [ "cmd/envoke" ];
           ldflags = [
             "-s" "-w"
