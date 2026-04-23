@@ -51,7 +51,6 @@ direnv allow
 ```bash
 DB_HOST=postgres.internal
 DB_PASSWORD=bw://database/myapp-prod
-API_KEY=vault://secret/myapp/api#key
 KCTX_PROD=bw://kubernetes/prod-cluster
 ```
 

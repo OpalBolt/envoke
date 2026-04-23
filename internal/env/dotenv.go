@@ -14,8 +14,8 @@ import (
 type EnvEntry struct {
 	Key    string
 	Value  string // resolved value
-	IsRef  bool   // true if Value was a bw:// or vault:// reference
-	Source string // original reference URI (e.g. "bw://folder/item" or "vault://path#field"); empty for literals
+	IsRef  bool   // true if Value was a bw:// reference
+	Source string // original reference URI (e.g. "bw://folder/item"); empty for literals
 }
 
 // ResolveDotEnv reads a .env file, resolves all secret references via the

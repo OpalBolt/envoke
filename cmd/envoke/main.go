@@ -22,7 +22,6 @@ import (
 	"github.com/opalbolt/envoke/internal/logger"
 	"github.com/opalbolt/envoke/internal/providers"
 	bw "github.com/opalbolt/envoke/internal/providers/bitwarden"
-	vlt "github.com/opalbolt/envoke/internal/providers/vault"
 	"github.com/opalbolt/envoke/internal/state"
 	"github.com/opalbolt/envoke/internal/ui"
 	"github.com/opalbolt/envoke/internal/version"
@@ -50,8 +49,7 @@ func rootCmd() *cobra.Command {
   envoke kctx switch prod        # kctx subcommands (kubeconfig switching)
   envoke shell-init              # combined shell setup for both renv and kctx
 
-The .env file supports KCTX_<name>=bw://... or KCTX_<name>=vault://...
-entries that load kubeconfigs into the local kctx named store.`,
+The .env file supports KCTX_<name>=bw://... entries that load kubeconfigs into the local kctx named store.`,
 		Version:      version.String(),
 		SilenceUsage: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
@@ -100,19 +98,17 @@ entries that load kubeconfigs into the local kctx named store.`,
 	return root
 }
 
-// newRegistry builds a secrets Registry with BW and Vault providers.
+// newRegistry builds a secrets Registry with the Bitwarden provider.
 // cfg supplies timeouts.
 // Use a single registry across the entire resolve operation so that the BW
 // session is shared and users are prompted at most once per invocation.
 func newRegistry(cfg *config.Config) *providers.Registry {
 	bwClient := &bw.BWClient{
-		Timeout: cfg.BitwardenTimeout(),
+		Timeout: cfg.SecretsTimeout(),
 	}
-	vaultClient := &vlt.VaultClient{Timeout: cfg.VaultTimeout()}
 
 	reg := providers.NewRegistry()
 	reg.Register(providers.NewBWProvider(bwClient))
-	reg.Register(providers.NewVaultProvider(vaultClient))
 	return reg
 }
 
@@ -133,13 +129,12 @@ func resolveCmd(cfg *config.Config) *cobra.Command {
 		Short: "Resolve .env secrets and kubeconfig directives",
 		Long: `Resolve a .env file, handling both secret references and kubeconfig directives.
 
-Secret references (bw://, vault://) are resolved and exported as shell variables.
+Secret references (bw://) are resolved and exported as shell variables.
 
 Kubeconfig directives (keys prefixed with KCTX_) load a kubeconfig into the
 local kctx named store and automatically set KUBECONFIG to the last loaded one:
 
   KCTX_PROD=bw://kubernetes/prod-cluster     # loads kubeconfig named "prod"
-  KCTX_STAGING=vault://secret/kubeconfigs    # loads kubeconfig named "staging"
 
 Use 'kctx switch <name>' to switch between loaded kubeconfigs at any time.
 
@@ -293,12 +288,12 @@ The output must be evaluated by your shell:
 	return cmd
 }
 
-// isKctxDirective returns true if the entry is a KCTX_<name>=bw:// or vault:// directive.
+// isKctxDirective returns true if the entry is a KCTX_<name>=bw:// directive.
 func isKctxDirective(e env.RawEntry) bool {
 	if !strings.HasPrefix(e.Key, "KCTX_") {
 		return false
 	}
-	return strings.HasPrefix(e.Value, "bw://") || strings.HasPrefix(e.Value, "vault://")
+	return strings.HasPrefix(e.Value, "bw://")
 }
 
 // kctxNameFromKey derives a kubeconfig store name from a KCTX_ key.
@@ -307,7 +302,7 @@ func kctxNameFromKey(key string) string {
 	return strings.ToLower(strings.TrimPrefix(key, "KCTX_"))
 }
 
-// fetchKubeconfigForDirective fetches a kubeconfig from a bw:// or vault:// source
+// fetchKubeconfigForDirective fetches a kubeconfig from a bw:// source
 // and stores it in the named store as a plaintext yaml file.
 func fetchKubeconfigForDirective(reg *providers.Registry, name, source, uid string, store *kubeconfig.NamedStore) error {
 	uri := normalizeKubeconfigURI(source)

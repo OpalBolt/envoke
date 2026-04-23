@@ -44,8 +44,7 @@ cache:
   max_age: 8h        # how long Bitwarden folder data is cached
 
 timeouts:
-  bitwarden: 30s     # timeout for bw CLI calls
-  vault: 30s         # timeout for vault CLI calls
+  secrets: 30s       # timeout for secret manager CLI calls
 
 ui:
   border: true       # show rounded box borders in output panels
@@ -60,26 +59,17 @@ Environment variables override the config file. CLI flags override both.
 | `RENV_LOG_LEVEL` | Log level: `debug`, `info`, `warn`, `error` | `warn` |
 | `RENV_LOG_FORMAT` | Log format: `text` or `json` | `text` |
 | `RENV_CACHE_MAX_AGE` | Cache TTL (Go duration, e.g. `8h`, `24h`) | `8h` |
-| `RENV_TIMEOUT_BITWARDEN` | `bw` CLI timeout | `30s` |
-| `RENV_TIMEOUT_VAULT` | `vault` CLI timeout | `30s` |
+| `RENV_TIMEOUT_SECRETS` | Secret manager CLI timeout | `30s` |
 | `RENV_UI_BORDER` | Show UI borders: `true`/`false` | `true` |
 | `RENV_BW_PASSWORD` | Bitwarden master password (skips interactive prompt) | — |
 | `RENV_LOCAL_PASSWORD` | Local cache encryption password (skips interactive prompt) | — |
 | `BW_SESSION` | Pre-existing Bitwarden session token (skips `bw unlock`) | — |
-| `VAULT_ADDR` | Vault server address | — |
-| `VAULT_TOKEN` | Vault authentication token | — |
 
 ## Bitwarden prerequisites
 
 1. Install the Bitwarden CLI: `npm install -g @bitwarden/cli` or your OS package manager
 2. Log in: `bw login`
 3. Your vault items must be organized in **folders** (or collections) matching your `bw://` URIs
-
-## Vault prerequisites
-
-1. Install the Vault CLI: see [developer.hashicorp.com/vault](https://developer.hashicorp.com/vault/docs/install)
-2. Set `VAULT_ADDR` and `VAULT_TOKEN` before running envoke
-3. Secrets must be stored as KV v2 entries
 
 ## Automation / CI
 
@@ -88,8 +78,6 @@ In non-interactive environments, supply passwords via environment variables to a
 ```bash
 export RENV_BW_PASSWORD="your-bitwarden-master-password"
 export RENV_LOCAL_PASSWORD="your-local-cache-password"
-export VAULT_ADDR="https://vault.example.com"
-export VAULT_TOKEN="hvs.CAESIB..."
 
 envoke resolve .env
 ```
