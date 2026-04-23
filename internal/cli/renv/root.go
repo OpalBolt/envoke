@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/opalbolt/envoke/internal/providers"
 	bw "github.com/opalbolt/envoke/internal/providers/bitwarden"
 	vlt "github.com/opalbolt/envoke/internal/providers/vault"
+	"github.com/opalbolt/envoke/internal/securedir"
 	"github.com/opalbolt/envoke/internal/state"
 	"github.com/opalbolt/envoke/internal/ui"
 	"github.com/opalbolt/envoke/internal/version"
@@ -253,9 +255,12 @@ The resolved variables override any same-named variables already in the environm
 
 // ── shell-init ────────────────────────────────────────────────────────────────
 
-// BashInitScript is the shell function emitted by `renv shell-init` for bash/zsh.
+// BashInitScript returns the shell function emitted by `renv shell-init` for bash/zsh.
+// The sentinel file directory is resolved at emit time via securedir.Dir() so
+// the shell does not need to probe multiple candidate paths.
 // Exported so envoke can reference it when building the combined shell-init.
-const BashInitScript = `renv() {
+func BashInitScript() string {
+	const tmpl = `renv() {
   case "$1" in
     resolve|unload)
       # Strip the standalone EXIT trap emitted by resolve — the shell-init
@@ -270,8 +275,7 @@ const BashInitScript = `renv() {
 
 # Return a token that changes whenever the unload sentinel is refreshed.
 _renv_unload_token() {
-  local f="/dev/shm/renv-${UID}-unload-requested"
-  [ -f "$f" ] || f="/tmp/renv-${UID}-unload-requested"
+  local f="{{SECUREDIR}}/renv-${UID}-unload-requested"
   [ -f "$f" ] || return 1
   stat -c '%Y:%i:%s' "$f" 2>/dev/null || stat -f '%m:%i:%z' "$f" 2>/dev/null
 }
@@ -298,9 +302,13 @@ if [ -z "${_RENV_WATCH_PID:-}" ]; then
   trap 'kill "${_RENV_WATCH_PID:-}" 2>/dev/null; command renv clear-cache 2>/dev/null' EXIT
 fi
 `
+	return strings.Replace(tmpl, "{{SECUREDIR}}", securedir.Dir(), 1)
+}
 
-// FishInitScript is the shell function emitted by `renv shell-init --shell fish`.
-const FishInitScript = `function renv
+// FishInitScript returns the shell function emitted by `renv shell-init --shell fish`.
+// The sentinel file directory is resolved at emit time via securedir.Dir().
+func FishInitScript() string {
+	const tmpl = `function renv
   switch $argv[1]
     case resolve unload
       command renv $argv | source
@@ -310,8 +318,7 @@ const FishInitScript = `function renv
 end
 
 function _renv_unload_token
-  set -l f /dev/shm/renv-(id -u)-unload-requested
-  test -f $f; or set f /tmp/renv-(id -u)-unload-requested
+  set -l f {{SECUREDIR}}/renv-(id -u)-unload-requested
   test -f $f; or return 1
   stat -c '%Y:%i:%s' $f 2>/dev/null; or stat -f '%m:%i:%z' $f 2>/dev/null
 end
@@ -337,6 +344,8 @@ function _renv_cleanup --on-event fish_exit
   command renv clear-cache 2>/dev/null; or true
 end
 `
+	return strings.Replace(tmpl, "{{SECUREDIR}}", securedir.Dir(), 1)
+}
 
 func shellInitCmd() *cobra.Command {
 	var shell string
@@ -360,10 +369,10 @@ All other renv subcommands (exec, yaml, status, …) pass through unchanged.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			switch shell {
 			case "fish":
-				_, err := io.WriteString(cmd.OutOrStdout(), FishInitScript)
+				_, err := io.WriteString(cmd.OutOrStdout(), FishInitScript())
 				return err
 			default:
-				_, err := io.WriteString(cmd.OutOrStdout(), BashInitScript)
+				_, err := io.WriteString(cmd.OutOrStdout(), BashInitScript())
 				return err
 			}
 		},
