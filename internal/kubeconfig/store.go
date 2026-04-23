@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/opalbolt/envoke/internal/securedir"
 )
 
 const (
@@ -25,18 +27,9 @@ type NamedStore struct {
 	MaxAge time.Duration
 }
 
-// NewNamedStore picks /dev/shm if available and writable, else /tmp.
+// NewNamedStore uses the platform-appropriate secure directory (see internal/securedir).
 func NewNamedStore() *NamedStore {
-	dir := "/tmp"
-	if fi, err := os.Stat("/dev/shm"); err == nil && fi.IsDir() {
-		testPath := filepath.Join("/dev/shm", ".kctx-ns-test")
-		if f, err := os.OpenFile(testPath, os.O_CREATE|os.O_WRONLY, 0600); err == nil {
-			f.Close()
-			os.Remove(testPath)
-			dir = "/dev/shm"
-		}
-	}
-	return &NamedStore{Dir: dir, MaxAge: 8 * time.Hour}
+	return &NamedStore{Dir: securedir.Dir(), MaxAge: 8 * time.Hour}
 }
 
 // ValidateStoreName returns an error if name is empty or contains unsafe characters.

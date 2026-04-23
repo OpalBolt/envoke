@@ -6,16 +6,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/opalbolt/envoke/internal/securedir"
 )
 
 // varsFilePath returns the path of the tracked-vars state file for uid.
-// Prefers /dev/shm (RAM-backed, cleared on reboot) over /tmp.
 func varsFilePath(uid string) string {
-	dir := "/tmp"
-	if fi, err := os.Stat("/dev/shm"); err == nil && fi.IsDir() {
-		dir = "/dev/shm"
-	}
-	return filepath.Join(dir, "renv-"+uid+"-vars")
+	return filepath.Join(securedir.Dir(), "renv-"+uid+"-vars")
 }
 
 // SaveVarNames writes the exported variable names to a state file so that
@@ -65,11 +62,7 @@ func ClearVarNames(uid string) error {
 // UnloadRequestFile returns the path of the sentinel file used to signal
 // shells to run renv unload on their next prompt draw.
 func UnloadRequestFile(uid string) string {
-	dir := "/tmp"
-	if fi, err := os.Stat("/dev/shm"); err == nil && fi.IsDir() {
-		dir = "/dev/shm"
-	}
-	return filepath.Join(dir, "renv-"+uid+"-unload-requested")
+	return filepath.Join(securedir.Dir(), "renv-"+uid+"-unload-requested")
 }
 
 // RequestUnload creates the sentinel file. Shell PROMPT_COMMAND/precmd hooks
