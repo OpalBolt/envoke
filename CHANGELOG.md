@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/OpalBolt/envoke/compare/v0.4.0...v0.4.1) (2026-04-23)
+
+
+### Bug Fixes
+
+* **flake:** update vendorHash for current dependency tree [#47](https://github.com/OpalBolt/envoke/issues/47) ([#48](https://github.com/OpalBolt/envoke/issues/48)) ([1776586](https://github.com/OpalBolt/envoke/commit/1776586ad1c143866696a5d40f85fe2f823e5944))
+
 ## [0.4.0](https://github.com/OpalBolt/envoke/compare/v0.3.0...v0.4.0) (2026-04-23)
 
 
