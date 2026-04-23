@@ -19,6 +19,7 @@ import (
 	"github.com/opalbolt/envoke/internal/providers"
 	bw "github.com/opalbolt/envoke/internal/providers/bitwarden"
 	vlt "github.com/opalbolt/envoke/internal/providers/vault"
+	"github.com/opalbolt/envoke/internal/securedir"
 	"github.com/opalbolt/envoke/internal/ui"
 	"github.com/opalbolt/envoke/internal/version"
 )
@@ -257,9 +258,12 @@ func resolveSourceLabel(name, source string) string {
 // ── shell-init ────────────────────────────────────────────────────────────────
 
 // ShellSnippet returns the kctx bash/zsh shell init snippet.
+// The sentinel file directory is resolved at emit time via securedir.Dir() so
+// the shell does not need to probe multiple candidate paths.
 // Exported so envoke can reference it when building the combined shell-init.
 func ShellSnippet() string {
-	return `
+	secDir := securedir.Dir()
+	const tmpl = `
 # kctx shell integration — add to ~/.bashrc or ~/.zshrc:
 # eval "$(kctx shell-init)"
 
@@ -300,8 +304,7 @@ kctx() {
 }
 
 _kctx_unload_token() {
-  local f="/dev/shm/kctx-${UID}-unload-requested"
-  [ -f "$f" ] || f="/tmp/kctx-${UID}-unload-requested"
+  local f="{{SECUREDIR}}/kctx-${UID}-unload-requested"
   [ -f "$f" ] || return 1
   stat -c '%Y:%i:%s' "$f" 2>/dev/null || stat -f '%m:%i:%z' "$f" 2>/dev/null
 }
@@ -326,6 +329,7 @@ if [ -z "${_KCTX_WATCH_PID:-}" ]; then
   trap 'command kctx unload >/dev/null 2>&1; kill "${_KCTX_WATCH_PID:-}" 2>/dev/null' EXIT
 fi
 `
+	return strings.Replace(tmpl, "{{SECUREDIR}}", secDir, 1)
 }
 
 func shellInitCmd() *cobra.Command {
