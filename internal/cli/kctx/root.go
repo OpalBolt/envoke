@@ -68,7 +68,6 @@ func NewRootCmd() *cobra.Command {
 		switchCmd(&cfg),
 		unloadCmd(&cfg),
 		statusCmd(),
-		clearCacheCmd(),
 		shellInitCmd(),
 		watchCmd(),
 	)
@@ -89,7 +88,6 @@ func NewSubCmd(cfg *config.Config) *cobra.Command {
 		switchCmd(cfg),
 		unloadCmd(cfg),
 		statusCmd(),
-		clearCacheCmd(),
 		shellInitCmd(),
 		watchCmd(),
 	)
@@ -215,12 +213,12 @@ Examples:
 				if err != nil {
 					return fmt.Errorf("fetching kubeconfig for %q: %w", name, err)
 				}
+				if err := store.Put(uid, name, kubeconfigData); err != nil {
+					return fmt.Errorf("caching kubeconfig %q: %w", name, err)
+				}
 			}
 
-			path, werr := kubeconfig.WriteKubeconfig(kubeconfigData)
-			if werr != nil {
-				return fmt.Errorf("writing kubeconfig: %w", werr)
-			}
+			path := store.Path(uid, name)
 
 			fmt.Printf("export KUBECONFIG=%s\n", path)
 			fmt.Printf("trap 'kctx unload' EXIT\n")
@@ -282,7 +280,7 @@ kctx() {
     unload)
       eval "$(command kctx unload)"
       ;;
-    status|clear-cache|watch|shell-init)
+    status|watch|shell-init)
       command kctx "$@"
       ;;
     --version|--help|-h)
@@ -325,7 +323,7 @@ fi
 if [ -z "${_KCTX_WATCH_PID:-}" ]; then
   command kctx watch &
   _KCTX_WATCH_PID=$!
-  trap 'command kctx unload >/dev/null 2>&1; kill "${_KCTX_WATCH_PID:-}" 2>/dev/null; command kctx clear-cache 2>/dev/null' EXIT
+  trap 'command kctx unload >/dev/null 2>&1; kill "${_KCTX_WATCH_PID:-}" 2>/dev/null' EXIT
 fi
 `
 }
@@ -401,45 +399,31 @@ func currentKubectlContext(kubeconfigPath string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// ── clear-cache ───────────────────────────────────────────────────────────────
-
-func clearCacheCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "clear-cache",
-		Short: "Remove all named kubeconfigs",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			uid := fmt.Sprintf("%d", os.Getuid())
-			slog.Debug("clearing kctx kubeconfigs", "uid", uid)
-
-			store := kubeconfig.NewNamedStore()
-			if err := store.Clear(uid); err != nil {
-				return err
-			}
-
-			ui.Success(os.Stderr, "Kubeconfigs cleared")
-			return nil
-		},
-	}
-}
-
 // ── unload ────────────────────────────────────────────────────────────────────
 
 func unloadCmd(cfg *config.Config) *cobra.Command {
 	return &cobra.Command{
 		Use:   "unload",
-		Short: "Unset KUBECONFIG and remove tmpfile (only if created by kctx)",
+		Short: "Unset KUBECONFIG and clear all cached kubeconfigs",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			kubeconfigPath := os.Getenv("KUBECONFIG")
 			slog.Debug("clearing kubeconfig", "path", kubeconfigPath)
-			if kubeconfigPath != "" && isManagedKubeconfig(kubeconfigPath) {
+			// Remove tmpfiles if present (legacy or external callers).
+			if kubeconfig.IsManagedTemp(kubeconfigPath) {
 				_ = os.Remove(kubeconfigPath)
 			}
 			fmt.Println("unset KUBECONFIG")
 
+			// Clear all named store kubeconfigs and any remaining tmpfiles.
+			uid := fmt.Sprintf("%d", os.Getuid())
+			store := kubeconfig.NewNamedStore()
+			_ = store.Clear(uid)
+			kubeconfig.ClearManaged()
+
 			if kubeconfigPath == "" {
 				ui.Warn(os.Stderr, "KUBECONFIG was not set")
 			} else {
-				entries := []ui.PanelEntry{{Key: "Removed", Value: kubeconfigPath}}
+				entries := []ui.PanelEntry{{Key: "KUBECONFIG", Value: kubeconfigPath}}
 				ui.Panel(os.Stderr, "kctx", "Kubeconfig unloaded", entries, cfg.UI.Border)
 			}
 			return nil

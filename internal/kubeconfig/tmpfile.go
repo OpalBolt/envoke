@@ -35,7 +35,7 @@ func NewTempFile(prefix string) (*os.File, error) {
 	return f, nil
 }
 
-// IsManaged reports whether path looks like a kctx-managed kubeconfig tmpfile
+// IsManaged reports whether path looks like a kctx-managed kubeconfig file
 // (i.e. a "kctx-" prefixed file in /dev/shm or /tmp).
 func IsManaged(path string) bool {
 	dir := filepath.Dir(path)
@@ -44,6 +44,12 @@ func IsManaged(path string) bool {
 		return false
 	}
 	return len(base) > 5 && base[:5] == "kctx-"
+}
+
+// IsManagedTemp reports whether path is a kctx-managed kubeconfig tmpfile
+// (as opposed to a named store entry). Managed temp files end in ".tmp".
+func IsManagedTemp(path string) bool {
+	return IsManaged(path) && strings.HasSuffix(filepath.Base(path), ".tmp")
 }
 
 // ClearManaged removes all kctx-managed kubeconfig tmpfiles from /dev/shm and /tmp.

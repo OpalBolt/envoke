@@ -191,17 +191,16 @@ The output must be evaluated by your shell:
 				uid := fmt.Sprintf("%d", os.Getuid())
 				store := kubeconfig.NewNamedStore()
 				var kctxNames []string
-				var lastKubeconfigData []byte
+				var lastKubeconfigName string
 				for _, e := range kctxEntries {
 					name := kctxNameFromKey(e.Key)
-					data, err := fetchKubeconfigForDirective(sharedReg, name, e.Value, uid, store)
-					if err != nil {
+					if err := fetchKubeconfigForDirective(sharedReg, name, e.Value, uid, store); err != nil {
 						if errors.Is(err, bw.ErrInvalidPassword) {
 							return err
 						}
 						return fmt.Errorf("loading kubeconfig %q (%s): %w", name, e.Value, err)
 					}
-					lastKubeconfigData = data
+					lastKubeconfigName = name
 					kctxNames = append(kctxNames, name)
 					kctxPanelEntries = append(kctxPanelEntries, ui.PanelEntry{
 						Key:    name,
@@ -211,14 +210,10 @@ The output must be evaluated by your shell:
 				}
 				_ = kubeconfig.SaveTrackedNames(uid, kctxNames)
 
-				// Write a tmpfile for the last loaded kubeconfig and emit KUBECONFIG.
-				if lastKubeconfigData != nil {
-					path, werr := kubeconfig.WriteKubeconfig(lastKubeconfigData)
-					if werr != nil {
-						return fmt.Errorf("writing kubeconfig tmpfile: %w", werr)
-					}
-					kubeconfigPath = path
-					slog.Debug("set KUBECONFIG", "path", path)
+				// Point KUBECONFIG directly at the named store file; no extra tmpfile needed.
+				if lastKubeconfigName != "" {
+					kubeconfigPath = store.Path(uid, lastKubeconfigName)
+					slog.Debug("set KUBECONFIG", "path", kubeconfigPath)
 				}
 			}
 
@@ -312,18 +307,15 @@ func kctxNameFromKey(key string) string {
 	return strings.ToLower(strings.TrimPrefix(key, "KCTX_"))
 }
 
-// fetchKubeconfigForDirective fetches kubeconfig bytes from a bw:// or vault:// source
-// and stores them in the named store as plaintext, then returns the kubeconfig bytes
-// so the caller can write a tmpfile.
-func fetchKubeconfigForDirective(reg *providers.Registry, name, source, uid string, store *kubeconfig.NamedStore) ([]byte, error) {
+// fetchKubeconfigForDirective fetches a kubeconfig from a bw:// or vault:// source
+// and stores it in the named store as a plaintext yaml file.
+func fetchKubeconfigForDirective(reg *providers.Registry, name, source, uid string, store *kubeconfig.NamedStore) error {
 	uri := normalizeKubeconfigURI(source)
 	val, err := reg.Resolve(uri)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	kubeconfigData := []byte(val)
-
-	return kubeconfigData, store.Put(uid, name, kubeconfigData)
+	return store.Put(uid, name, []byte(val))
 }
 
 // writeTempEnv writes env entries to a temp .env file for processing by ResolveDotEnv.
@@ -506,7 +498,7 @@ kctx() {
     unload)
       eval "$(command envoke kctx unload)"
       ;;
-    status|clear-cache|watch|shell-init)
+    status|watch|shell-init)
       command envoke kctx "$@"
       ;;
     --version|--help|-h)
@@ -646,7 +638,7 @@ function kctx
       end
     case unload
       command envoke kctx unload | source
-    case status clear-cache watch shell-init
+    case status watch shell-init
       command envoke kctx $argv
     case ''
       command envoke kctx

@@ -55,6 +55,12 @@ func (s *NamedStore) storePath(uid, name string) string {
 	return filepath.Join(s.Dir, storePrefix+uid+"-"+name+".yaml")
 }
 
+// Path returns the on-disk path for a named kubeconfig.
+// The file may or may not exist yet.
+func (s *NamedStore) Path(uid, name string) string {
+	return s.storePath(uid, name)
+}
+
 // Put writes the kubeconfig data as plaintext to a file for uid/name.
 // Existing entries with the same name are overwritten.
 // Uses atomic write (tmp file + rename) for safety.
