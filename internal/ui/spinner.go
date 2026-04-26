@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/termenv"
+	"golang.org/x/term"
 )
 
 // Spinner provides animated progress feedback during long-running operations.
@@ -46,7 +46,7 @@ func NewSpinner(w io.Writer, message string) *Spinner {
 	// Check if writer is a terminal for TTY detection
 	isTerminal := false
 	if f, ok := w.(*os.File); ok {
-		isTerminal = termenv.File(f).Color().Has256 || termenv.File(f).Color().Has16m
+		isTerminal = term.IsTerminal(int(f.Fd()))
 	}
 
 	return &Spinner{
@@ -146,7 +146,7 @@ type ProgressTracker struct {
 func NewProgressTracker(w io.Writer, title string) *ProgressTracker {
 	isTerminal := false
 	if f, ok := w.(*os.File); ok {
-		isTerminal = termenv.File(f).Color().Has256 || termenv.File(f).Color().Has16m
+		isTerminal = term.IsTerminal(int(f.Fd()))
 	}
 
 	return &ProgressTracker{
