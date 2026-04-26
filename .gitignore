@@ -43,5 +43,3 @@ go.work.sum
 # Local tooling
 .blip/
 settings.local.json
-.blip/
-.blip/

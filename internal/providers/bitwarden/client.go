@@ -38,6 +38,11 @@ type BWClient struct {
 	accountTag     string // cached account tag
 	session        string // ephemeral in-process session token; never written to disk
 	sessionFromEnv bool   // true if session was sourced from BW_SESSION env var
+
+	folders         []map[string]interface{}            // cached bw list folders result
+	collections     []map[string]interface{}            // cached bw list collections result
+	folderItems     map[string][]map[string]interface{} // cached bw list items per folder ID
+	collectionItems map[string][]map[string]interface{} // cached bw list items per collection ID
 }
 
 func (c *BWClient) timeout() time.Duration {
@@ -192,6 +197,10 @@ func (c *BWClient) FolderItems(folder string) ([]map[string]interface{}, error) 
 		return nil, err
 	}
 
+	if items, ok := c.folderItems[folderID]; ok {
+		return items, nil
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), c.timeout())
 	defer cancel()
 	slog.Debug("bw list items", "folder", folder, "timeout", c.timeout())
@@ -206,6 +215,10 @@ func (c *BWClient) FolderItems(folder string) ([]map[string]interface{}, error) 
 	if err := json.Unmarshal(out, &items); err != nil {
 		return nil, fmt.Errorf("parsing bw list items output: %w", err)
 	}
+	if c.folderItems == nil {
+		c.folderItems = make(map[string][]map[string]interface{})
+	}
+	c.folderItems[folderID] = items
 	return items, nil
 }
 
@@ -223,6 +236,10 @@ func (c *BWClient) CollectionItems(collectionName string) ([]map[string]interfac
 		return nil, err
 	}
 
+	if items, ok := c.collectionItems[collID]; ok {
+		return items, nil
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), c.timeout())
 	defer cancel()
 	slog.Debug("bw list items (collection)", "collection", collectionName, "timeout", c.timeout())
@@ -237,6 +254,10 @@ func (c *BWClient) CollectionItems(collectionName string) ([]map[string]interfac
 	if err := json.Unmarshal(out, &items); err != nil {
 		return nil, fmt.Errorf("parsing bw list items output: %w", err)
 	}
+	if c.collectionItems == nil {
+		c.collectionItems = make(map[string][]map[string]interface{})
+	}
+	c.collectionItems[collID] = items
 	return items, nil
 }
 
@@ -255,20 +276,23 @@ func (c *BWClient) Close() {
 
 // findFolderID returns the Bitwarden folder ID for the given folder name.
 func (c *BWClient) findFolderID(folder, session string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), c.timeout())
-	defer cancel()
-	slog.Debug("bw list folders", "folder", folder)
-	cmd := exec.CommandContext(ctx, "bw", "list", "folders")
-	cmd.Env = append(os.Environ(), "BW_SESSION="+session)
-	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("bw list folders failed: %w", err)
+	if c.folders == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), c.timeout())
+		defer cancel()
+		slog.Debug("bw list folders", "folder", folder)
+		cmd := exec.CommandContext(ctx, "bw", "list", "folders")
+		cmd.Env = append(os.Environ(), "BW_SESSION="+session)
+		out, err := cmd.Output()
+		if err != nil {
+			return "", fmt.Errorf("bw list folders failed: %w", err)
+		}
+		var folders []map[string]interface{}
+		if err := json.Unmarshal(out, &folders); err != nil {
+			return "", fmt.Errorf("parsing bw list folders: %w", err)
+		}
+		c.folders = folders
 	}
-	var folders []map[string]interface{}
-	if err := json.Unmarshal(out, &folders); err != nil {
-		return "", fmt.Errorf("parsing bw list folders: %w", err)
-	}
-	for _, f := range folders {
+	for _, f := range c.folders {
 		name, _ := f["name"].(string)
 		id, _ := f["id"].(string)
 		if name == folder {
@@ -280,20 +304,23 @@ func (c *BWClient) findFolderID(folder, session string) (string, error) {
 
 // findCollectionID returns the Bitwarden collection ID for the given collection name.
 func (c *BWClient) findCollectionID(name, session string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), c.timeout())
-	defer cancel()
-	slog.Debug("bw list collections", "collection", name)
-	cmd := exec.CommandContext(ctx, "bw", "list", "collections")
-	cmd.Env = append(os.Environ(), "BW_SESSION="+session)
-	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("bw list collections failed: %w", err)
+	if c.collections == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), c.timeout())
+		defer cancel()
+		slog.Debug("bw list collections", "collection", name)
+		cmd := exec.CommandContext(ctx, "bw", "list", "collections")
+		cmd.Env = append(os.Environ(), "BW_SESSION="+session)
+		out, err := cmd.Output()
+		if err != nil {
+			return "", fmt.Errorf("bw list collections failed: %w", err)
+		}
+		var collections []map[string]interface{}
+		if err := json.Unmarshal(out, &collections); err != nil {
+			return "", fmt.Errorf("parsing bw list collections: %w", err)
+		}
+		c.collections = collections
 	}
-	var collections []map[string]interface{}
-	if err := json.Unmarshal(out, &collections); err != nil {
-		return "", fmt.Errorf("parsing bw list collections: %w", err)
-	}
-	for _, col := range collections {
+	for _, col := range c.collections {
 		n, _ := col["name"].(string)
 		id, _ := col["id"].(string)
 		if n == name {
