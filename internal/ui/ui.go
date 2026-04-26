@@ -11,6 +11,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
+	"golang.org/x/term"
 )
 
 // PanelEntry is a single key/source row shown inside a Panel call.
@@ -27,6 +28,27 @@ func rendererFor(w io.Writer) *lipgloss.Renderer {
 		return lipgloss.NewRenderer(f)
 	}
 	return lipgloss.NewRenderer(w, termenv.WithProfile(termenv.Ascii))
+}
+
+// termWidth returns the current terminal width, or 120 as a safe default.
+func termWidth() int {
+	w, _, err := term.GetSize(int(os.Stderr.Fd()))
+	if err != nil || w <= 0 {
+		return 120
+	}
+	return w
+}
+
+// truncate shortens s to maxLen visible chars, appending "…" if truncated.
+func truncate(s string, maxLen int) string {
+	if len([]rune(s)) <= maxLen {
+		return s
+	}
+	runes := []rune(s)
+	if maxLen <= 1 {
+		return "…"
+	}
+	return string(runes[:maxLen-1]) + "…"
 }
 
 // ── Inline colour helpers ────────────────────────────────────────────────────
@@ -148,9 +170,15 @@ func panelCompact(w io.Writer, title, headline string, entries []PanelEntry) {
 	)
 
 	for _, e := range entries {
+		display := entryDisplay(e)
+		// "  " + 24-char key + display; terminal width - 2 - 24 = available for display
+		availWidth := termWidth() - 2 - 24
+		if availWidth > 0 {
+			display = truncate(display, availWidth)
+		}
 		fmt.Fprintf(w, "  %s%s\n",
 			keyStyle.Render(e.Key),
-			dimStyle.Render(entryDisplay(e)),
+			dimStyle.Render(display),
 		)
 	}
 }
@@ -175,7 +203,13 @@ func panelBordered(w io.Writer, title, headline string, entries []PanelEntry) {
 	rows := make([]rowData, len(entries))
 	maxRowWidth := 0
 	for i, e := range entries {
-		t := "  " + keyStyle.Render(e.Key) + dimStyle.Render(entryDisplay(e))
+		display := entryDisplay(e)
+		// available width: boxTotal minus border (3) minus indent (2) minus key column (24)
+		availWidth := termWidth() - 3 - 2 - 24
+		if availWidth > 0 {
+			display = truncate(display, availWidth)
+		}
+		t := "  " + keyStyle.Render(e.Key) + dimStyle.Render(display)
 		vw := lipgloss.Width(t)
 		rows[i] = rowData{t, vw}
 		if vw > maxRowWidth {
@@ -204,6 +238,10 @@ func panelBordered(w io.Writer, title, headline string, entries []PanelEntry) {
 	boxTotal := headerWidth + topBorderOverhead + 1 // +1 for at least one dash
 	if maxRowWidth+rowBorderOverhead > boxTotal {
 		boxTotal = maxRowWidth + rowBorderOverhead
+	}
+	maxBox := termWidth() - 2 // -2 for the border chars on each side
+	if boxTotal > maxBox {
+		boxTotal = maxBox
 	}
 
 	br := func(s string) string { return borderFg.Render(s) }

@@ -32,3 +32,7 @@ Secrets and kubeconfigs are cached in `/dev/shm` (RAM-backed tmpfs), encrypted w
 - [Usage](docs/usage.md)
 - [direnv integration](docs/direnv.md)
 - [Nix integration](docs/nix.md)
+
+## License
+
+[MIT](LICENSE) © OpalBolt

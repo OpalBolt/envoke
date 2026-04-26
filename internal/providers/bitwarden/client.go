@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"golang.org/x/term"
+
+	"github.com/opalbolt/envoke/internal/ui"
 )
 
 // ErrInvalidPassword is returned when the Bitwarden master password is rejected.
@@ -104,7 +106,10 @@ func (c *BWClient) Session() (string, error) {
 	cmd.Stdin = bytes.NewBufferString(pw + "\n")
 	var stderrBuf bytes.Buffer
 	cmd.Stderr = &stderrBuf
+	spin := ui.NewSpinner(os.Stderr, "Unlocking Bitwarden vault…")
+	spin.Start()
 	out, err := cmd.Output()
+	spin.Stop()
 	if err != nil {
 		stderrStr := strings.TrimSpace(stderrBuf.String())
 		if strings.Contains(stderrStr, "Invalid master password") {
@@ -206,7 +211,10 @@ func (c *BWClient) FolderItems(folder string) ([]map[string]interface{}, error) 
 	slog.Debug("bw list items", "folder", folder, "timeout", c.timeout())
 	cmd := exec.CommandContext(ctx, "bw", "list", "items", "--folderid", folderID)
 	cmd.Env = append(os.Environ(), "BW_SESSION="+session)
+	spin := ui.NewSpinner(os.Stderr, "Fetching secrets from Bitwarden…")
+	spin.Start()
 	out, err := cmd.Output()
+	spin.Stop()
 	if err != nil {
 		return nil, fmt.Errorf("bw list items failed: %w", err)
 	}
@@ -245,7 +253,10 @@ func (c *BWClient) CollectionItems(collectionName string) ([]map[string]interfac
 	slog.Debug("bw list items (collection)", "collection", collectionName, "timeout", c.timeout())
 	cmd := exec.CommandContext(ctx, "bw", "list", "items", "--collectionid", collID)
 	cmd.Env = append(os.Environ(), "BW_SESSION="+session)
+	spin := ui.NewSpinner(os.Stderr, "Fetching secrets from Bitwarden…")
+	spin.Start()
 	out, err := cmd.Output()
+	spin.Stop()
 	if err != nil {
 		return nil, fmt.Errorf("bw list items (collection) failed: %w", err)
 	}
@@ -282,7 +293,10 @@ func (c *BWClient) findFolderID(folder, session string) (string, error) {
 		slog.Debug("bw list folders", "folder", folder)
 		cmd := exec.CommandContext(ctx, "bw", "list", "folders")
 		cmd.Env = append(os.Environ(), "BW_SESSION="+session)
+		spin := ui.NewSpinner(os.Stderr, "Fetching secrets from Bitwarden…")
+		spin.Start()
 		out, err := cmd.Output()
+		spin.Stop()
 		if err != nil {
 			return "", fmt.Errorf("bw list folders failed: %w", err)
 		}
@@ -310,7 +324,10 @@ func (c *BWClient) findCollectionID(name, session string) (string, error) {
 		slog.Debug("bw list collections", "collection", name)
 		cmd := exec.CommandContext(ctx, "bw", "list", "collections")
 		cmd.Env = append(os.Environ(), "BW_SESSION="+session)
+		spin := ui.NewSpinner(os.Stderr, "Fetching secrets from Bitwarden…")
+		spin.Start()
 		out, err := cmd.Output()
+		spin.Stop()
 		if err != nil {
 			return "", fmt.Errorf("bw list collections failed: %w", err)
 		}

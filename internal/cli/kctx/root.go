@@ -142,10 +142,7 @@ Examples:
 			reg := newRegistry(cfg)
 			uri := normalizeKubeconfigURI(source)
 
-			progress := ui.NewSpinner(os.Stderr, fmt.Sprintf("Loading kubeconfig '%s'...", name))
-			progress.Start()
 			val, err := reg.Resolve(uri)
-			progress.Stop()
 			if err != nil {
 				return err
 			}
@@ -239,10 +236,7 @@ Examples:
 func fetchKubeconfig(cfg *config.Config, name, source string) ([]byte, error) {
 	reg := newRegistry(cfg)
 	uri := normalizeKubeconfigURI(source)
-	progress := ui.NewSpinner(os.Stderr, fmt.Sprintf("Loading kubeconfig '%s'...", name))
-	progress.Start()
 	val, err := reg.Resolve(uri)
-	progress.Stop()
 	if err != nil {
 		return nil, err
 	}

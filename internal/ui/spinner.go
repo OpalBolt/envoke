@@ -1,5 +1,5 @@
 // Package ui provides styled output helpers for CLI feedback using lipgloss.
-// This file implements spinners and progress indicators for long-running operations.
+// This file implements a spinner for long-running operations.
 package ui
 
 import (
@@ -14,7 +14,7 @@ import (
 )
 
 // Spinner provides animated progress feedback during long-running operations.
-// It renders status messages with animated spinner frames.
+// Only renders to TTY outputs — silently suppressed for pipes, CI, and direnv.
 type Spinner struct {
 	writer     io.Writer
 	message    string
@@ -23,59 +23,42 @@ type Spinner struct {
 	frameIdx   int
 	ticker     *time.Ticker
 	done       chan struct{}
+	stopped    bool
 	mu         sync.Mutex
 }
 
-// spinnerFrames are the animation frames for the spinner.
-// Uses a simple rotating dots pattern that works well in all terminals.
-var spinnerFrames = []string{
-	"⠋",
-	"⠙",
-	"⠹",
-	"⠸",
-	"⠼",
-	"⠴",
-	"⠦",
-	"⠧",
-	"⠇",
-	"⠏",
-}
+var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
-// NewSpinner creates a new spinner that outputs to w with the given message.
+// NewSpinner creates a spinner writing to w with the given initial message.
 func NewSpinner(w io.Writer, message string) *Spinner {
-	// Check if writer is a terminal for TTY detection
 	isTerminal := false
 	if f, ok := w.(*os.File); ok {
 		isTerminal = term.IsTerminal(int(f.Fd()))
 	}
-
 	return &Spinner{
 		writer:     w,
 		message:    message,
 		isTerminal: isTerminal,
 		frames:     spinnerFrames,
-		frameIdx:   0,
 		done:       make(chan struct{}),
 	}
 }
 
-// Start begins the spinner animation. Call Stop() to end it.
-// Safe to call multiple times (subsequent calls are no-ops if already running).
+// Start begins the spinner animation. No-op if already running or not a TTY.
 func (s *Spinner) Start() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	if s.ticker != nil {
-		return // already running
+	if s.ticker != nil || !s.isTerminal {
+		return
 	}
-
 	s.ticker = time.NewTicker(80 * time.Millisecond)
-
 	go func() {
 		for {
 			select {
 			case <-s.ticker.C:
+				s.mu.Lock()
 				s.render()
+				s.mu.Unlock()
 			case <-s.done:
 				return
 			}
@@ -83,26 +66,24 @@ func (s *Spinner) Start() {
 	}()
 }
 
-// Stop ends the spinner animation and clears the line.
-// Safe to call even if spinner was never started.
+// Stop ends the animation and clears the spinner line. Safe to call multiple times.
 func (s *Spinner) Stop() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
 	if s.ticker != nil {
 		s.ticker.Stop()
 		s.ticker = nil
 	}
-	close(s.done)
-
-	// Clear the spinner line
+	if !s.stopped {
+		close(s.done)
+		s.stopped = true
+	}
 	if s.isTerminal {
 		fmt.Fprintf(s.writer, "\r\033[K")
 	}
 }
 
-// SetMessage updates the message displayed with the spinner.
-// Thread-safe.
+// SetMessage updates the displayed message. Thread-safe.
 func (s *Spinner) SetMessage(msg string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -110,101 +91,15 @@ func (s *Spinner) SetMessage(msg string) {
 	s.render()
 }
 
-// render prints the current frame and message to the writer.
-// Must be called with the lock held.
+// render prints the current frame + message. Must be called with s.mu held.
 func (s *Spinner) render() {
 	if !s.isTerminal {
-		return // don't render to non-TTY
+		return
 	}
-
 	frame := s.frames[s.frameIdx%len(s.frames)]
 	s.frameIdx++
-
 	r := rendererFor(s.writer)
-	spinStyle := r.NewStyle().Foreground(lipgloss.Color("6")) // cyan
-
-	// Format: "⠋ Fetching secrets from Bitwarden..."
-	output := fmt.Sprintf("\r%s %s", spinStyle.Render(frame), s.message)
-
-	// Pad to clear previous longer lines
-	output = fmt.Sprintf("%%-80s", output)
-
-	fmt.Fprint(s.writer, output)
-}
-
-// ProgressTracker tracks progress through steps of a longer operation.
-// Useful for providing detailed feedback about what is happening.
-type ProgressTracker struct {
-	writer      io.Writer
-	title       string
-	steps       []string
-	currentStep int
-	isTerminal  bool
-}
-
-// NewProgressTracker creates a new progress tracker.
-func NewProgressTracker(w io.Writer, title string) *ProgressTracker {
-	isTerminal := false
-	if f, ok := w.(*os.File); ok {
-		isTerminal = term.IsTerminal(int(f.Fd()))
-	}
-
-	return &ProgressTracker{
-		writer:      w,
-		title:       title,
-		steps:       make([]string, 0),
-		currentStep: -1,
-		isTerminal:  isTerminal,
-	}
-}
-
-// AddStep adds a step to the progress tracker.
-func (pt *ProgressTracker) AddStep(step string) {
-	pt.steps = append(pt.steps, step)
-}
-
-// StartStep begins a specific step. Should be followed by CompleteStep or ErrorStep.
-func (pt *ProgressTracker) StartStep(stepNum int) {
-	if stepNum < 0 || stepNum >= len(pt.steps) {
-		return
-	}
-	pt.currentStep = stepNum
-	pt.render()
-}
-
-// CompleteStep marks the current step as complete and moves to the next.
-func (pt *ProgressTracker) CompleteStep() {
-	if pt.currentStep >= 0 && pt.currentStep < len(pt.steps) {
-		step := pt.steps[pt.currentStep]
-		Success(pt.writer, step)
-	}
-	pt.currentStep = -1
-}
-
-// ErrorStep marks the current step with an error.
-func (pt *ProgressTracker) ErrorStep(err error) {
-	if pt.currentStep >= 0 && pt.currentStep < len(pt.steps) {
-		step := pt.steps[pt.currentStep]
-		Error(pt.writer, fmt.Sprintf("%s: %v", step, err))
-	}
-	pt.currentStep = -1
-}
-
-// render prints the current progress state.
-func (pt *ProgressTracker) render() {
-	if !pt.isTerminal || pt.currentStep < 0 {
-		return
-	}
-
-	r := rendererFor(pt.writer)
-	progressStyle := r.NewStyle().Foreground(lipgloss.Color("6")) // cyan
-	_ = progressStyle
-
-	// Show progress: "Step 1 of 3: Fetching..."
-	current := pt.currentStep + 1
-	total := len(pt.steps)
-	step := pt.steps[pt.currentStep]
-
-	progressInfo := fmt.Sprintf("Step %d of %d: %s", current, total, step)
-	fmt.Fprintf(pt.writer, "\r%s\n", progressInfo)
+	spinStyle := r.NewStyle().Foreground(lipgloss.Color("6"))
+	// \033[K clears from cursor to end of line, avoiding leftover chars from longer previous messages
+	fmt.Fprintf(s.writer, "\r%s %s\033[K", spinStyle.Render(frame), s.message)
 }

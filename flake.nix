@@ -73,6 +73,8 @@
           shellHook = ''
             export CGO_ENABLED=0
             export PATH="$PWD/bin:$PATH"
+            make build
+            eval "$(envoke shell-init)"
           '';
         };
       }

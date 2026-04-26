@@ -41,22 +41,3 @@ func TestSpinnerSetMessage(t *testing.T) {
 	spinner.Stop()
 }
 
-// TestProgressTracker verifies the progress tracker works.
-func TestProgressTracker(t *testing.T) {
-	tracker := NewProgressTracker(os.Stderr, "Operations")
-	tracker.AddStep("Connecting to server")
-	tracker.AddStep("Fetching data")
-	tracker.AddStep("Processing results")
-
-	tracker.StartStep(0)
-	time.Sleep(100 * time.Millisecond)
-	tracker.CompleteStep()
-
-	tracker.StartStep(1)
-	time.Sleep(100 * time.Millisecond)
-	tracker.CompleteStep()
-
-	tracker.StartStep(2)
-	time.Sleep(100 * time.Millisecond)
-	tracker.CompleteStep()
-}

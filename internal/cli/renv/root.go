@@ -163,11 +163,7 @@ Then in .envrc:
 			reg := newRegistry(cfg)
 			defer reg.Close() //nolint:errcheck // best-effort session cleanup
 
-			// Show progress during resolution
-			progress := ui.NewSpinner(os.Stderr, "Resolving secrets...")
-			progress.Start()
 			entries, err := env.ResolveDotEnv(file, reg)
-			progress.Stop()
 			if err != nil {
 				return fmt.Errorf("resolving %s: %w", file, err)
 			}
@@ -231,11 +227,7 @@ The resolved variables override any same-named variables already in the environm
 			reg := newRegistry(cfg)
 			defer reg.Close() //nolint:errcheck // best-effort session cleanup
 
-			// Show progress during resolution
-			progress := ui.NewSpinner(os.Stderr, "Resolving secrets for execution...")
-			progress.Start()
 			entries, err := env.ResolveDotEnv(file, reg)
-			progress.Stop()
 			if err != nil {
 				return fmt.Errorf("resolving %s: %w", file, err)
 			}
