@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.2](https://github.com/OpalBolt/envoke/compare/v0.4.1...v0.4.2) (2026-04-26)
+
+
+### Performance Improvements
+
+* **bitwarden:** cache folder/collection item lists in BWClient ([#51](https://github.com/OpalBolt/envoke/issues/51)) ([ed9f13e](https://github.com/OpalBolt/envoke/commit/ed9f13ed49d275eedcf8bd9524a93c3b97066051))
+* **bitwarden:** cache folder/collection item lists in BWClient [#51](https://github.com/OpalBolt/envoke/issues/51) ([a7d7aa1](https://github.com/OpalBolt/envoke/commit/a7d7aa112becbf2ea752ae1c01e4f2e616798dbc))
+
 ## [0.4.1](https://github.com/OpalBolt/envoke/compare/v0.4.0...v0.4.1) (2026-04-23)
 
 
