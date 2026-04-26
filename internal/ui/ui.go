@@ -243,21 +243,25 @@ func panelBordered(w io.Writer, title, headline string, entries []PanelEntry) {
 	if boxTotal > maxBox {
 		boxTotal = maxBox
 	}
+	// Ensure boxTotal never drops below the minimum needed for border math.
+	if minBox := headerWidth + topBorderOverhead + 1; boxTotal < minBox {
+		boxTotal = minBox
+	}
 
 	br := func(s string) string { return borderFg.Render(s) }
 
 	// Top border: ╭─ title: headline ──...──╮
-	topRight := strings.Repeat("─", boxTotal-headerWidth-topBorderOverhead)
+	topRight := strings.Repeat("─", max(boxTotal-headerWidth-topBorderOverhead, 1))
 	fmt.Fprintln(w, br("╭─ ")+headerText+br(" "+topRight+"╮"))
 
 	// Content rows
 	for _, row := range rows {
-		pad := strings.Repeat(" ", boxTotal-rowBorderOverhead+1-row.width)
+		pad := strings.Repeat(" ", max(boxTotal-rowBorderOverhead+1-row.width, 0))
 		fmt.Fprintf(w, "%s%s%s%s\n", br("│"), row.text, pad, br("│"))
 	}
 
 	// Bottom border: ╰──...──╯
-	fmt.Fprintln(w, br("╰"+strings.Repeat("─", boxTotal-2)+"╯"))
+	fmt.Fprintln(w, br("╰"+strings.Repeat("─", max(boxTotal-2, 0))+"╯"))
 }
 
 // entryDisplay returns the right-hand display string for a PanelEntry.
