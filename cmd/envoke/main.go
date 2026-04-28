@@ -6,7 +6,9 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"os/signal"
+	"sort"
 	"strings"
 	"syscall"
 
@@ -14,8 +16,6 @@ import (
 	"golang.org/x/term"
 
 	"github.com/opalbolt/envoke/internal/cleanup"
-	intkctx "github.com/opalbolt/envoke/internal/cli/kctx"
-	intrenv "github.com/opalbolt/envoke/internal/cli/renv"
 	"github.com/opalbolt/envoke/internal/config"
 	"github.com/opalbolt/envoke/internal/env"
 	"github.com/opalbolt/envoke/internal/kubeconfig"
@@ -42,14 +42,13 @@ func rootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "envoke",
 		Short: "Unified secret environment loader — env vars and kubeconfigs",
-		Long: `envoke (env + invoke) is a single binary combining renv and kctx.
+		Long: `envoke (env + invoke) resolves secrets and kubeconfigs from a single .env file.
 
   envoke resolve .env            # resolve both env secrets and kubeconfig refs
-  envoke renv resolve .env       # renv subcommands (env secret resolution)
-  envoke kctx switch prod        # kctx subcommands (kubeconfig switching)
-  envoke shell-init              # combined shell setup for both renv and kctx
+  envoke switch prod             # switch KUBECONFIG to a pre-loaded named config
+  envoke shell-init              # combined shell setup
 
-The .env file supports KCTX_<name>=bw://... entries that load kubeconfigs into the local kctx named store.`,
+The .env file supports KCTX_<name>=bw://... entries that load kubeconfigs into the local named store.`,
 		Version:      version.String(),
 		SilenceUsage: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
@@ -78,19 +77,14 @@ The .env file supports KCTX_<name>=bw://... entries that load kubeconfigs into t
 	root.PersistentFlags().StringVar(&logLevel, "log-level", "", "Log level: debug, info, warn, error")
 	root.SetVersionTemplate("{{.Name}} {{.Version}}\n")
 
-	// Embed renv and kctx command trees as subcommands.
-	// Use NewSubCmd (not NewRootCmd) so the sub-trees do not re-register persistent
-	// flags that are already defined on the envoke root — which would cause collisions
-	// via Cobra's inherited persistent-flag merging. cfg is populated by
-	// envoke's own PersistentPreRunE before any subcommand's RunE executes.
-	renvRoot := intrenv.NewSubCmd(&cfg)
-	kctxRoot := intkctx.NewSubCmd(&cfg)
-
 	root.AddCommand(
-		renvRoot,
-		kctxRoot,
 		resolveCmd(&cfg),
+		execCmd(&cfg),
+		yamlCmd(&cfg),
+		loadCmd(&cfg),
+		switchCmd(&cfg),
 		unloadCmd(&cfg),
+		statusCmd(),
 		shellInitCmd(),
 		clearCacheCmd(),
 		watchCmd(),
@@ -99,9 +93,6 @@ The .env file supports KCTX_<name>=bw://... entries that load kubeconfigs into t
 }
 
 // newRegistry builds a secrets Registry with the Bitwarden provider.
-// cfg supplies timeouts.
-// Use a single registry across the entire resolve operation so that the BW
-// session is shared and users are prompted at most once per invocation.
 func newRegistry(cfg *config.Config) *providers.Registry {
 	bwClient := &bw.BWClient{
 		Timeout: cfg.SecretsTimeout(),
@@ -113,7 +104,6 @@ func newRegistry(cfg *config.Config) *providers.Registry {
 }
 
 // normalizeKubeconfigURI normalises a kubeconfig source URI.
-// Delegates to kubeconfig.NormalizeSourceURI.
 func normalizeKubeconfigURI(source string) string {
 	return kubeconfig.NormalizeSourceURI(source)
 }
@@ -133,11 +123,11 @@ func resolveCmd(cfg *config.Config) *cobra.Command {
 Secret references (bw://) are resolved and exported as shell variables.
 
 Kubeconfig directives (keys prefixed with KCTX_) load a kubeconfig into the
-local kctx named store and automatically set KUBECONFIG to the last loaded one:
+local named store and automatically set KUBECONFIG to the last loaded one:
 
   KCTX_PROD=bw://kubernetes/prod-cluster     # loads kubeconfig named "prod"
 
-Use 'kctx switch <name>' to switch between loaded kubeconfigs at any time.
+Use 'envoke switch <name>' to switch between loaded kubeconfigs at any time.
 
 The output must be evaluated by your shell:
 
@@ -155,7 +145,6 @@ The output must be evaluated by your shell:
 					"Use --force to override this check and print to terminal anyway.")
 			}
 
-			// Parse the raw .env file to separate kctx directives from env secrets.
 			rawEntries, err := env.ParseRaw(file)
 			if err != nil {
 				return fmt.Errorf("parsing %s: %w", file, err)
@@ -171,18 +160,15 @@ The output must be evaluated by your shell:
 				}
 			}
 
-			// Pre-flight: validate all KCTX names before doing any secret fetching.
 			for _, e := range kctxEntries {
 				if err := kubeconfig.ValidateStoreName(kctxNameFromKey(e.Key)); err != nil {
 					return fmt.Errorf("invalid kctx directive %q: %w", e.Key, err)
 				}
 			}
 
-			// Create ONE shared registry for the entire resolve operation.
 			sharedReg := newRegistry(cfg)
 			defer sharedReg.Close() //nolint:errcheck // best-effort session cleanup
 
-			// Handle kubeconfig directives using the shared registry.
 			var kctxPanelEntries []ui.PanelEntry
 			var kubeconfigPath string
 			if len(kctxEntries) > 0 {
@@ -204,18 +190,16 @@ The output must be evaluated by your shell:
 						Key:    name,
 						Source: e.Value,
 					})
-					slog.Debug("loaded kubeconfig into kctx store", "name", name, "source", e.Value)
+					slog.Debug("loaded kubeconfig into store", "name", name, "source", e.Value)
 				}
 				_ = kubeconfig.SaveTrackedNames(uid, kctxNames)
 
-				// Point KUBECONFIG directly at the named store file; no extra tmpfile needed.
 				if lastKubeconfigName != "" {
 					kubeconfigPath = store.Path(uid, lastKubeconfigName)
 					slog.Debug("set KUBECONFIG", "path", kubeconfigPath)
 				}
 			}
 
-			// Handle env secret entries using the same shared registry.
 			var resolvedEntries []env.EnvEntry
 			if len(envEntries) > 0 {
 				tmpFile, err := writeTempEnv(envEntries)
@@ -274,9 +258,6 @@ The output must be evaluated by your shell:
 					fmt.Println("# Fish shell trap not supported via eval; use envoke clear-cache manually")
 				default:
 					if kubeconfigPath != "" {
-						// KUBECONFIG tmpfile needs cleanup on exit — use unload (which removes
-						// the tmpfile) followed by clear-cache. The shell-init combined trap
-						// already does this; this covers raw eval "$(envoke resolve .env)" usage.
 						fmt.Println("trap 'eval \"$(envoke unload 2>/dev/null)\" 2>/dev/null; envoke clear-cache 2>/dev/null' EXIT")
 					} else {
 						fmt.Println("trap 'envoke clear-cache' EXIT")
@@ -306,8 +287,7 @@ func kctxNameFromKey(key string) string {
 	return strings.ToLower(strings.TrimPrefix(key, "KCTX_"))
 }
 
-// fetchKubeconfigForDirective fetches a kubeconfig from a bw:// source
-// and stores it in the named store as a plaintext yaml file.
+// fetchKubeconfigForDirective fetches a kubeconfig from a bw:// source and stores it.
 func fetchKubeconfigForDirective(reg *providers.Registry, name, source, uid string, store *kubeconfig.NamedStore) error {
 	uri := normalizeKubeconfigURI(source)
 	val, err := reg.Resolve(uri)
@@ -339,6 +319,298 @@ func pluralItems(n int) string {
 	return fmt.Sprintf("%d items", n)
 }
 
+// ── exec ──────────────────────────────────────────────────────────────────────
+
+func execCmd(cfg *config.Config) *cobra.Command {
+	var file string
+
+	cmd := &cobra.Command{
+		Use:   "exec -- command [args...]",
+		Short: "Run a command with resolved env vars injected (no eval needed)",
+		Long: `Resolve secret references from a .env file and execute a command with those
+variables set in its environment. No eval required.
+
+  envoke exec -- myprogram --flag value
+  envoke exec --env secrets.env -- myprogram
+
+The -- separator is required to distinguish envoke flags from the command's args.
+The resolved variables override any same-named variables already in the environment.`,
+		Args: cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			slog.Debug("running exec", "file", file, "command", args[0])
+			reg := newRegistry(cfg)
+			defer reg.Close() //nolint:errcheck // best-effort session cleanup
+
+			entries, err := env.ResolveDotEnv(file, reg)
+			if err != nil {
+				return fmt.Errorf("resolving %s: %w", file, err)
+			}
+
+			environ := os.Environ()
+			for _, e := range entries {
+				environ = append(environ, e.Key+"="+e.Value)
+			}
+
+			bin, err := exec.LookPath(args[0])
+			if err != nil {
+				return fmt.Errorf("%s: command not found", args[0])
+			}
+
+			return syscall.Exec(bin, args, environ)
+		},
+	}
+	cmd.Flags().StringVarP(&file, "env", "e", ".env", "Path to .env file")
+	return cmd
+}
+
+// ── yaml ──────────────────────────────────────────────────────────────────────
+
+func yamlCmd(cfg *config.Config) *cobra.Command {
+	var file string
+	var key string
+
+	cmd := &cobra.Command{
+		Use:   "yaml [file]",
+		Short: "Resolve secret references in a YAML file",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) > 0 {
+				file = args[0]
+			}
+			if file == "" {
+				return fmt.Errorf("--file or positional argument required")
+			}
+			slog.Debug("running yaml resolve", "file", file, "key", key)
+			reg := newRegistry(cfg)
+			defer reg.Close() //nolint:errcheck // best-effort session cleanup
+
+			data, err := env.ResolveYAML(file, reg)
+			if err != nil {
+				return err
+			}
+
+			if key != "" {
+				val, err := env.YAMLLookup(data, key)
+				if err != nil {
+					return err
+				}
+				fmt.Println(val)
+				return nil
+			}
+
+			out, err := env.MarshalYAML(data)
+			if err != nil {
+				return err
+			}
+			fmt.Print(string(out))
+			return nil
+		},
+	}
+	cmd.Flags().StringVarP(&file, "file", "f", "", "Path to YAML file")
+	cmd.Flags().StringVar(&key, "key", "", "Dot-notation key to extract (e.g. database.password)")
+	return cmd
+}
+
+// ── load ──────────────────────────────────────────────────────────────────────
+
+func loadCmd(cfg *config.Config) *cobra.Command {
+	return &cobra.Command{
+		Use:   "load <name> <bw://item>",
+		Short: "Fetch a kubeconfig and cache it under a local name",
+		Long: `Fetch a kubeconfig from Bitwarden and store it in the local
+named store so that 'envoke switch <name>' can load it without re-fetching.
+
+Examples:
+  envoke load prod bw://kubernetes/prod`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			source := args[1]
+
+			if err := kubeconfig.ValidateStoreName(name); err != nil {
+				return err
+			}
+
+			slog.Debug("loading kubeconfig", "name", name, "source", source)
+
+			uid := fmt.Sprintf("%d", os.Getuid())
+			store := kubeconfig.NewNamedStore()
+			reg := newRegistry(cfg)
+			defer reg.Close() //nolint:errcheck // best-effort session cleanup
+
+			uri := normalizeKubeconfigURI(source)
+			val, err := reg.Resolve(uri)
+			if err != nil {
+				return err
+			}
+
+			if err := store.Put(uid, name, []byte(val)); err != nil {
+				return fmt.Errorf("storing kubeconfig %q: %w", name, err)
+			}
+
+			ui.Success(os.Stderr, fmt.Sprintf("Loaded kubeconfig: %s", ui.Bold(os.Stderr, name)))
+			return nil
+		},
+	}
+}
+
+// ── switch ────────────────────────────────────────────────────────────────────
+
+func switchCmd(cfg *config.Config) *cobra.Command {
+	return &cobra.Command{
+		Use:   "switch <name> [bw://item]",
+		Short: "Switch to a named kubeconfig (or fetch one if a source is given)",
+		Long: `Switch KUBECONFIG to a named kubeconfig previously loaded with 'envoke load'.
+
+If the named kubeconfig is not in the local store, a source (bw://) may be
+provided to fetch it on the fly.
+
+Examples:
+  envoke switch prod                          # use pre-loaded 'prod'
+  envoke switch staging bw://k8s/staging      # fetch directly if not pre-loaded`,
+		Args: cobra.RangeArgs(1, 2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			source := ""
+			if len(args) > 1 {
+				source = args[1]
+			}
+			slog.Debug("switching kubeconfig", "name", name, "source", source)
+
+			uid := fmt.Sprintf("%d", os.Getuid())
+			store := kubeconfig.NewNamedStore()
+
+			var kubeconfigData []byte
+
+			if err := kubeconfig.ValidateStoreName(name); err == nil {
+				data, err := store.Get(uid, name)
+				if err != nil {
+					return fmt.Errorf("reading named kubeconfig %q: %w", name, err)
+				}
+				if data != nil {
+					kubeconfigData = data
+				}
+			}
+
+			if kubeconfigData == nil {
+				if source == "" {
+					return fmt.Errorf(
+						"no pre-loaded kubeconfig named %q found\n"+
+							"Run: envoke load %s <bw://item>",
+						name, name,
+					)
+				}
+				reg := newRegistry(cfg)
+				defer reg.Close() //nolint:errcheck // best-effort session cleanup
+				uri := normalizeKubeconfigURI(source)
+				val, err := reg.Resolve(uri)
+				if err != nil {
+					return fmt.Errorf("fetching kubeconfig for %q: %w", name, err)
+				}
+				kubeconfigData = []byte(val)
+				if err := store.Put(uid, name, kubeconfigData); err != nil {
+					return fmt.Errorf("caching kubeconfig %q: %w", name, err)
+				}
+			}
+
+			path := store.Path(uid, name)
+
+			fmt.Printf("export KUBECONFIG=%s\n", path)
+			fmt.Printf("trap 'eval \"$(envoke unload 2>/dev/null)\"' EXIT\n")
+
+			srcLabel := switchSourceLabel(name, source)
+			panelEntries := []ui.PanelEntry{
+				{Key: "KUBECONFIG", Value: path, Source: srcLabel},
+			}
+			if ctx := currentKubectlContext(path); ctx != "" {
+				panelEntries = append(panelEntries, ui.PanelEntry{Key: "Context", Value: ctx})
+			}
+			headline := fmt.Sprintf("Switched to %s", ui.Bold(os.Stderr, name))
+			ui.Panel(os.Stderr, "envoke", headline, panelEntries, cfg.UI.Border)
+			return nil
+		},
+	}
+}
+
+func switchSourceLabel(name, source string) string {
+	if source == "" {
+		return "named store"
+	}
+	return source
+}
+
+func currentKubectlContext(kubeconfigPath string) string {
+	cmd := exec.Command("kubectl", "config", "current-context")
+	if kubeconfigPath != "" {
+		environ := make([]string, 0, len(os.Environ())-1)
+		for _, e := range os.Environ() {
+			if !strings.HasPrefix(e, "KUBECONFIG=") {
+				environ = append(environ, e)
+			}
+		}
+		cmd.Env = append(environ, "KUBECONFIG="+kubeconfigPath)
+	}
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// ── status ────────────────────────────────────────────────────────────────────
+
+func statusCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "status",
+		Short: "Show loaded env vars, KUBECONFIG, and named kubeconfigs",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			w := os.Stdout
+			uid := fmt.Sprintf("%d", os.Getuid())
+
+			ui.Header(w, "Tracked variables")
+			names, err := state.LoadVarNames(uid)
+			if err != nil {
+				return err
+			}
+			if len(names) == 0 {
+				ui.Item(w, "Status", ui.Gray(w, "none loaded"))
+			} else {
+				ui.Item(w, "Status", ui.Green(w, fmt.Sprintf("%d loaded", len(names))))
+				ui.List(w, names)
+			}
+			fmt.Fprintln(w)
+
+			ui.Header(w, "Kubeconfig")
+			kc := os.Getenv("KUBECONFIG")
+			if kc == "" {
+				ui.Item(w, "KUBECONFIG", ui.Gray(w, "not set"))
+				ui.Item(w, "Managed by envoke", ui.Gray(w, "no"))
+			} else {
+				ui.Item(w, "KUBECONFIG", ui.Green(w, kc))
+				if kubeconfig.IsManaged(kc) {
+					ui.Item(w, "Managed by envoke", ui.Green(w, "yes"))
+				} else {
+					ui.Item(w, "Managed by envoke", ui.Yellow(w, "no (external)"))
+				}
+				if ctx := currentKubectlContext(kc); ctx != "" {
+					ui.Item(w, "Current context", ui.Bold(w, ctx))
+				}
+			}
+
+			store := kubeconfig.NewNamedStore()
+			storedNames, err := store.List(uid)
+			if err != nil {
+				slog.Warn("listing named kubeconfigs", "err", err)
+			} else if len(storedNames) > 0 {
+				sort.Strings(storedNames)
+				ui.Header(w, "Loaded kubeconfigs (use 'envoke switch <name>')")
+				ui.List(w, storedNames)
+			}
+			return nil
+		},
+	}
+}
+
 // ── unload ────────────────────────────────────────────────────────────────────
 
 func unloadCmd(cfg *config.Config) *cobra.Command {
@@ -346,7 +618,7 @@ func unloadCmd(cfg *config.Config) *cobra.Command {
 		Use:   "unload",
 		Short: "Unset all tracked env vars and KUBECONFIG",
 		Long: `Emit shell commands to unset all variables exported by envoke resolve,
-and unset KUBECONFIG if it was set by kctx.
+and unset KUBECONFIG if it was set by envoke.
 
 The output must be evaluated by your shell:
 
@@ -429,9 +701,9 @@ func shellInitCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "shell-init",
-		Short: "Print shell functions for both renv and kctx",
-		Long: `Print shell function definitions for both renv and kctx, wired to call
-the envoke binary. Only the envoke binary needs to be in PATH.
+		Short: "Print shell integration functions for envoke",
+		Long: `Print shell function definitions that make envoke resolve and unload
+work without explicit eval, and install a combined watcher and EXIT trap.
 
 Add to your shell config once:
 
@@ -442,13 +714,10 @@ Add to your shell config once:
   envoke shell-init --shell fish | source
 
 After that:
-  renv resolve .env          # load env secrets
-  kctx prod                  # switch to 'prod' kubeconfig
-  envoke resolve .env        # load both secrets and kubeconfigs`,
+  envoke resolve .env        # load env secrets and kubeconfigs
+  envoke switch prod         # switch to 'prod' kubeconfig
+  envoke unload              # unload everything`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Check if stdout is a terminal. If it is, the user is trying to eval the
-			// output directly in the shell, which is incorrect. They should put this in
-			// their shell config file instead. Allow override with --force.
 			if term.IsTerminal(int(os.Stdout.Fd())) && !force {
 				return fmt.Errorf("shell-init output must not be eval'd directly in a terminal\n\n" +
 					"Instead, add this to your shell config file:\n\n" +
@@ -474,61 +743,11 @@ After that:
 }
 
 // bashCombinedInitScript is the combined shell snippet for bash/zsh.
-// Defines renv() and kctx() functions that call `envoke renv ...` / `envoke kctx ...`,
-// starts a single combined watcher, and installs a combined EXIT trap.
+// Defines an envoke() shell function that auto-evals resolve, unload, and switch output,
+// starts a single background watcher, and installs a combined EXIT trap.
 const bashCombinedInitScript = `
 # envoke shell integration — add to ~/.bashrc or ~/.zshrc:
 #   eval "$(envoke shell-init)"
-#
-# This sets up renv and kctx shell functions backed by the single envoke binary.
-
-renv() {
-  case "$1" in
-    resolve|unload)
-      # Strip the standalone EXIT trap — the combined trap below covers cleanup.
-      eval "$(command envoke renv "$@" | grep -v '^trap ')"
-      ;;
-    *)
-      command envoke renv "$@"
-      ;;
-  esac
-}
-
-kctx() {
-  case "$1" in
-    load)
-      command envoke kctx load "${@:2}"
-      ;;
-    switch)
-      # IMPORTANT: never call 'trap' inside this function. In zsh, a trap set
-      # inside a function fires when the function returns, not when the shell
-      # exits. Kubeconfig cleanup is handled by the shell-init EXIT trap below.
-      if _kctx_raw="$(command envoke kctx switch "${@:2}")"; then
-        eval "$(echo "$_kctx_raw" | grep -v '^trap ')"
-        _KCTX_LAST_UNLOAD_TOKEN="$(_kctx_unload_token 2>/dev/null || true)"
-      fi
-      ;;
-    unload)
-      eval "$(command envoke kctx unload)"
-      ;;
-    status|watch|shell-init)
-      command envoke kctx "$@"
-      ;;
-    --version|--help|-h)
-      command envoke kctx "$@"
-      ;;
-    "")
-      command envoke kctx
-      ;;
-    *)
-      # Positional shorthand: kctx prod → kctx switch prod
-      if _kctx_raw="$(command envoke kctx switch "$@")"; then
-        eval "$(echo "$_kctx_raw" | grep -v '^trap ')"
-        _KCTX_LAST_UNLOAD_TOKEN="$(_kctx_unload_token 2>/dev/null || true)"
-      fi
-      ;;
-  esac
-}
 
 envoke() {
   case "$1" in
@@ -538,7 +757,6 @@ envoke() {
       for _a in "${@:2}"; do
         case "$_a" in --help|-h|--version) command envoke resolve "${@:2}"; return ;; esac
       done
-      # Capture output and exit code before eval so failures propagate correctly.
       local _envoke_out _envoke_exit
       _envoke_out="$(command envoke resolve "${@:2}")"
       _envoke_exit=$?
@@ -553,20 +771,22 @@ envoke() {
       for _a in "${@:2}"; do
         case "$_a" in --help|-h|--version) command envoke unload "${@:2}"; return ;; esac
       done
-      # Capture output and exit code before eval so failures propagate correctly.
       local _envoke_out _envoke_exit
       _envoke_out="$(command envoke unload)"
       _envoke_exit=$?
       [ "$_envoke_exit" -ne 0 ] && return "$_envoke_exit"
       eval "$(printf '%s\n' "$_envoke_out" | grep -v '^trap ')"
       ;;
-    renv)
-      # Delegate to the renv shell function which handles eval internally.
-      renv "${@:2}"
-      ;;
-    kctx)
-      # Delegate to the kctx shell function which handles eval internally.
-      kctx "${@:2}"
+    switch)
+      # IMPORTANT: never call 'trap' inside this function. In zsh, a trap set
+      # inside a function fires when the function returns, not when the shell exits.
+      # Kubeconfig cleanup is handled by the shell-init EXIT trap below.
+      local _envoke_out _envoke_exit
+      _envoke_out="$(command envoke switch "${@:2}")"
+      _envoke_exit=$?
+      [ "$_envoke_exit" -ne 0 ] && return "$_envoke_exit"
+      eval "$(printf '%s\n' "$_envoke_out" | grep -v '^trap ')"
+      _ENVOKE_LAST_UNLOAD_TOKEN="$(_envoke_unload_token 2>/dev/null || true)"
       ;;
     *)
       command envoke "$@"
@@ -574,47 +794,36 @@ envoke() {
   esac
 }
 
-# ── renv unload token ──────────────────────────────────────────────────────────
-_renv_unload_token() {
-  local f="/dev/shm/renv-${UID}-unload-requested"
-  [ -f "$f" ] || f="/tmp/renv-${UID}-unload-requested"
-  [ -f "$f" ] || return 1
-  stat -c '%Y:%i:%s' "$f" 2>/dev/null || stat -f '%m:%i:%z' "$f" 2>/dev/null
+# ── unload token ───────────────────────────────────────────────────────────────
+# Returns a combined token for both renv and kctx sentinel files.
+# Returns 1 if neither file exists (no pending unload signal).
+_envoke_unload_token() {
+  local f1="/dev/shm/renv-${UID}-unload-requested"
+  [ -f "$f1" ] || f1="/tmp/renv-${UID}-unload-requested"
+  local f2="/dev/shm/kctx-${UID}-unload-requested"
+  [ -f "$f2" ] || f2="/tmp/kctx-${UID}-unload-requested"
+  local t1="" t2=""
+  [ -f "$f1" ] && t1="$(stat -c '%Y:%i:%s' "$f1" 2>/dev/null || stat -f '%m:%i:%z' "$f1" 2>/dev/null || true)"
+  [ -f "$f2" ] && t2="$(stat -c '%Y:%i:%s' "$f2" 2>/dev/null || stat -f '%m:%i:%z' "$f2" 2>/dev/null || true)"
+  [ -z "$t1" ] && [ -z "$t2" ] && return 1
+  printf '%s|%s\n' "$t1" "$t2"
 }
 
-_renv_check_unload() {
+_envoke_check_unload() {
   local token
-  token="$(_renv_unload_token)" || return 0
-  [ "${_RENV_LAST_UNLOAD_TOKEN:-}" = "$token" ] && return 0
-  _RENV_LAST_UNLOAD_TOKEN="$token"
-  eval "$(command envoke renv unload 2>/dev/null)" 2>/dev/null || true
+  token="$(_envoke_unload_token)" || return 0
+  [ "${_ENVOKE_LAST_UNLOAD_TOKEN:-}" = "$token" ] && return 0
+  _ENVOKE_LAST_UNLOAD_TOKEN="$token"
+  eval "$(command envoke unload 2>/dev/null)" 2>/dev/null || true
 }
-_RENV_LAST_UNLOAD_TOKEN="$(_renv_unload_token 2>/dev/null || true)"
-
-# ── kctx unload token ──────────────────────────────────────────────────────────
-_kctx_unload_token() {
-  local f="/dev/shm/kctx-${UID}-unload-requested"
-  [ -f "$f" ] || f="/tmp/kctx-${UID}-unload-requested"
-  [ -f "$f" ] || return 1
-  stat -c '%Y:%i:%s' "$f" 2>/dev/null || stat -f '%m:%i:%z' "$f" 2>/dev/null
-}
-
-_kctx_check_unload() {
-  local token
-  token="$(_kctx_unload_token)" || return 0
-  [ "${_KCTX_LAST_UNLOAD_TOKEN:-}" = "$token" ] && return 0
-  _KCTX_LAST_UNLOAD_TOKEN="$token"
-  eval "$(command envoke kctx unload 2>/dev/null)" 2>/dev/null || true
-}
-_KCTX_LAST_UNLOAD_TOKEN="$(_kctx_unload_token 2>/dev/null || true)"
+_ENVOKE_LAST_UNLOAD_TOKEN="$(_envoke_unload_token 2>/dev/null || true)"
 
 # ── install prompt hooks ───────────────────────────────────────────────────────
 if [ -n "${ZSH_VERSION:-}" ]; then
   autoload -Uz add-zsh-hook 2>/dev/null
-  add-zsh-hook precmd _renv_check_unload
-  add-zsh-hook precmd _kctx_check_unload
+  add-zsh-hook precmd _envoke_check_unload
 else
-  PROMPT_COMMAND="_renv_check_unload; _kctx_check_unload${PROMPT_COMMAND:+; $PROMPT_COMMAND}"
+  PROMPT_COMMAND="_envoke_check_unload${PROMPT_COMMAND:+; $PROMPT_COMMAND}"
 fi
 
 # ── combined watcher + EXIT trap ───────────────────────────────────────────────
@@ -630,40 +839,6 @@ const fishCombinedInitScript = `
 # envoke shell integration for fish — add to ~/.config/fish/config.fish:
 #   envoke shell-init --shell fish | source
 
-function renv
-  switch $argv[1]
-    case resolve unload
-      command envoke renv $argv | source
-    case '*'
-      command envoke renv $argv
-  end
-end
-
-function kctx
-  switch $argv[1]
-    case load
-      command envoke kctx load $argv[2..]
-    case switch
-      set -l _kctx_raw (command envoke kctx switch $argv[2..] 2>/dev/null)
-      if test $status -eq 0
-        echo $_kctx_raw | grep -v '^trap ' | source
-        set -g _KCTX_LAST_UNLOAD_TOKEN (_kctx_unload_token 2>/dev/null; or echo "")
-      end
-    case unload
-      command envoke kctx unload | source
-    case status watch shell-init
-      command envoke kctx $argv
-    case ''
-      command envoke kctx
-    case '*'
-      set -l _kctx_raw (command envoke kctx switch $argv 2>/dev/null)
-      if test $status -eq 0
-        echo $_kctx_raw | grep -v '^trap ' | source
-        set -g _KCTX_LAST_UNLOAD_TOKEN (_kctx_unload_token 2>/dev/null; or echo "")
-      end
-  end
-end
-
 function envoke
   switch $argv[1]
     case resolve
@@ -672,60 +847,51 @@ function envoke
         command envoke resolve $argv[2..]
         return
       end
-      # Capture output and exit code before sourcing so failures propagate correctly.
       set -l _envoke_out (command envoke resolve $argv[2..])
       set -l _envoke_exit $status
       test $_envoke_exit -ne 0; and return $_envoke_exit
-      # Auto-source so secrets and kubeconfigs are loaded into the current shell.
+      # Strip the standalone EXIT trap — the shell-init cleanup covers it.
       printf '%s\n' $_envoke_out | grep -v '^trap ' | source
     case unload
-      # Help/version: print directly, do not source.
       if contains -- --help $argv; or contains -- -h $argv
         command envoke unload $argv[2..]
         return
       end
-      # Capture output and exit code before sourcing so failures propagate correctly.
       set -l _envoke_out (command envoke unload)
       set -l _envoke_exit $status
       test $_envoke_exit -ne 0; and return $_envoke_exit
       printf '%s\n' $_envoke_out | grep -v '^trap ' | source
-    case renv
-      renv $argv[2..]
-    case kctx
-      kctx $argv[2..]
+    case switch
+      set -l _envoke_out (command envoke switch $argv[2..])
+      set -l _envoke_exit $status
+      test $_envoke_exit -ne 0; and return $_envoke_exit
+      printf '%s\n' $_envoke_out | grep -v '^trap ' | source
+      set -g _ENVOKE_LAST_UNLOAD_TOKEN (_envoke_unload_token 2>/dev/null; or echo "")
     case '*'
       command envoke $argv
   end
 end
 
-function _renv_unload_token
-  set -l f /dev/shm/renv-(id -u)-unload-requested
-  test -f $f; or set f /tmp/renv-(id -u)-unload-requested
-  test -f $f; or return 1
-  stat -c '%Y:%i:%s' $f 2>/dev/null; or stat -f '%m:%i:%z' $f 2>/dev/null
-end
-
-function _kctx_unload_token
-  set -l f /dev/shm/kctx-(id -u)-unload-requested
-  test -f $f; or set f /tmp/kctx-(id -u)-unload-requested
-  test -f $f; or return 1
-  stat -c '%Y:%i:%s' $f 2>/dev/null; or stat -f '%m:%i:%z' $f 2>/dev/null
+function _envoke_unload_token
+  set -l f1 /dev/shm/renv-(id -u)-unload-requested
+  test -f $f1; or set f1 /tmp/renv-(id -u)-unload-requested
+  set -l f2 /dev/shm/kctx-(id -u)-unload-requested
+  test -f $f2; or set f2 /tmp/kctx-(id -u)-unload-requested
+  set -l t1 ""
+  set -l t2 ""
+  test -f $f1; and set t1 (stat -c '%Y:%i:%s' $f1 2>/dev/null; or stat -f '%m:%i:%z' $f1 2>/dev/null; or echo "")
+  test -f $f2; and set t2 (stat -c '%Y:%i:%s' $f2 2>/dev/null; or stat -f '%m:%i:%z' $f2 2>/dev/null; or echo "")
+  test -z "$t1" -a -z "$t2"; and return 1
+  printf '%s|%s\n' $t1 $t2
 end
 
 function _envoke_check_unload --on-event fish_prompt
-  set -l rtoken (_renv_unload_token 2>/dev/null); or set rtoken ""
-  if test "$_RENV_LAST_UNLOAD_TOKEN" != "$rtoken"
-    set -g _RENV_LAST_UNLOAD_TOKEN $rtoken
-    command envoke renv unload | source 2>/dev/null; or true
-  end
-  set -l ktoken (_kctx_unload_token 2>/dev/null); or set ktoken ""
-  if test "$_KCTX_LAST_UNLOAD_TOKEN" != "$ktoken"
-    set -g _KCTX_LAST_UNLOAD_TOKEN $ktoken
-    command envoke kctx unload | source 2>/dev/null; or true
-  end
+  set -l token (_envoke_unload_token 2>/dev/null); or return
+  test "$_ENVOKE_LAST_UNLOAD_TOKEN" = "$token"; and return
+  set -g _ENVOKE_LAST_UNLOAD_TOKEN $token
+  command envoke unload 2>/dev/null | grep -v '^trap ' | source 2>/dev/null; or true
 end
-set -g _RENV_LAST_UNLOAD_TOKEN (_renv_unload_token 2>/dev/null; or echo "")
-set -g _KCTX_LAST_UNLOAD_TOKEN (_kctx_unload_token 2>/dev/null; or echo "")
+set -g _ENVOKE_LAST_UNLOAD_TOKEN (_envoke_unload_token 2>/dev/null; or echo "")
 
 if not set -q _ENVOKE_WATCH_PID
   command envoke watch &
@@ -733,7 +899,7 @@ if not set -q _ENVOKE_WATCH_PID
 end
 
 function _envoke_cleanup --on-event fish_exit
-  command envoke unload 2>/dev/null | source 2>/dev/null; or true
+  command envoke unload 2>/dev/null | grep -v '^trap ' | source 2>/dev/null; or true
   if set -q _ENVOKE_WATCH_PID
     kill $_ENVOKE_WATCH_PID 2>/dev/null; or true
     set -e _ENVOKE_WATCH_PID
@@ -747,10 +913,10 @@ end
 func clearCacheCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "clear-cache",
-		Short: "Remove all envoke kubeconfig files",
+		Short: "Remove stored Bitwarden session and all kubeconfig files",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			uid := fmt.Sprintf("%d", os.Getuid())
-			slog.Debug("clearing all kubeconfig files", "uid", uid)
+			slog.Debug("clearing all cached data", "uid", uid)
 
 			if err := bw.ClearStoredSession(uid); err != nil {
 				return fmt.Errorf("clearing session: %w", err)
@@ -761,7 +927,7 @@ func clearCacheCmd() *cobra.Command {
 				return fmt.Errorf("clearing kubeconfig store: %w", err)
 			}
 
-			ui.Success(os.Stderr, "All kubeconfig files cleared")
+			ui.Success(os.Stderr, "Cache cleared")
 			return nil
 		},
 	}
@@ -784,7 +950,7 @@ On sleep: all caches are cleared, requiring full re-authentication after wake.`,
 			hook := cleanup.New()
 
 			if err := hook.RegisterLock(func() error {
-				slog.Debug("cleanup: unloading renv variables and kctx kubeconfigs on lock")
+				slog.Debug("cleanup: unloading env variables and kubeconfigs on lock")
 				_ = state.RequestUnload(uid)
 				kubeconfig.ClearManaged()
 				_ = kubeconfig.RequestUnload(uid)
@@ -794,7 +960,7 @@ On sleep: all caches are cleared, requiring full re-authentication after wake.`,
 			}
 
 			if err := hook.RegisterSleep(func() error {
-				slog.Debug("cleanup: clearing all kubeconfig files on sleep")
+				slog.Debug("cleanup: clearing all cached data on sleep")
 				_ = bw.ClearStoredSession(uid)
 				_ = state.RequestUnload(uid)
 				store := kubeconfig.NewNamedStore()

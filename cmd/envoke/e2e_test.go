@@ -66,7 +66,7 @@ func TestResolveNoSecrets(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cmd := exec.Command(envokeBin, "renv", "resolve", envFile)
+	cmd := exec.Command(envokeBin, "resolve", envFile)
 	out, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("resolve: %v\nstderr: %s", err, stderrFromErr(err))
@@ -119,7 +119,7 @@ esac
 
 	// Prepend the mock directory to PATH so our bw stub is found first.
 	// BW_SESSION causes BWClient.Session() to return immediately without unlock.
-	cmd := exec.Command(envokeBin, "renv", "resolve", envFile)
+	cmd := exec.Command(envokeBin, "resolve", envFile)
 	cmd.Env = append(os.Environ(),
 		"PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"BW_SESSION=test-tok",
