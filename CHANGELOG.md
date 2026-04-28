@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.0](https://github.com/OpalBolt/envoke/compare/v0.5.0...v0.6.0) (2026-04-28)
+
+
+### Features
+
+* **cli:** unify renv and kctx into single envoke command surface ([5a9ed8e](https://github.com/OpalBolt/envoke/commit/5a9ed8e79e48bd0b16e855189ff117ae4e1a793e)), closes [#54](https://github.com/OpalBolt/envoke/issues/54)
+* **cli:** unify renv and kctx into single envoke command surface ([#54](https://github.com/OpalBolt/envoke/issues/54)) ([42c10e4](https://github.com/OpalBolt/envoke/commit/42c10e49a39ae2f97a29b76e7ee2a2e6e1701356))
+
 ## [0.5.0](https://github.com/OpalBolt/envoke/compare/v0.4.2...v0.5.0) (2026-04-28)
 
 
