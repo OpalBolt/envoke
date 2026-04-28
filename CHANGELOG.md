@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.5.0](https://github.com/OpalBolt/envoke/compare/v0.4.2...v0.5.0) (2026-04-28)
+
+
+### Features
+
+* add MIT license and README license section ([76fa842](https://github.com/OpalBolt/envoke/commit/76fa84289a054be3e493faade884bf23d7adb93a))
+* **shell-init:** add terminal check to prevent unsafe direct eval ([76fa842](https://github.com/OpalBolt/envoke/commit/76fa84289a054be3e493faade884bf23d7adb93a))
+* **ui:** add Braille spinner for long-running Bitwarden operations (TTY-gated, thread-safe) ([76fa842](https://github.com/OpalBolt/envoke/commit/76fa84289a054be3e493faade884bf23d7adb93a))
+* **ui:** add BW spinner, dynamic terminal width, and MIT license ([#41](https://github.com/OpalBolt/envoke/issues/41), [#36](https://github.com/OpalBolt/envoke/issues/36)) ([76fa842](https://github.com/OpalBolt/envoke/commit/76fa84289a054be3e493faade884bf23d7adb93a))
+* **ui:** dynamic terminal width detection; box width clamped to terminal width ([76fa842](https://github.com/OpalBolt/envoke/commit/76fa84289a054be3e493faade884bf23d7adb93a))
+
+
+### Bug Fixes
+
+* **resolve:** abort on terminal stdout instead of warning; add --force escape hatch ([#36](https://github.com/OpalBolt/envoke/issues/36)) ([76fa842](https://github.com/OpalBolt/envoke/commit/76fa84289a054be3e493faade884bf23d7adb93a))
+* **ui:** guard strings.Repeat against negative repeat counts on narrow terminals ([76fa842](https://github.com/OpalBolt/envoke/commit/76fa84289a054be3e493faade884bf23d7adb93a))
+* **ui:** truncate keys longer than 24 chars before rendering ([#41](https://github.com/OpalBolt/envoke/issues/41)) ([76fa842](https://github.com/OpalBolt/envoke/commit/76fa84289a054be3e493faade884bf23d7adb93a))
+
 ## [0.4.2](https://github.com/OpalBolt/envoke/compare/v0.4.1...v0.4.2) (2026-04-26)
 
 
