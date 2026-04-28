@@ -171,13 +171,12 @@ func panelCompact(w io.Writer, title, headline string, entries []PanelEntry) {
 
 	for _, e := range entries {
 		display := entryDisplay(e)
-		// "  " + 24-char key + display; terminal width - 2 - 24 = available for display
 		availWidth := termWidth() - 2 - 24
 		if availWidth > 0 {
 			display = truncate(display, availWidth)
 		}
 		fmt.Fprintf(w, "  %s%s\n",
-			keyStyle.Render(e.Key),
+			keyStyle.Render(truncate(e.Key, 24)),
 			dimStyle.Render(display),
 		)
 	}
@@ -209,7 +208,7 @@ func panelBordered(w io.Writer, title, headline string, entries []PanelEntry) {
 		if availWidth > 0 {
 			display = truncate(display, availWidth)
 		}
-		t := "  " + keyStyle.Render(e.Key) + dimStyle.Render(display)
+		t := "  " + keyStyle.Render(truncate(e.Key, 24)) + dimStyle.Render(display)
 		vw := lipgloss.Width(t)
 		rows[i] = rowData{t, vw}
 		if vw > maxRowWidth {
