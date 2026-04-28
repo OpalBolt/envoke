@@ -421,6 +421,7 @@ When using the envoke shell-init, the shell function handles this automatically.
 
 func shellInitCmd() *cobra.Command {
 	var shell string
+	var force bool
 
 	cmd := &cobra.Command{
 		Use:   "shell-init",
@@ -441,6 +442,18 @@ After that:
   kctx prod                  # switch to 'prod' kubeconfig
   envoke resolve .env        # load both secrets and kubeconfigs`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Check if stdout is a terminal. If it is, the user is trying to eval the
+			// output directly in the shell, which is incorrect. They should put this in
+			// their shell config file instead. Allow override with --force.
+			if term.IsTerminal(int(os.Stdout.Fd())) && !force {
+			return fmt.Errorf("shell-init output must not be eval'd directly in a terminal\n\n" +
+					"Instead, add this to your shell config file:\n\n" +
+					"  # bash/zsh (~/.bashrc or ~/.zshrc)\n" +
+					"  eval \"$(envoke shell-init)\"\n\n" +
+					"  # fish (~/.config/fish/config.fish)\n" +
+					"  envoke shell-init --shell fish | source\n\n" +
+					"Use --force to override this check.")
+			}
 			switch shell {
 			case "fish":
 				_, err := io.WriteString(cmd.OutOrStdout(), fishCombinedInitScript)
@@ -452,6 +465,7 @@ After that:
 		},
 	}
 	cmd.Flags().StringVar(&shell, "shell", "bash", "Shell type: bash, zsh, fish")
+	cmd.Flags().BoolVar(&force, "force", false, "Bypass terminal check and output init script (unsafe)")
 	return cmd
 }
 
