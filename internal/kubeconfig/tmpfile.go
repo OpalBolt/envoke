@@ -110,9 +110,9 @@ func ClearTrackedNames(uid string) error {
 }
 
 // UnloadRequestFile returns the path of the sentinel file used to signal
-// shells to run kctx unload on their next prompt draw.
+// shells to run envoke unload on their next prompt draw.
 func UnloadRequestFile(uid string) string {
-	return filepath.Join(securedir.Dir(), "kctx-"+uid+"-unload-requested")
+	return filepath.Join(securedir.Dir(), "envoke-"+uid+"-unload-requested")
 }
 
 // RequestUnload creates the sentinel file. Shell PROMPT_COMMAND/precmd hooks
