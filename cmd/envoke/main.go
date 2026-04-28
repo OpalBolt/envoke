@@ -766,18 +766,23 @@ envoke_eval() {
   eval "$(printf '%s\n' "$_out" | grep -v '^trap ')"
 }
 _envoke_unload_token() {
-  local f="{{SECUREDIR}}/envoke-${UID}-unload-requested"
-  [ -f "$f" ] && stat -c '%Y:%i:%s' "$f" 2>/dev/null || stat -f '%m:%i:%z' "$f" 2>/dev/null || true
+  local f1="{{SECUREDIR}}/renv-${UID}-unload-requested"
+  local f2="{{SECUREDIR}}/kctx-${UID}-unload-requested"
+  local t1="" t2=""
+  [ -f "$f1" ] && t1="$(stat -c '%Y:%i:%s' "$f1" 2>/dev/null || stat -f '%m:%i:%z' "$f1" 2>/dev/null || true)"
+  [ -f "$f2" ] && t2="$(stat -c '%Y:%i:%s' "$f2" 2>/dev/null || stat -f '%m:%i:%z' "$f2" 2>/dev/null || true)"
+  [ -z "$t1" ] && [ -z "$t2" ] && return 1
+  printf '%s|%s\n' "$t1" "$t2"
 }
 _envoke_check_unload() {
   local t; t="$(_envoke_unload_token)" || return 0
   [ "${_ENVOKE_LAST_UNLOAD_TOKEN:-}" = "$t" ] && return 0
   _ENVOKE_LAST_UNLOAD_TOKEN="$t"
-  command envoke unload 2>/dev/null | grep -v '^trap ' | eval "$(cat)"
+  eval "$(command envoke unload 2>/dev/null | grep -v '^trap ')"
 }
 _ENVOKE_LAST_UNLOAD_TOKEN="$(_envoke_unload_token 2>/dev/null || true)"
 [ -n "${ZSH_VERSION:-}" ] && { autoload -Uz add-zsh-hook 2>/dev/null; add-zsh-hook precmd _envoke_check_unload; } || PROMPT_COMMAND="_envoke_check_unload${PROMPT_COMMAND:+; $PROMPT_COMMAND}"
-[ -z "${_ENVOKE_WATCH_PID:-}" ] && { command envoke watch & _ENVOKE_WATCH_PID=$!; trap 'command envoke unload 2>/dev/null | eval "$(cat)"; kill "${_ENVOKE_WATCH_PID:-}" 2>/dev/null; command envoke clear-cache 2>/dev/null' EXIT; }
+[ -z "${_ENVOKE_WATCH_PID:-}" ] && { command envoke watch & _ENVOKE_WATCH_PID=$!; trap 'eval "$(command envoke unload 2>/dev/null | grep -v '"'"'^trap '"'"')"; kill "${_ENVOKE_WATCH_PID:-}" 2>/dev/null; command envoke clear-cache 2>/dev/null' EXIT; }
 `
 
 // fishCombinedInitScript is the combined shell snippet for fish.
@@ -801,8 +806,14 @@ function envoke_eval
   printf '%s\n' $_out | grep -v '^trap ' | source
 end
 function _envoke_unload_token
-  set -l f {{SECUREDIR}}/envoke-(id -u)-unload-requested
-  test -f $f; and stat -c '%Y:%i:%s' $f 2>/dev/null || stat -f '%m:%i:%z' $f 2>/dev/null || echo ""
+  set -l uid (id -u)
+  set -l f1 {{SECUREDIR}}/renv-$uid-unload-requested
+  set -l f2 {{SECUREDIR}}/kctx-$uid-unload-requested
+  set -l t1 ""; set -l t2 ""
+  test -f $f1; and set t1 (stat -c '%Y:%i:%s' $f1 2>/dev/null; or stat -f '%m:%i:%z' $f1 2>/dev/null; or echo "")
+  test -f $f2; and set t2 (stat -c '%Y:%i:%s' $f2 2>/dev/null; or stat -f '%m:%i:%z' $f2 2>/dev/null; or echo "")
+  test -z "$t1" -a -z "$t2"; and return 1
+  printf '%s|%s\n' $t1 $t2
 end
 function _envoke_check_unload --on-event fish_prompt
   set -l t (_envoke_unload_token); or return
