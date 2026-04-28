@@ -127,6 +127,7 @@ func newRegistry(cfg *config.Config) *providers.Registry {
 func resolveCmd(cfg *config.Config) *cobra.Command {
 	var file string
 	var shell string
+	var force bool
 
 	cmd := &cobra.Command{
 		Use:   "resolve [file]",
@@ -156,9 +157,11 @@ Then in .envrc:
 				file = args[0]
 			}
 			slog.Debug("running resolve", "file", file, "shell", shell)
-			if term.IsTerminal(int(os.Stdout.Fd())) {
-				ui.Warn(os.Stderr, "stdout is a terminal — output will not be set as env vars.")
-				fmt.Fprintln(os.Stderr, "  use: eval \"$(renv resolve .env)\"")
+			if term.IsTerminal(int(os.Stdout.Fd())) && !force {
+				return fmt.Errorf("stdout is a terminal — output will not be set as env vars\n\n" +
+					"Wrap the command with eval to apply the exports to your shell:\n\n" +
+					"  eval \"$(renv resolve .env)\"\n\n" +
+					"Use --force to override this check and print to terminal anyway.")
 			}
 			reg := newRegistry(cfg)
 			defer reg.Close() //nolint:errcheck // best-effort session cleanup
@@ -202,6 +205,7 @@ Then in .envrc:
 	}
 	cmd.Flags().StringVarP(&file, "file", "f", ".env", "Path to .env file")
 	cmd.Flags().StringVar(&shell, "shell", "bash", "Shell type (bash|fish|zsh)")
+	cmd.Flags().BoolVar(&force, "force", false, "Bypass terminal check and print exports to terminal anyway")
 	return cmd
 }
 
