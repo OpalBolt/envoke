@@ -814,7 +814,7 @@ function _envoke_check_unload --on-event fish_prompt
 end
 function _envoke_cleanup --on-event fish_exit
   if test -n "$_ENVOKE_WATCH_PID"
-    kill -0 $_ENVOKE_WATCH_PID 2>/dev/null; and kill $_ENVOKE_WATCH_PID 2>/dev/null; or true
+    kill -0 "$_ENVOKE_WATCH_PID" 2>/dev/null; and kill "$_ENVOKE_WATCH_PID" 2>/dev/null; or true
     set -e _ENVOKE_WATCH_PID
   end
   command envoke unload 2>/dev/null | grep -v '^trap ' | source 2>/dev/null; or true
