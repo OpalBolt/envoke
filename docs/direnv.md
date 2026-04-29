@@ -59,33 +59,7 @@ KCTX_PROD=bw://kubernetes/prod-cluster
 use envoke .env
 ```
 
-When you `cd` into the directory, direnv evaluates `.envrc`, which calls `envoke resolve .env`. Secrets are loaded and the `prod` kubeconfig is available via `kctx prod`. When you `cd` out, direnv unsets them automatically.
-
-## Variant helpers
-
-If you only need environment secrets (no `KCTX_` directives), you can add a `use_renv` helper that only invokes the renv subcommand:
-
-```bash
-use_renv() {
-  local file="${1:-.env}"
-  watch_file "$file"
-  eval "$(envoke renv unload 2>/dev/null || true)"
-  eval "$(envoke renv resolve "$file")"
-}
-```
-
-Likewise, a `use_kctx` helper that skips `renv`-only resolution and focuses on kubeconfig directives (note: it still processes the full `.env` file via `envoke resolve`, which will also export any regular env vars present):
-
-```bash
-use_kctx() {
-  local file="${1:-.env}"
-  watch_file "$file"
-  eval "$(envoke kctx unload 2>/dev/null || true)"
-  eval "$(envoke resolve "$file")"
-}
-```
-
-Use whichever matches your project's needs. `use_envoke` is the recommended default.
+When you `cd` into the directory, direnv evaluates `.envrc`, which calls `envoke resolve .env`. Secrets are loaded and the `prod` kubeconfig is available via `envoke switch prod`. When you `cd` out, direnv unsets them automatically.
 
 ## Notes
 

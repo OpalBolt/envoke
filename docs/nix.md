@@ -1,6 +1,6 @@
 # Nix integration
 
-envoke works in Nix environments and detects them automatically. When `IN_NIX_SHELL` is set, `envoke resolve` and `renv resolve` skip emitting their EXIT trap, since Nix manages the shell lifecycle.
+envoke works in Nix environments and detects them automatically. When `IN_NIX_SHELL` is set, `envoke resolve` skips emitting its EXIT trap, since Nix manages the shell lifecycle.
 
 ## Running envoke in a nix-shell
 
