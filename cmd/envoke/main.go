@@ -22,6 +22,7 @@ import (
 	"github.com/opalbolt/envoke/internal/logger"
 	"github.com/opalbolt/envoke/internal/providers"
 	bw "github.com/opalbolt/envoke/internal/providers/bitwarden"
+	"github.com/opalbolt/envoke/internal/securedir"
 	"github.com/opalbolt/envoke/internal/state"
 	"github.com/opalbolt/envoke/internal/ui"
 	"github.com/opalbolt/envoke/internal/version"
@@ -727,14 +728,16 @@ After that:
 					"  envoke shell-init --shell fish | source\n\n" +
 					"Use --force to override this check.")
 			}
+			secureDir := securedir.Dir()
+			var script string
 			switch shell {
 			case "fish":
-				_, err := io.WriteString(cmd.OutOrStdout(), fishCombinedInitScript)
-				return err
+				script = strings.ReplaceAll(fishCombinedInitScript, "{{SECUREDIR}}", secureDir)
 			default:
-				_, err := io.WriteString(cmd.OutOrStdout(), bashCombinedInitScript)
-				return err
+				script = strings.ReplaceAll(bashCombinedInitScript, "{{SECUREDIR}}", secureDir)
 			}
+			_, err := io.WriteString(cmd.OutOrStdout(), script)
+			return err
 		},
 	}
 	cmd.Flags().StringVar(&shell, "shell", "bash", "Shell type: bash, zsh, fish")
@@ -746,166 +749,79 @@ After that:
 // Defines an envoke() shell function that auto-evals resolve, unload, and switch output,
 // starts a single background watcher, and installs a combined EXIT trap.
 const bashCombinedInitScript = `
-# envoke shell integration — add to ~/.bashrc or ~/.zshrc:
-#   eval "$(envoke shell-init)"
-
 envoke() {
   case "$1" in
-    resolve)
-      # Help/version: print directly, do not eval — scan all args.
-      local _a
-      for _a in "${@:2}"; do
-        case "$_a" in --help|-h|--version) command envoke resolve "${@:2}"; return ;; esac
-      done
-      local _envoke_out _envoke_exit
-      _envoke_out="$(command envoke resolve "${@:2}")"
-      _envoke_exit=$?
-      [ "$_envoke_exit" -ne 0 ] && return "$_envoke_exit"
-      # Auto-eval so secrets and kubeconfigs are loaded into the current shell.
-      # Strip the standalone EXIT trap — the shell-init trap below covers cleanup.
-      eval "$(printf '%s\n' "$_envoke_out" | grep -v '^trap ')"
-      ;;
-    unload)
-      # Help/version: print directly, do not eval — scan all args.
-      local _a
-      for _a in "${@:2}"; do
-        case "$_a" in --help|-h|--version) command envoke unload "${@:2}"; return ;; esac
-      done
-      local _envoke_out _envoke_exit
-      _envoke_out="$(command envoke unload)"
-      _envoke_exit=$?
-      [ "$_envoke_exit" -ne 0 ] && return "$_envoke_exit"
-      eval "$(printf '%s\n' "$_envoke_out" | grep -v '^trap ')"
-      ;;
-    switch)
-      # IMPORTANT: never call 'trap' inside this function. In zsh, a trap set
-      # inside a function fires when the function returns, not when the shell exits.
-      # Kubeconfig cleanup is handled by the shell-init EXIT trap below.
-      local _envoke_out _envoke_exit
-      _envoke_out="$(command envoke switch "${@:2}")"
-      _envoke_exit=$?
-      [ "$_envoke_exit" -ne 0 ] && return "$_envoke_exit"
-      eval "$(printf '%s\n' "$_envoke_out" | grep -v '^trap ')"
-      _ENVOKE_LAST_UNLOAD_TOKEN="$(_envoke_unload_token 2>/dev/null || true)"
-      ;;
-    *)
-      command envoke "$@"
-      ;;
+    resolve) envoke_eval resolve "${@:2}" ;;
+    unload) envoke_eval unload "${@:2}" ;;
+    switch) envoke_eval switch "${@:2}"; _ENVOKE_LAST_UNLOAD_TOKEN="$(_envoke_unload_token 2>/dev/null || true)" ;;
+    *) command envoke "$@" ;;
   esac
 }
-
-# ── unload token ───────────────────────────────────────────────────────────────
-# Returns a combined token for both renv and kctx sentinel files.
-# Returns 1 if neither file exists (no pending unload signal).
-_envoke_unload_token() {
-  local f1="/dev/shm/renv-${UID}-unload-requested"
-  [ -f "$f1" ] || f1="/tmp/renv-${UID}-unload-requested"
-  local f2="/dev/shm/kctx-${UID}-unload-requested"
-  [ -f "$f2" ] || f2="/tmp/kctx-${UID}-unload-requested"
-  local t1="" t2=""
-  [ -f "$f1" ] && t1="$(stat -c '%Y:%i:%s' "$f1" 2>/dev/null || stat -f '%m:%i:%z' "$f1" 2>/dev/null || true)"
-  [ -f "$f2" ] && t2="$(stat -c '%Y:%i:%s' "$f2" 2>/dev/null || stat -f '%m:%i:%z' "$f2" 2>/dev/null || true)"
-  [ -z "$t1" ] && [ -z "$t2" ] && return 1
-  printf '%s|%s\n' "$t1" "$t2"
+envoke_eval() {
+  local _cmd="$1" _out _exit
+  shift
+  for _arg in "$@"; do case "$_arg" in --help|-h|--version) command envoke "$_cmd" "$@"; return ;; esac; done
+  _out="$(command envoke "$_cmd" "$@")" _exit=$?
+  [ $_exit -ne 0 ] && return $_exit
+  eval "$(printf '%s\n' "$_out" | grep -v '^trap ')"
 }
-
+_envoke_unload_token() {
+  local f="{{SECUREDIR}}/envoke-${UID}-unload-requested"
+  [ -f "$f" ] || return 1
+  stat -c '%Y:%i:%s' "$f" 2>/dev/null || stat -f '%m:%i:%z' "$f" 2>/dev/null || echo "exists"
+}
 _envoke_check_unload() {
-  local token
-  token="$(_envoke_unload_token)" || return 0
-  [ "${_ENVOKE_LAST_UNLOAD_TOKEN:-}" = "$token" ] && return 0
-  _ENVOKE_LAST_UNLOAD_TOKEN="$token"
-  eval "$(command envoke unload 2>/dev/null)" 2>/dev/null || true
+  local t; t="$(_envoke_unload_token)" || return 0
+  [ "${_ENVOKE_LAST_UNLOAD_TOKEN:-}" = "$t" ] && return 0
+  _ENVOKE_LAST_UNLOAD_TOKEN="$t"
+  eval "$(command envoke unload 2>/dev/null | grep -v '^trap ')"
 }
 _ENVOKE_LAST_UNLOAD_TOKEN="$(_envoke_unload_token 2>/dev/null || true)"
-
-# ── install prompt hooks ───────────────────────────────────────────────────────
-if [ -n "${ZSH_VERSION:-}" ]; then
-  autoload -Uz add-zsh-hook 2>/dev/null
-  add-zsh-hook precmd _envoke_check_unload
-else
-  PROMPT_COMMAND="_envoke_check_unload${PROMPT_COMMAND:+; $PROMPT_COMMAND}"
-fi
-
-# ── combined watcher + EXIT trap ───────────────────────────────────────────────
-if [ -z "${_ENVOKE_WATCH_PID:-}" ]; then
-  command envoke watch &
-  _ENVOKE_WATCH_PID=$!
-  trap 'eval "$(command envoke unload 2>/dev/null || true)"; kill "${_ENVOKE_WATCH_PID:-}" 2>/dev/null; command envoke clear-cache 2>/dev/null' EXIT
-fi
+[ -n "${ZSH_VERSION:-}" ] && { autoload -Uz add-zsh-hook 2>/dev/null; add-zsh-hook precmd _envoke_check_unload; } || PROMPT_COMMAND="_envoke_check_unload${PROMPT_COMMAND:+; $PROMPT_COMMAND}"
+[ -z "${_ENVOKE_WATCH_PID:-}" ] && { command envoke watch & _ENVOKE_WATCH_PID=$!; trap 'eval "$(command envoke unload 2>/dev/null | grep -v '"'"'^trap '"'"')"; kill "${_ENVOKE_WATCH_PID:-}" 2>/dev/null; command envoke clear-cache 2>/dev/null' EXIT; }
 `
 
 // fishCombinedInitScript is the combined shell snippet for fish.
 const fishCombinedInitScript = `
-# envoke shell integration for fish — add to ~/.config/fish/config.fish:
-#   envoke shell-init --shell fish | source
-
 function envoke
   switch $argv[1]
-    case resolve
-      # Help/version: print directly, do not source.
-      if contains -- --help $argv; or contains -- -h $argv
-        command envoke resolve $argv[2..]
-        return
-      end
-      set -l _envoke_out (command envoke resolve $argv[2..])
-      set -l _envoke_exit $status
-      test $_envoke_exit -ne 0; and return $_envoke_exit
-      # Strip the standalone EXIT trap — the shell-init cleanup covers it.
-      printf '%s\n' $_envoke_out | grep -v '^trap ' | source
-    case unload
-      if contains -- --help $argv; or contains -- -h $argv
-        command envoke unload $argv[2..]
-        return
-      end
-      set -l _envoke_out (command envoke unload)
-      set -l _envoke_exit $status
-      test $_envoke_exit -ne 0; and return $_envoke_exit
-      printf '%s\n' $_envoke_out | grep -v '^trap ' | source
-    case switch
-      set -l _envoke_out (command envoke switch $argv[2..])
-      set -l _envoke_exit $status
-      test $_envoke_exit -ne 0; and return $_envoke_exit
-      printf '%s\n' $_envoke_out | grep -v '^trap ' | source
-      set -g _ENVOKE_LAST_UNLOAD_TOKEN (_envoke_unload_token 2>/dev/null; or echo "")
-    case '*'
-      command envoke $argv
+    case resolve; envoke_eval resolve $argv[2..]
+    case unload; envoke_eval unload $argv[2..]
+    case switch; envoke_eval switch $argv[2..]; set -g _ENVOKE_LAST_UNLOAD_TOKEN (_envoke_unload_token 2>/dev/null; or echo "")
+    case '*'; command envoke $argv
   end
 end
-
+function envoke_eval
+  set -l _cmd $argv[1]
+  set -l _args $argv[2..]
+  for _arg in $_args
+    if test "$_arg" = "--help" -o "$_arg" = "-h" -o "$_arg" = "--version"; command envoke $_cmd $_args; return; end
+  end
+  set -l _out (command envoke $_cmd $_args); set -l _exit $status
+  test $_exit -ne 0; and return $_exit
+  printf '%s\n' $_out | grep -v '^trap ' | source
+end
 function _envoke_unload_token
-  set -l f1 /dev/shm/renv-(id -u)-unload-requested
-  test -f $f1; or set f1 /tmp/renv-(id -u)-unload-requested
-  set -l f2 /dev/shm/kctx-(id -u)-unload-requested
-  test -f $f2; or set f2 /tmp/kctx-(id -u)-unload-requested
-  set -l t1 ""
-  set -l t2 ""
-  test -f $f1; and set t1 (stat -c '%Y:%i:%s' $f1 2>/dev/null; or stat -f '%m:%i:%z' $f1 2>/dev/null; or echo "")
-  test -f $f2; and set t2 (stat -c '%Y:%i:%s' $f2 2>/dev/null; or stat -f '%m:%i:%z' $f2 2>/dev/null; or echo "")
-  test -z "$t1" -a -z "$t2"; and return 1
-  printf '%s|%s\n' $t1 $t2
+  set -l f "{{SECUREDIR}}/envoke-(id -u)-unload-requested"
+  test -f "$f"; or return 1
+  stat -c '%Y:%i:%s' "$f" 2>/dev/null; or stat -f '%m:%i:%z' "$f" 2>/dev/null; or echo "exists"
 end
-
 function _envoke_check_unload --on-event fish_prompt
-  set -l token (_envoke_unload_token 2>/dev/null); or return
-  test "$_ENVOKE_LAST_UNLOAD_TOKEN" = "$token"; and return
-  set -g _ENVOKE_LAST_UNLOAD_TOKEN $token
+  set -l t (_envoke_unload_token); or return
+  test "$_ENVOKE_LAST_UNLOAD_TOKEN" = "$t"; and return
+  set -g _ENVOKE_LAST_UNLOAD_TOKEN $t
   command envoke unload 2>/dev/null | grep -v '^trap ' | source 2>/dev/null; or true
 end
-set -g _ENVOKE_LAST_UNLOAD_TOKEN (_envoke_unload_token 2>/dev/null; or echo "")
-
-if not set -q _ENVOKE_WATCH_PID
-  command envoke watch &
-  set -gx _ENVOKE_WATCH_PID $last_pid
-end
-
 function _envoke_cleanup --on-event fish_exit
-  command envoke unload 2>/dev/null | grep -v '^trap ' | source 2>/dev/null; or true
-  if set -q _ENVOKE_WATCH_PID
-    kill $_ENVOKE_WATCH_PID 2>/dev/null; or true
+  if test -n "$_ENVOKE_WATCH_PID"
+    kill -0 "$_ENVOKE_WATCH_PID" 2>/dev/null; and kill "$_ENVOKE_WATCH_PID" 2>/dev/null; or true
     set -e _ENVOKE_WATCH_PID
   end
-  command envoke clear-cache 2>/dev/null; or true
+  command envoke unload 2>/dev/null | grep -v '^trap ' | source 2>/dev/null; or true
+  command envoke clear-cache >/dev/null 2>/dev/null; or true
 end
+set -g _ENVOKE_LAST_UNLOAD_TOKEN (_envoke_unload_token 2>/dev/null; or echo "")
+test -n "$_ENVOKE_WATCH_PID"; or { command envoke watch &; set -gx _ENVOKE_WATCH_PID $last_pid; }
 `
 
 // ── clear-cache + watch ───────────────────────────────────────────────────────
