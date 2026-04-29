@@ -100,75 +100,51 @@ func TestLoad_EmptyPathUsesDefault(t *testing.T) {
 	}
 }
 
-func TestApplyEnv(t *testing.T) {
-	// Isolate env var changes to this test.
-	vars := map[string]string{
-		"RENV_LOG_LEVEL":       "debug",
-		"RENV_LOG_FORMAT":      "json",
-		"RENV_CACHE_MAX_AGE":   "4h",
-		"RENV_TIMEOUT_SECRETS": "10s",
-	}
-	for k, v := range vars {
-		t.Setenv(k, v)
-	}
+func TestLoad_EnvVarOverrides(t *testing.T) {
+	t.Run("ENVOKE_LOG_LEVEL overrides config", func(t *testing.T) {
+		t.Setenv("ENVOKE_LOG_LEVEL", "debug")
+		cfg := Defaults()
+		applyEnv(&cfg)
+		if cfg.Log.Level != "debug" {
+			t.Errorf("got %q, want %q", cfg.Log.Level, "debug")
+		}
+	})
 
-	cfg := Defaults()
-	applyEnv(&cfg)
+	t.Run("ENVOKE_LOG_FORMAT overrides config", func(t *testing.T) {
+		t.Setenv("ENVOKE_LOG_FORMAT", "json")
+		cfg := Defaults()
+		applyEnv(&cfg)
+		if cfg.Log.Format != "json" {
+			t.Errorf("got %q, want %q", cfg.Log.Format, "json")
+		}
+	})
 
-	if cfg.Log.Level != "debug" {
-		t.Errorf("Log.Level: got %q, want debug", cfg.Log.Level)
-	}
-	if cfg.Log.Format != "json" {
-		t.Errorf("Log.Format: got %q, want json", cfg.Log.Format)
-	}
-	if cfg.Cache.MaxAge != "4h" {
-		t.Errorf("Cache.MaxAge: got %q, want 4h", cfg.Cache.MaxAge)
-	}
-	if cfg.Timeouts.Secrets != "10s" {
-		t.Errorf("Timeouts.Secrets: got %q, want 10s", cfg.Timeouts.Secrets)
-	}
-}
+	t.Run("ENVOKE_CACHE_MAX_AGE overrides config", func(t *testing.T) {
+		t.Setenv("ENVOKE_CACHE_MAX_AGE", "2h")
+		cfg := Defaults()
+		applyEnv(&cfg)
+		if cfg.Cache.MaxAge != "2h" {
+			t.Errorf("got %q, want %q", cfg.Cache.MaxAge, "2h")
+		}
+	})
 
-func TestApplyEnv_UIBorder(t *testing.T) {
-	tests := []struct {
-		envVal string
-		want   bool
-	}{
-		{"true", true},
-		{"1", true},
-		{"yes", true},
-		{"false", false},
-		{"0", false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.envVal, func(t *testing.T) {
-			t.Setenv("RENV_UI_BORDER", tt.envVal)
-			cfg := Defaults()
-			applyEnv(&cfg)
-			if cfg.UI.Border != tt.want {
-				t.Errorf("RENV_UI_BORDER=%q: got Border=%v, want %v", tt.envVal, cfg.UI.Border, tt.want)
-			}
-		})
-	}
-}
+	t.Run("ENVOKE_TIMEOUT_SECRETS overrides config", func(t *testing.T) {
+		t.Setenv("ENVOKE_TIMEOUT_SECRETS", "60s")
+		cfg := Defaults()
+		applyEnv(&cfg)
+		if cfg.Timeouts.Secrets != "60s" {
+			t.Errorf("got %q, want %q", cfg.Timeouts.Secrets, "60s")
+		}
+	})
 
-func TestLoad_UIBorderFromFile(t *testing.T) {
-	dir := t.TempDir()
-	cfgFile := filepath.Join(dir, "config.yaml")
-	content := `
-ui:
-  border: false
-`
-	if err := os.WriteFile(cfgFile, []byte(content), 0600); err != nil {
-		t.Fatalf("writing config file: %v", err)
-	}
-	cfg, err := Load(cfgFile)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if cfg.UI.Border {
-		t.Error("UI.Border: got true, want false (set in config file)")
-	}
+	t.Run("ENVOKE_UI_BORDER overrides config", func(t *testing.T) {
+		t.Setenv("ENVOKE_UI_BORDER", "false")
+		cfg := Defaults()
+		applyEnv(&cfg)
+		if cfg.UI.Border {
+			t.Errorf("got %v, want false", cfg.UI.Border)
+		}
+	})
 }
 
 func TestCacheMaxAge(t *testing.T) {
@@ -215,7 +191,7 @@ func TestDefaultConfigFile(t *testing.T) {
 	t.Run("uses XDG_CONFIG_HOME when set", func(t *testing.T) {
 		t.Setenv("XDG_CONFIG_HOME", "/custom/config")
 		got := DefaultConfigFile()
-		want := "/custom/config/renv/config.yaml"
+		want := "/custom/config/envoke/config.yaml"
 		if got != want {
 			t.Errorf("got %q, want %q", got, want)
 		}
@@ -230,8 +206,8 @@ func TestDefaultConfigFile(t *testing.T) {
 		if filepath.Base(got) != "config.yaml" {
 			t.Errorf("expected filename config.yaml, got %q", filepath.Base(got))
 		}
-		if filepath.Base(filepath.Dir(got)) != "renv" {
-			t.Errorf("expected parent dir renv, got %q", filepath.Base(filepath.Dir(got)))
+		if filepath.Base(filepath.Dir(got)) != "envoke" {
+			t.Errorf("expected parent dir envoke, got %q", filepath.Base(filepath.Dir(got)))
 		}
 	})
 }

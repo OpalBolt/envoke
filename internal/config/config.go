@@ -1,9 +1,9 @@
-// Package config provides structured configuration for renv/kctx.
+// Package config provides structured configuration for envoke.
 //
 // Loading order (later sources override earlier ones):
 //  1. Built-in defaults
-//  2. Config file ($XDG_CONFIG_HOME/renv/config.yaml, or --config path)
-//  3. Environment variables (RENV_*)
+//  2. Config file ($XDG_CONFIG_HOME/envoke/config.yaml, or --config path)
+//  3. Environment variables (ENVOKE_*)
 //  4. CLI flags (applied by the caller after Load returns)
 package config
 
@@ -16,7 +16,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Config holds all tunable parameters shared by renv and kctx.
+// Config holds all tunable parameters for envoke.
 type Config struct {
 	Log      LogConfig     `yaml:"log"`
 	Cache    CacheConfig   `yaml:"cache"`
@@ -104,23 +104,23 @@ func DefaultConfigFile() string {
 		}
 		dir = filepath.Join(home, ".config")
 	}
-	return filepath.Join(dir, "renv", "config.yaml")
+	return filepath.Join(dir, "envoke", "config.yaml")
 }
 
 func applyEnv(cfg *Config) {
-	if v := os.Getenv("RENV_LOG_LEVEL"); v != "" {
+	if v := os.Getenv("ENVOKE_LOG_LEVEL"); v != "" {
 		cfg.Log.Level = v
 	}
-	if v := os.Getenv("RENV_LOG_FORMAT"); v != "" {
+	if v := os.Getenv("ENVOKE_LOG_FORMAT"); v != "" {
 		cfg.Log.Format = v
 	}
-	if v := os.Getenv("RENV_CACHE_MAX_AGE"); v != "" {
+	if v := os.Getenv("ENVOKE_CACHE_MAX_AGE"); v != "" {
 		cfg.Cache.MaxAge = v
 	}
-	if v := os.Getenv("RENV_TIMEOUT_SECRETS"); v != "" {
+	if v := os.Getenv("ENVOKE_TIMEOUT_SECRETS"); v != "" {
 		cfg.Timeouts.Secrets = v
 	}
-	if v := os.Getenv("RENV_UI_BORDER"); v != "" {
+	if v := os.Getenv("ENVOKE_UI_BORDER"); v != "" {
 		cfg.UI.Border = v != "false" && v != "0"
 	}
 }

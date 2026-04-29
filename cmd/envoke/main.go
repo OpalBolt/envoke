@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"sort"
 	"strings"
 	"syscall"
@@ -74,7 +75,7 @@ The .env file supports KCTX_<name>=bw://... entries that load kubeconfigs into t
 	}
 
 	root.PersistentFlags().BoolVar(&verbose, "verbose", false, "Enable debug logging (shorthand for --log-level=debug)")
-	root.PersistentFlags().StringVar(&cfgFile, "config", "", "Config file path (default: $XDG_CONFIG_HOME/renv/config.yaml)")
+	root.PersistentFlags().StringVar(&cfgFile, "config", "", "Config file path (default: $XDG_CONFIG_HOME/envoke/config.yaml)")
 	root.PersistentFlags().StringVar(&logLevel, "log-level", "", "Log level: debug, info, warn, error")
 	root.SetVersionTemplate("{{.Name}} {{.Version}}\n")
 
@@ -86,6 +87,7 @@ The .env file supports KCTX_<name>=bw://... entries that load kubeconfigs into t
 		switchCmd(&cfg),
 		unloadCmd(&cfg),
 		statusCmd(),
+		configCmd(&cfg),
 		shellInitCmd(),
 		clearCacheCmd(),
 		watchCmd(),
@@ -897,3 +899,98 @@ On sleep: all caches are cleared, requiring full re-authentication after wake.`,
 		},
 	}
 }
+
+// ── config ────────────────────────────────────────────────────────────────────
+
+func configCmd(cfg *config.Config) *cobra.Command {
+	var doInit bool
+	var force bool
+
+	cmd := &cobra.Command{
+		Use:   "config",
+		Short: "Show configuration help or initialise a config file",
+		Long: `Display envoke configuration documentation.
+
+Config file location:
+  $XDG_CONFIG_HOME/envoke/config.yaml
+  (typically ~/.config/envoke/config.yaml)
+
+Override with the --config flag:
+  envoke --config /path/to/config.yaml <command>
+
+Environment variable overrides (ENVOKE_*):
+  ENVOKE_LOG_LEVEL        Log level: debug, info, warn, error
+  ENVOKE_LOG_FORMAT       Log format: text or json
+  ENVOKE_CACHE_MAX_AGE    Cache TTL (Go duration, e.g. 8h)
+  ENVOKE_TIMEOUT_SECRETS  Secret manager CLI timeout (e.g. 30s)
+  ENVOKE_UI_BORDER        Show UI border: true or false
+  ENVOKE_BW_PASSWORD      Bitwarden master password (skips interactive prompt)
+
+Flags:
+  --init    Write a default commented config file to the config path`,
+		// Skip root's PersistentPreRunE (config.Load) so a malformed config
+		// file doesn't block "envoke config --init --force" from fixing it.
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error { return nil },
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if !doInit {
+				return cmd.Help()
+			}
+
+			// Determine target path
+			var path string
+			if cfgFile := cmd.Root().PersistentFlags().Lookup("config"); cfgFile != nil && cfgFile.Value.String() != "" {
+				path = cfgFile.Value.String()
+			} else {
+				path = config.DefaultConfigFile()
+			}
+
+			// Create parent directory if needed
+			dir := filepath.Dir(path)
+			if dir != "." && dir != "" {
+				if err := os.MkdirAll(dir, 0o700); err != nil {
+					return fmt.Errorf("creating directory %s: %w", dir, err)
+				}
+			}
+
+			// Check if file exists
+			if _, err := os.Stat(path); err == nil && !force {
+				return fmt.Errorf("config file already exists: %s (use --force to overwrite)", path)
+			}
+
+			// Write template
+			if err := os.WriteFile(path, []byte(defaultConfigTemplate), 0o600); err != nil {
+				return fmt.Errorf("writing config file: %w", err)
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "wrote %s\n", path)
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVar(&doInit, "init", false, "Write a default commented config file to the config path")
+	cmd.Flags().BoolVar(&force, "force", false, "Overwrite existing config file")
+	return cmd
+}
+
+const defaultConfigTemplate = `# envoke configuration
+# Location: $XDG_CONFIG_HOME/envoke/config.yaml
+# Override: envoke --config /path/to/config.yaml <command>
+
+log:
+  # Minimum log level: debug, info, warn, error (env: ENVOKE_LOG_LEVEL)
+  level: warn
+  # Output format: text or json (env: ENVOKE_LOG_FORMAT)
+  format: text
+
+cache:
+  # Maximum age of cached Bitwarden folder items (env: ENVOKE_CACHE_MAX_AGE)
+  max_age: 8h
+
+timeouts:
+  # Timeout for secret manager CLI subprocess calls (env: ENVOKE_TIMEOUT_SECRETS)
+  secrets: 30s
+
+ui:
+  # Show a rounded border on the loaded/unloaded panel (env: ENVOKE_UI_BORDER)
+  border: true
+`

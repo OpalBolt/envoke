@@ -146,3 +146,49 @@ func stderrFromErr(err error) string {
 	}
 	return err.Error()
 }
+
+// TestEnvokeConfigHelp verifies that the config command outputs help text
+// containing expected keywords when run without --init.
+func TestEnvokeConfigHelp(t *testing.T) {
+	out, err := exec.Command(envokeBin, "config").CombinedOutput()
+	if err != nil {
+		t.Fatalf("envoke config: %v\n%s", err, out)
+	}
+	output := string(out)
+	for _, want := range []string{"XDG_CONFIG_HOME", "ENVOKE_LOG_LEVEL", "--init"} {
+		if !strings.Contains(output, want) {
+			t.Errorf("envoke config output missing %q\ngot: %s", want, output)
+		}
+	}
+}
+
+// TestEnvokeConfigInit verifies that the config --init flag creates a config file
+// and respects the --force flag for overwriting.
+func TestEnvokeConfigInit(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+
+	// First write succeeds.
+	out, err := exec.Command(envokeBin, "--config", cfgPath, "config", "--init").CombinedOutput()
+	if err != nil {
+		t.Fatalf("envoke config --init: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(cfgPath); err != nil {
+		t.Fatalf("config file not created: %v", err)
+	}
+	if !strings.Contains(string(out), cfgPath) {
+		t.Errorf("output should mention written path; got: %s", out)
+	}
+
+	// Second write without --force should fail.
+	out, err = exec.Command(envokeBin, "--config", cfgPath, "config", "--init").CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected error on second --init without --force, got none\nout: %s", out)
+	}
+
+	// Second write with --force succeeds.
+	out, err = exec.Command(envokeBin, "--config", cfgPath, "config", "--init", "--force").CombinedOutput()
+	if err != nil {
+		t.Fatalf("envoke config --init --force: %v\n%s", err, out)
+	}
+}

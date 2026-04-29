@@ -72,7 +72,7 @@ After fetching secrets from Bitwarden, the result is cached using AES-256-CBC wi
 | **Bitwarden password** | Unlock your Bitwarden vault | Piped to `bw unlock` via stdin; never persisted |
 | **Local password** | Encrypt/decrypt the `/dev/shm` cache | Held in process memory only |
 
-In automation, set `RENV_BW_PASSWORD` and `RENV_LOCAL_PASSWORD` environment variables to skip interactive prompts.
+In automation, set `ENVOKE_BW_PASSWORD` as an environment variable to skip the interactive Bitwarden password prompt.
 
 ## Architecture overview
 
