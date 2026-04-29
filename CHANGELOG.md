@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/OpalBolt/envoke/compare/v0.6.0...v0.7.0) (2026-04-29)
+
+
+### Features
+
+* **config:** migrate to envoke path/prefix, add config subcommand ([#61](https://github.com/OpalBolt/envoke/issues/61)) ([#62](https://github.com/OpalBolt/envoke/issues/62)) ([12fa4f8](https://github.com/OpalBolt/envoke/commit/12fa4f8f0ea18aea9b4af5d18d94dd7703f28df1))
+
 ## [0.6.0](https://github.com/OpalBolt/envoke/compare/v0.5.0...v0.6.0) (2026-04-28)
 
 
