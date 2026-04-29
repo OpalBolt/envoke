@@ -973,24 +973,53 @@ Flags:
 }
 
 const defaultConfigTemplate = `# envoke configuration
-# Location: $XDG_CONFIG_HOME/envoke/config.yaml
-# Override: envoke --config /path/to/config.yaml <command>
+#
+# Default location: $XDG_CONFIG_HOME/envoke/config.yaml
+#                   (~/.config/envoke/config.yaml if XDG_CONFIG_HOME is unset)
+#
+# Override path with: envoke --config /path/to/config.yaml <command>
+#
+# Precedence (highest to lowest):
+#   CLI flags  >  environment variables (ENVOKE_*)  >  this file  >  built-in defaults
+#
+# Authentication
+# --------------
+# envoke uses your Bitwarden master password to unlock the vault on first access.
+# Supply it non-interactively via environment variable to avoid TTY prompts:
+#
+#   ENVOKE_BW_PASSWORD  — master password, piped to bw unlock; never written to disk
+#   BW_SESSION          — pre-existing Bitwarden session token (skips bw unlock entirely)
 
 log:
-  # Minimum log level: debug, info, warn, error (env: ENVOKE_LOG_LEVEL)
+  # Minimum log level written to stderr.
+  # Values: debug | info | warn | error
+  # Env:    ENVOKE_LOG_LEVEL
+  # Flag:   --log-level, --verbose (shorthand for debug)
   level: warn
-  # Output format: text or json (env: ENVOKE_LOG_FORMAT)
+
+  # Log output format.
+  # Values: text | json
+  # Env:    ENVOKE_LOG_FORMAT
   format: text
 
 cache:
-  # Maximum age of cached Bitwarden folder items (env: ENVOKE_CACHE_MAX_AGE)
+  # Maximum age of cached Bitwarden folder/collection items.
+  # After this TTL expires envoke discards the local cache and re-fetches from
+  # Bitwarden (requiring your master password or BW_SESSION again).
+  # Accepts Go duration strings: 1h, 8h, 24h, etc.
+  # Env: ENVOKE_CACHE_MAX_AGE
   max_age: 8h
 
 timeouts:
-  # Timeout for secret manager CLI subprocess calls (env: ENVOKE_TIMEOUT_SECRETS)
+  # Timeout applied to each Bitwarden CLI (bw) subprocess call.
+  # Covers: bw status, bw unlock, bw list folders/items/collections.
+  # Accepts Go duration strings: 10s, 30s, 1m, etc.
+  # Env: ENVOKE_TIMEOUT_SECRETS
   secrets: 30s
 
 ui:
-  # Show a rounded border on the loaded/unloaded panel (env: ENVOKE_UI_BORDER)
+  # Show a rounded border on the secrets-loaded/unloaded summary panel.
+  # Set to false for minimal output or when piping stderr.
+  # Env: ENVOKE_UI_BORDER
   border: true
 `
