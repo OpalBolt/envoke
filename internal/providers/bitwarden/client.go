@@ -55,11 +55,11 @@ func (c *BWClient) timeout() time.Duration {
 }
 
 // Session returns an active BW session token.
-// Precedence: BW_SESSION env var → RENV_BW_PASSWORD env var → BWPassword field → prompt on /dev/tty
+// Precedence: BW_SESSION env var → ENVOKE_BW_PASSWORD env var → BWPassword field → prompt on /dev/tty
 //
 // The session token is held in process memory only and is never written to disk.
 // Each invocation that requires Bitwarden access will prompt for BWPassword unless
-// BW_SESSION or RENV_BW_PASSWORD is set.
+// BW_SESSION or ENVOKE_BW_PASSWORD is set.
 func (c *BWClient) Session() (string, error) {
 	if c.session != "" {
 		return c.session, nil
@@ -72,8 +72,8 @@ func (c *BWClient) Session() (string, error) {
 		return c.session, nil
 	}
 
-	// 2. RENV_BW_PASSWORD → unlock
-	pw := os.Getenv("RENV_BW_PASSWORD")
+	// 2. ENVOKE_BW_PASSWORD → unlock
+	pw := os.Getenv("ENVOKE_BW_PASSWORD")
 	if pw == "" {
 		pw = c.BWPassword
 	}

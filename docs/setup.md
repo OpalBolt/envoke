@@ -22,7 +22,7 @@ envoke shell-init --shell fish | source
 
 ### What shell-init does
 
-- Defines `envoke()`, `renv()`, and `kctx()` shell functions (all backed by the single `envoke` binary)
+- Defines an `envoke()` shell function that auto-evals `resolve`, `unload`, and `switch` output
 - Starts a background watcher (`envoke watch`) that detects screen lock and system sleep
 - Installs a `PROMPT_COMMAND` / `precmd` hook that checks for unload signals
 - Installs an EXIT trap that unloads secrets, clears the cache, and kills the watcher
@@ -33,7 +33,7 @@ The watcher removes secrets from your shell on screen lock and clears the cache 
 
 The config file is optional. Defaults are sensible for most use cases.
 
-**Location:** `$XDG_CONFIG_HOME/renv/config.yaml` (typically `~/.config/renv/config.yaml`)
+**Location:** `$XDG_CONFIG_HOME/envoke/config.yaml` (typically `~/.config/envoke/config.yaml`)
 
 ```yaml
 log:
@@ -56,13 +56,12 @@ Environment variables override the config file. CLI flags override both.
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `RENV_LOG_LEVEL` | Log level: `debug`, `info`, `warn`, `error` | `warn` |
-| `RENV_LOG_FORMAT` | Log format: `text` or `json` | `text` |
-| `RENV_CACHE_MAX_AGE` | Cache TTL (Go duration, e.g. `8h`, `24h`) | `8h` |
-| `RENV_TIMEOUT_SECRETS` | Secret manager CLI timeout | `30s` |
-| `RENV_UI_BORDER` | Show UI borders: `true`/`false` | `true` |
-| `RENV_BW_PASSWORD` | Bitwarden master password (skips interactive prompt) | — |
-| `RENV_LOCAL_PASSWORD` | Local cache encryption password (skips interactive prompt) | — |
+| `ENVOKE_LOG_LEVEL` | Log level: `debug`, `info`, `warn`, `error` | `warn` |
+| `ENVOKE_LOG_FORMAT` | Log format: `text` or `json` | `text` |
+| `ENVOKE_CACHE_MAX_AGE` | Cache TTL (Go duration, e.g. `8h`, `24h`) | `8h` |
+| `ENVOKE_TIMEOUT_SECRETS` | Secret manager CLI timeout | `30s` |
+| `ENVOKE_UI_BORDER` | Show UI borders: `true`/`false` | `true` |
+| `ENVOKE_BW_PASSWORD` | Bitwarden master password (skips interactive prompt) | — |
 | `BW_SESSION` | Pre-existing Bitwarden session token (skips `bw unlock`) | — |
 
 ## Bitwarden prerequisites
@@ -76,8 +75,7 @@ Environment variables override the config file. CLI flags override both.
 In non-interactive environments, supply passwords via environment variables to avoid TTY prompts:
 
 ```bash
-export RENV_BW_PASSWORD="your-bitwarden-master-password"
-export RENV_LOCAL_PASSWORD="your-local-cache-password"
+export ENVOKE_BW_PASSWORD="your-bitwarden-master-password"
 
 envoke resolve .env
 ```

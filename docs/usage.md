@@ -248,7 +248,7 @@ All commands accept these global flags:
 
 ## Cache behaviour
 
-Bitwarden folder data is cached encrypted in `/dev/shm` (or `/tmp` as fallback). The default TTL is 8 hours, configurable via `RENV_CACHE_MAX_AGE`.
+Bitwarden folder data is cached encrypted in `/dev/shm` (or `/tmp` as fallback). The default TTL is 8 hours, configurable via `ENVOKE_CACHE_MAX_AGE`.
 
 Within the TTL, only your **local password** is prompted — Bitwarden is not contacted. After the TTL expires, or after `clear-cache`, both passwords are prompted again.
 
