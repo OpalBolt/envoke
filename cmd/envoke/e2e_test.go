@@ -33,10 +33,10 @@ func TestMain(m *testing.M) {
 		panic("building envoke: " + buildErr.Error() + "\n" + string(out))
 	}
 
-	// Point XDG_CONFIG_HOME at the temp dir so the binary never tries to read
-	// the real user config — keeps tests hermetic and avoids permission errors
-	// in sandboxed environments.
-	os.Setenv("XDG_CONFIG_HOME", dir)
+	// Point XDG_CONFIG_HOME at a subdirectory so the config path
+	// (~/.config/envoke/config.yaml) does not collide with the "envoke" binary
+	// that lives in dir itself.
+	os.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
 
 	// os.Exit skips deferred calls — capture the code, clean up, then exit.
 	code := m.Run()
