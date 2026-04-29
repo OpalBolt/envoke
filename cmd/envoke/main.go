@@ -752,7 +752,7 @@ const bashCombinedInitScript = `
 envoke() {
   case "$1" in
     resolve) envoke_eval resolve "${@:2}" ;;
-    unload) envoke_eval unload ;;
+    unload) envoke_eval unload "${@:2}" ;;
     switch) envoke_eval switch "${@:2}"; _ENVOKE_LAST_UNLOAD_TOKEN="$(_envoke_unload_token 2>/dev/null || true)" ;;
     *) command envoke "$@" ;;
   esac
@@ -768,7 +768,7 @@ envoke_eval() {
 _envoke_unload_token() {
   local f="{{SECUREDIR}}/envoke-${UID}-unload-requested"
   [ -f "$f" ] || return 1
-  stat -c '%Y:%i:%s' "$f" 2>/dev/null || stat -f '%m:%i:%z' "$f" 2>/dev/null || true
+  stat -c '%Y:%i:%s' "$f" 2>/dev/null || stat -f '%m:%i:%z' "$f" 2>/dev/null || echo "exists"
 }
 _envoke_check_unload() {
   local t; t="$(_envoke_unload_token)" || return 0
@@ -786,7 +786,7 @@ const fishCombinedInitScript = `
 function envoke
   switch $argv[1]
     case resolve; envoke_eval resolve $argv[2..]
-    case unload; envoke_eval unload
+    case unload; envoke_eval unload $argv[2..]
     case switch; envoke_eval switch $argv[2..]; set -g _ENVOKE_LAST_UNLOAD_TOKEN (_envoke_unload_token 2>/dev/null; or echo "")
     case '*'; command envoke $argv
   end
@@ -802,15 +802,23 @@ function envoke_eval
   printf '%s\n' $_out | grep -v '^trap ' | source
 end
 function _envoke_unload_token
-  set -l f {{SECUREDIR}}/envoke-(id -u)-unload-requested
-  test -f $f; or return 1
-  stat -c '%Y:%i:%s' $f 2>/dev/null; or stat -f '%m:%i:%z' $f 2>/dev/null; or true
+  set -l f "{{SECUREDIR}}/envoke-(id -u)-unload-requested"
+  test -f "$f"; or return 1
+  stat -c '%Y:%i:%s' "$f" 2>/dev/null; or stat -f '%m:%i:%z' "$f" 2>/dev/null; or echo "exists"
 end
 function _envoke_check_unload --on-event fish_prompt
   set -l t (_envoke_unload_token); or return
   test "$_ENVOKE_LAST_UNLOAD_TOKEN" = "$t"; and return
   set -g _ENVOKE_LAST_UNLOAD_TOKEN $t
   command envoke unload 2>/dev/null | grep -v '^trap ' | source 2>/dev/null; or true
+end
+function _envoke_cleanup --on-event fish_exit
+  if test -n "$_ENVOKE_WATCH_PID"
+    kill -0 $_ENVOKE_WATCH_PID 2>/dev/null; and kill $_ENVOKE_WATCH_PID 2>/dev/null; or true
+    set -e _ENVOKE_WATCH_PID
+  end
+  command envoke unload 2>/dev/null | grep -v '^trap ' | source 2>/dev/null; or true
+  command envoke clear-cache >/dev/null 2>/dev/null; or true
 end
 set -g _ENVOKE_LAST_UNLOAD_TOKEN (_envoke_unload_token 2>/dev/null; or echo "")
 test -n "$_ENVOKE_WATCH_PID"; or { command envoke watch &; set -gx _ENVOKE_WATCH_PID $last_pid; }
