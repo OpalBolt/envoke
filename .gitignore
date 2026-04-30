@@ -43,4 +43,3 @@ go.work.sum
 # Local tooling
 .blip/
 .gocache/
-settings.local.json
