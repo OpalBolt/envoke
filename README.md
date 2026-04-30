@@ -21,7 +21,8 @@ Secrets are cached encrypted in `/dev/shm` (RAM-backed tmpfs) and cleared automa
 
 ## Documentation
 
-- [Installation & configuration](docs/install.md)
+- [Installation & setup](docs/install.md)
+- [Configuration](docs/config.md)
 - [Command reference](docs/reference.md)
 - [Known limitations](docs/limitations.md)
 - [direnv integration](docs/direnv.md)

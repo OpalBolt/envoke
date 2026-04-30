@@ -60,54 +60,20 @@ The shell-init snippet:
 
 ## Configuration
 
-The config file is optional. Built-in defaults are sensible for most setups.
+Configuration is optional. For details on all config options, environment variables, credential handling, and examples, see [Configuration](config.md).
 
-**Location:** `$XDG_CONFIG_HOME/envoke/config.yaml`  
-(typically `~/.config/envoke/config.yaml` when `XDG_CONFIG_HOME` is unset)
+Quick start:
 
-**Override path:** `envoke --config /path/to/config.yaml <command>`
-
-**Generate a commented default file:**
 ```bash
+# Generate commented default config
 envoke config --init
+
+# Override config at runtime
+envoke --config /path/to/config.yaml resolve .env
 ```
 
-### Config file reference
-
-```yaml
-log:
-  level: warn        # debug | info | warn | error
-  format: text       # text | json
-
-cache:
-  max_age: 8h        # TTL for cached Bitwarden folder data
-
-timeouts:
-  secrets: 30s       # timeout for bw CLI subprocess calls
-
-ui:
-  border: true       # show rounded box borders on summary panels
-```
-
-### Environment variable overrides
-
-Environment variables override the config file. CLI flags override both.
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `ENVOKE_LOG_LEVEL` | Log level: `debug`, `info`, `warn`, `error` | `warn` |
-| `ENVOKE_LOG_FORMAT` | Log format: `text` or `json` | `text` |
-| `ENVOKE_CACHE_MAX_AGE` | Cache TTL (Go duration string, e.g. `8h`, `24h`) | `8h` |
-| `ENVOKE_TIMEOUT_SECRETS` | Bitwarden CLI subprocess timeout | `30s` |
-| `ENVOKE_UI_BORDER` | Show UI borders: `true` / `false` | `true` |
-| `ENVOKE_BW_PASSWORD` | Bitwarden master password (skips interactive prompt) | — |
-| `BW_SESSION` | Pre-existing Bitwarden session token (skips `bw unlock`) | — |
-
-### Precedence
-
-```
-CLI flags  >  ENVOKE_* env vars  >  config file  >  built-in defaults
-```
+**Environment variable precedence:**  
+CLI flags > ENVOKE_* env vars > config file > built-in defaults
 
 ---
 
@@ -119,16 +85,18 @@ CLI flags  >  ENVOKE_* env vars  >  config file  >  built-in defaults
 
 ## Automation / CI
 
-Supply credentials via environment variables to avoid interactive prompts:
+For headless/CI environments, supply credentials via environment variables:
 
 ```bash
 export ENVOKE_BW_PASSWORD="your-master-password"
 envoke resolve .env
 ```
 
-Or provide a pre-existing session token to skip `bw unlock` entirely:
+Or use a pre-existing session token:
 
 ```bash
 export BW_SESSION="$(bw unlock --raw)"
 envoke resolve .env
 ```
+
+For detailed configuration options and examples, see [Configuration](config.md).
