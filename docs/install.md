@@ -85,18 +85,4 @@ CLI flags > ENVOKE_* env vars > config file > built-in defaults
 
 ## Automation / CI
 
-For headless/CI environments, supply credentials via environment variables:
-
-```bash
-export ENVOKE_BW_PASSWORD="your-master-password"
-envoke resolve .env
-```
-
-Or use a pre-existing session token:
-
-```bash
-export BW_SESSION="$(bw unlock --raw)"
-envoke resolve .env
-```
-
-For detailed configuration options and examples, see [Configuration](config.md).
+For headless/CI environments, use `envoke exec` (no shell functions needed) or supply credentials via `ENVOKE_BW_PASSWORD` / `BW_SESSION` to avoid interactive prompts. See [Configuration — Credential handling](config.md#credential-handling).

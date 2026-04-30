@@ -31,7 +31,8 @@ Secrets are cached in `/run/user/<uid>` (or `/dev/shm` as fallback) and cleared 
 
 - [Installation & setup](docs/install.md)
 - [Configuration](docs/config.md)
-- [Command reference](docs/reference.md)
+- [Usage](docs/usage.md)
+- [Reference](docs/reference.md)
 - [Known limitations](docs/limitations.md)
 - [direnv integration](docs/direnv.md)
 - [Nix integration](docs/nix.md)
