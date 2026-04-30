@@ -43,3 +43,8 @@ go.work.sum
 # Local tooling
 .blip/
 .gocache/
+
+# Developer-local and legacy files
+.mcp.json
+human-test/
+.claude/
