@@ -1,269 +1,157 @@
 # Usage
 
-## envoke
+## envoke resolve
 
-`envoke` is the unified binary. Use it to load secrets and kubeconfigs in one command.
-
-### envoke resolve
-
-Resolves a `.env` file, loading secrets as shell exports and kubeconfigs into named stores.
+Resolves a `.env` file, exporting secrets as shell variables and loading kubeconfig directives into the named store.
 
 ```bash
 envoke resolve           # resolves .env in current directory
-envoke resolve secrets.env
+envoke resolve prod.env  # resolves a specific file
 ```
 
-**Example `.env`:**
-```bash
-# Plain values pass through unchanged
-DB_HOST=postgres.internal
+Output must be evaluated by your shell. With shell-init active this is automatic:
 
-# Secret references are resolved at load time
-DB_PASSWORD=bw://database/prod-db
-
-# KCTX_ lines load kubeconfigs into named stores (not exported as env vars)
-KCTX_PROD=bw://kubernetes/prod-cluster
-```
-
-With shell-init active, no explicit `eval` is needed:
 ```bash
 envoke resolve .env
-# Secrets are now in your environment
-# kctx prod / kctx staging are ready to use
+# secrets are now in your environment
+# KCTX_* entries are loaded; use envoke switch <name> to activate one
 ```
 
 Without shell-init:
+
 ```bash
 eval "$(envoke resolve .env)"
 ```
 
-### envoke unload
+**Flags:**
 
-Unsets all variables that were loaded by the last `envoke resolve`, and removes any managed kubeconfig temp files.
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--file`, `-f` | Path to .env file | `.env` |
+| `--shell` | Shell type for trap generation: `bash`, `zsh`, `fish` | `bash` |
+| `--force` | Bypass terminal check and print exports to terminal | `false` |
+
+## envoke exec
+
+Runs a command with the resolved environment injected. No `eval` required — suitable for CI and scripts.
+
+```bash
+envoke exec -- myprogram --flag value
+envoke exec --env secrets.env -- python manage.py migrate
+```
+
+The resolved variables are injected into the subprocess environment only — the current shell is not modified.
+
+**Flags:**
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--env`, `-e` | Path to .env file | `.env` |
+
+## envoke yaml
+
+Resolves `bw://` references inside a YAML file and prints the result.
+
+```bash
+envoke yaml config.yaml
+envoke yaml config.yaml --key database.password   # extract a single value
+```
+
+**Flags:**
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--key` | Dot-notation key to extract (e.g. `database.password`) | — |
+
+## envoke load
+
+Fetches a kubeconfig from Bitwarden and caches it under a local name.
+
+```bash
+envoke load prod bw://kubernetes/prod-cluster
+envoke load dev bw://collection:k8s/dev-cluster
+```
+
+Names must match `[a-zA-Z0-9._-]+`.
+
+## envoke switch
+
+Activates a named kubeconfig by setting `KUBECONFIG` in your shell.
+
+```bash
+envoke switch prod
+envoke switch staging bw://k8s/staging   # fetch on the fly if not pre-loaded
+```
+
+Output must be evaluated. With shell-init active this is automatic:
+
+```bash
+envoke switch prod
+```
+
+Without shell-init:
+
+```bash
+eval "$(envoke switch prod)"
+```
+
+## envoke unload
+
+Unsets all variables exported by `envoke resolve` and clears `KUBECONFIG` if it was set by envoke.
 
 ```bash
 envoke unload
 ```
 
-### envoke clear-cache
+Output must be evaluated. With shell-init active this is automatic.
 
-Removes all encrypted cache files from `/dev/shm` (or `/tmp`) for the current user.
+## envoke status
+
+Shows tracked env vars, current `KUBECONFIG`, and named kubeconfigs in the local store.
+
+```bash
+envoke status
+```
+
+## envoke clear-cache
+
+Removes the stored Bitwarden session and all kubeconfig files from the secure cache directory (`/run/user/<uid>`, `/dev/shm`, or `/tmp`).
 
 ```bash
 envoke clear-cache
 ```
 
-### envoke shell-init
+## envoke shell-init
 
-Prints the shell integration snippet. Add to your shell config — see [Setup](setup.md).
+Prints the shell integration snippet. Add to your shell config — see [Installation](install.md#shell-integration).
 
 ```bash
-envoke shell-init            # bash/zsh
+envoke shell-init              # bash/zsh
 envoke shell-init --shell fish
 ```
 
-### envoke watch
+**Flags:**
 
-Background daemon for lock/sleep detection. Started automatically by shell-init. You do not normally need to run this manually.
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--shell` | Shell type: `bash`, `zsh`, `fish` | `bash` |
+| `--force` | Bypass terminal check (for scripting) | `false` |
 
----
+## envoke config
 
-## renv *(remote env)*
-
-`renv` handles environment secret resolution. All renv commands are available as `envoke renv <subcommand>`.
-
-### renv resolve
-
-Resolves secret references in a `.env` file and emits shell exports.
+Shows configuration documentation. Use `--init` to write a commented default config file.
 
 ```bash
-envoke renv resolve           # resolves .env
-envoke renv resolve prod.env  # resolves a specific file
+envoke config
+envoke config --init            # write ~/.config/envoke/config.yaml
+envoke config --init --force    # overwrite existing config file
 ```
 
-Output (evaluated by the shell function):
-```bash
-export DB_PASSWORD='s3cr3t'
-export API_TOKEN='ghp_abc123'
-```
+See [Configuration](config.md) for the full config reference.
 
-### renv exec
+## envoke watch
 
-Runs a command with the resolved environment injected, without modifying the current shell.
+Background daemon that watches for screen lock and sleep events. Normally started automatically by shell-init — you do not need to run this manually.
 
-```bash
-envoke renv exec --env secrets.env -- myapp --config prod
-envoke renv exec -- python manage.py migrate
-```
-
-The command replaces the `renv` process (`exec` syscall). The current shell environment is not affected.
-
-### renv yaml
-
-Resolves secret references inside a YAML file.
-
-```bash
-envoke renv yaml config.yaml
-envoke renv yaml config.yaml --key database.password
-```
-
-Any `bw://` values found anywhere in the YAML are resolved inline. Use `--key` to extract a single value using dot notation.
-
-### renv unload
-
-Unsets all variables that were tracked by the last `renv resolve`.
-
-```bash
-envoke renv unload
-```
-
-### renv status
-
-Shows which variables are currently loaded and the state of the cache.
-
-```bash
-envoke renv status
-```
-
-Output includes:
-- Tracked variable names
-- Cache file locations with ages (colour-coded: green < 30 min, yellow < 4 h, red older)
-
-### renv clear-cache
-
-Removes encrypted Bitwarden cache files for the current user.
-
-```bash
-envoke renv clear-cache
-```
-
----
-
-## kctx *(Keyless ConTeXt)*
-
-`kctx` manages named contexts fetched from Bitwarden — currently focused on kubeconfigs, with support for additional context types planned. All kctx commands are available as `envoke kctx <subcommand>`.
-
-### kctx load
-
-Fetches a kubeconfig and stores it encrypted in `/dev/shm` under a local name.
-
-```bash
-envoke kctx load prod bw://kubernetes/prod-cluster
-envoke kctx load dev bw://collection:k8s/dev-cluster
-```
-
-The name (`prod`, `staging`, `dev`) is how you'll refer to it in `kctx switch`. Names must match `[a-zA-Z0-9._-]+`.
-
-### kctx switch
-
-Decrypts a named kubeconfig and sets `KUBECONFIG` in your shell.
-
-```bash
-envoke kctx switch prod
-envoke kctx switch staging
-
-# Shorthand (with shell-init active):
-kctx prod
-kctx staging
-```
-
-If shell-init is active, the shorthand `kctx <name>` expands to `kctx switch <name>` automatically.
-
-You can also switch and fetch on-the-fly without pre-loading:
-```bash
-kctx switch prod bw://kubernetes/prod-cluster
-```
-
-### kctx unload
-
-Removes the managed kubeconfig temp file and unsets `KUBECONFIG`.
-
-```bash
-envoke kctx unload
-```
-
-### kctx status
-
-Shows the current `KUBECONFIG`, the active kubectl context, and all named kubeconfigs in the local store.
-
-```bash
-envoke kctx status
-```
-
-### kctx clear-cache
-
-Removes all encrypted kubeconfig store files and managed temp files.
-
-```bash
-envoke kctx clear-cache
-```
-
----
-
-## .env file reference
-
-### Syntax
-
-```bash
-# Comments start with #
-KEY=value                   # bare value
-KEY="value with spaces"     # double-quoted
-KEY='value with spaces'     # single-quoted
-export KEY=value            # export prefix is accepted and stripped
-```
-
-### Bitwarden reference format
-
-```bash
-KEY=bw://folder/item                    # password field (default)
-KEY=bw://folder/item/username           # username field
-KEY=bw://folder/item/note               # notes/secure note field
-KEY=bw://folder/item/totp               # TOTP code
-KEY=bw://folder/item/field:custom_name  # custom field by name
-KEY=bw://collection:name/item           # item in a named collection
-```
-
-### Kubeconfig directives (envoke only)
-
-```bash
-KCTX_NAME=bw://folder/item              # loaded into kctx named store as "name"
-```
-
-The `KCTX_` prefix is stripped and the remainder is lowercased to form the store name: `KCTX_PROD` → `prod`.
-
----
-
-## Flags
-
-All commands accept these global flags:
-
-| Flag | Description |
-|------|-------------|
-| `--verbose` | Enable debug logging |
-| `--log-level LEVEL` | Set log level: `debug`, `info`, `warn`, `error` |
-| `--no-cache` | Disable the encrypted cache (prompts Bitwarden every time) |
-| `--config PATH` | Path to config file |
-
----
-
-## Cache behaviour
-
-Bitwarden folder data is cached encrypted in `/dev/shm` (or `/tmp` as fallback). The default TTL is 8 hours, configurable via `ENVOKE_CACHE_MAX_AGE`.
-
-Within the TTL, only your **local password** is prompted — Bitwarden is not contacted. After the TTL expires, or after `clear-cache`, both passwords are prompted again.
-
-Use `--no-cache` to disable caching entirely and fetch from Bitwarden on every invocation.
-
----
-
-## Automatic cleanup
-
-When shell-init is active, the following events trigger automatic cleanup:
-
-| Event | Action |
-|-------|--------|
-| Shell exit | Unload secrets, clear cache, kill watcher |
-| Screen lock | Unset loaded variables in open shells |
-| System sleep | Clear cache and session (full re-auth on wake) |
-
-On Linux, lock and sleep detection uses D-Bus (requires systemd-logind). On macOS, sleep detection uses timer drift; screen lock requires a launchd agent (not bundled). On Windows, automatic detection is not yet implemented.
+On lock: secret variables are unloaded from open shells and managed kubeconfig tempfiles are removed. (Linux only — screen lock detection is not implemented on macOS. See [Known limitations](limitations.md).)  
+On sleep: all caches are cleared, requiring full re-authentication after wake.
