@@ -22,7 +22,7 @@ LDFLAGS := -s -w \
 	-X $(PKG).Commit=$(COMMIT) \
 	-X $(PKG).BuildDate=$(DATE)
 
-.PHONY: build build-envoke test test-race test-cover test-e2e lint fmt fmt-check shellcheck tidy govulncheck gosec clean install release
+.PHONY: build build-envoke test test-race test-cover test-e2e lint fmt fmt-check tidy govulncheck gosec clean install release
 
 build: build-envoke
 
@@ -50,9 +50,6 @@ fmt:
 
 fmt-check:
 	@unformatted=$$(go list -f '{{.Dir}}' ./... | xargs gofmt -l); if [ -n "$$unformatted" ]; then echo "The following files need formatting:"; echo "$$unformatted"; exit 1; fi
-
-shellcheck:
-	find snippets -name '*.sh' -print0 | xargs -0 shellcheck --severity=warning
 
 tidy:
 	go mod tidy && go mod verify

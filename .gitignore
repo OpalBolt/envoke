@@ -44,3 +44,8 @@ go.work.sum
 .blip/
 .gocache/
 settings.local.json
+
+# Developer-local and legacy files
+.mcp.json
+human-test/
+.claude/
