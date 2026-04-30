@@ -62,7 +62,7 @@ Controls output style.
 
 ### Cache max_age
 
-Duration string (Go format, e.g. `8h`, `24h`, `30m`) specifying how long Bitwarden folder data is cached in `/dev/shm` before requiring re-authentication.
+Duration string (Go format, e.g. `8h`, `24h`, `30m`) specifying how long Bitwarden folder data is cached before requiring re-authentication.
 
 Default: `8h` (8 hours)
 
@@ -132,7 +132,7 @@ The `BW_SESSION` token avoids storing the master password in the environment.
 ### Cache lifetime
 
 After successful authentication:
-- Bitwarden folder data is cached in `/dev/shm` for the duration of `ENVOKE_CACHE_MAX_AGE` (default: 8 hours)
+- Bitwarden folder data is cached in `/run/user/<uid>` (or `/dev/shm` / `/tmp` as fallback) for the duration of `ENVOKE_CACHE_MAX_AGE` (default: 8 hours)
 - Within the TTL, only your local password is prompted — Bitwarden is not contacted
 - After the TTL or after `envoke clear-cache`, both passwords are required again
 
@@ -204,13 +204,13 @@ This is temporary and does not modify the config file.
 
 ### Cache not working
 
-Verify `/dev/shm` exists and is writable:
+envoke stores the cache in the first writable directory from this list: `/run/user/<uid>`, `/dev/shm`, `/tmp`. Check which one is in use:
 
 ```bash
-ls -ld /dev/shm
+ls /run/user/$(id -u)/
 ```
 
-On systems without tmpfs, envoke falls back to `/tmp`, which works but is disk-backed (not RAM-backed). Secrets are still removed on exit but may persist on disk briefly.
+If only `/tmp` is available, secrets are disk-backed (not RAM-backed) but are still removed on exit.
 
 ### Slow Bitwarden requests
 

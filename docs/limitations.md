@@ -19,4 +19,4 @@ Tracked in [#10](https://github.com/OpalBolt/envoke/issues/10).
 
 ## Windows not officially supported
 
-GoReleaser targets for Windows have been dropped. The code compiles on Windows but is not tested or supported. There is no `/dev/shm` equivalent on Windows — secrets are cached in `%TEMP%`, which is not RAM-backed.
+GoReleaser targets for Windows have been dropped. The code compiles on Windows but is not tested or supported. There is no `/run/user/<uid>` or `/dev/shm` equivalent on Windows — secrets fall back to `%TEMP%`, which is not RAM-backed.

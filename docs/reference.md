@@ -183,7 +183,7 @@ All commands accept these flags:
 
 ## Cache behaviour
 
-Bitwarden folder data is cached in `/dev/shm` (RAM-backed tmpfs, falls back to `/tmp`). The default TTL is 8 hours, configurable via `ENVOKE_CACHE_MAX_AGE` or the config file.
+Bitwarden folder data is cached in `/run/user/<uid>` (systemd-logind tmpfs, mode 0700), falling back to `/dev/shm`, then `/tmp`. The default TTL is 8 hours, configurable via `ENVOKE_CACHE_MAX_AGE` or the config file.
 
 Within the TTL, only your local password is prompted — Bitwarden is not contacted. After the TTL or after `clear-cache`, both passwords are required again.
 
