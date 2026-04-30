@@ -124,7 +124,7 @@ envoke config --init            # write ~/.config/envoke/config.yaml
 envoke config --init --force    # overwrite existing config file
 ```
 
-See [Configuration](install.md#configuration) for the full config reference.
+See [Configuration](config.md) for the full config reference.
 
 ## envoke watch
 
@@ -183,11 +183,9 @@ All commands accept these flags:
 
 ## Cache behaviour
 
-Bitwarden folder data is cached encrypted in `/dev/shm` (RAM-backed tmpfs, falls back to `/tmp`). The default TTL is 8 hours, configurable via `ENVOKE_CACHE_MAX_AGE` or the config file.
+Bitwarden folder data is cached in `/dev/shm` (RAM-backed tmpfs, falls back to `/tmp`). The default TTL is 8 hours, configurable via `ENVOKE_CACHE_MAX_AGE` or the config file.
 
 Within the TTL, only your local password is prompted — Bitwarden is not contacted. After the TTL or after `clear-cache`, both passwords are required again.
-
-Use `--no-cache` to disable caching entirely.
 
 ---
 

@@ -17,7 +17,7 @@ envoke switch prod
 envoke unload
 ```
 
-Secrets are cached encrypted in `/dev/shm` (RAM-backed tmpfs) and cleared automatically on shell exit, screen lock, or system sleep.
+Secrets are cached in `/dev/shm` (RAM-backed tmpfs) and cleared automatically on shell exit, screen lock, or system sleep.
 
 ## Documentation
 

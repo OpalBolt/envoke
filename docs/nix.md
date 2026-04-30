@@ -65,16 +65,6 @@ make test
 make lint
 ```
 
-## Available Nix apps
-
-```bash
-nix run .#test         # run Go tests
-nix run .#test-race    # run tests with race detector
-nix run .#lint         # run go vet
-nix run .#fmt-check    # check gofmt formatting
-nix run .#shellcheck   # lint shell scripts in snippets/
-```
-
 ## Notes
 
 - The `IN_NIX_SHELL` variable is set by `nix-shell` but **not** by `nix develop`. If you want the same no-trap behaviour inside `nix develop`, set `IN_NIX_SHELL=1` in your `shellHook`, or rely on the EXIT trap from shell-init.
