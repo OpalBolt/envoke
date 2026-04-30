@@ -43,6 +43,7 @@ go.work.sum
 # Local tooling
 .blip/
 .gocache/
+settings.local.json
 
 # Developer-local and legacy files
 .mcp.json
