@@ -133,8 +133,8 @@ The `BW_SESSION` token avoids storing the master password in the environment.
 
 After successful authentication:
 - Bitwarden folder data is cached in `/run/user/<uid>` (or `/dev/shm` / `/tmp` as fallback) for the duration of `ENVOKE_CACHE_MAX_AGE` (default: 8 hours)
-- Within the TTL, only your local password is prompted — Bitwarden is not contacted
-- After the TTL or after `envoke clear-cache`, both passwords are required again
+- Within the TTL, no password is prompted and Bitwarden is not contacted
+- After the TTL or after `envoke clear-cache`, the Bitwarden master password is required again
 
 ## Examples
 

@@ -77,7 +77,17 @@ envoke switch prod
 envoke switch staging bw://k8s/staging   # fetch on the fly if not pre-loaded
 ```
 
-With shell-init active, the shell function handles the `eval` automatically.
+Output must be evaluated. With shell-init active this is automatic:
+
+```bash
+envoke switch prod
+```
+
+Without shell-init:
+
+```bash
+eval "$(envoke switch prod)"
+```
 
 ## envoke unload
 
@@ -99,7 +109,7 @@ envoke status
 
 ## envoke clear-cache
 
-Removes the stored Bitwarden session and all kubeconfig files from `/dev/shm` (or `/tmp`).
+Removes the stored Bitwarden session and all kubeconfig files from the secure cache directory (`/run/user/<uid>`, `/dev/shm`, or `/tmp`).
 
 ```bash
 envoke clear-cache
@@ -113,6 +123,13 @@ Prints the shell integration snippet. Add to your shell config — see [Installa
 envoke shell-init              # bash/zsh
 envoke shell-init --shell fish
 ```
+
+**Flags:**
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--shell` | Shell type: `bash`, `zsh`, `fish` | `bash` |
+| `--force` | Bypass terminal check (for scripting) | `false` |
 
 ## envoke config
 
@@ -130,7 +147,7 @@ See [Configuration](config.md) for the full config reference.
 
 Background daemon that watches for screen lock and sleep events. Normally started automatically by shell-init — you do not need to run this manually.
 
-On lock: secret variables are unloaded from open shells and managed kubeconfig tempfiles are removed.  
+On lock: secret variables are unloaded from open shells and managed kubeconfig tempfiles are removed. (Linux only — screen lock detection is not implemented on macOS. See [Known limitations](limitations.md).)  
 On sleep: all caches are cleared, requiring full re-authentication after wake.
 
 ---
@@ -185,7 +202,7 @@ All commands accept these flags:
 
 Bitwarden folder data is cached in `/run/user/<uid>` (systemd-logind tmpfs, mode 0700), falling back to `/dev/shm`, then `/tmp`. The default TTL is 8 hours, configurable via `ENVOKE_CACHE_MAX_AGE` or the config file.
 
-Within the TTL, only your local password is prompted — Bitwarden is not contacted. After the TTL or after `clear-cache`, both passwords are required again.
+Within the TTL, no password is prompted and Bitwarden is not contacted. After the TTL or after `clear-cache`, the Bitwarden master password is required again.
 
 ---
 
@@ -193,10 +210,10 @@ Within the TTL, only your local password is prompted — Bitwarden is not contac
 
 When shell-init is active:
 
-| Event | Action |
-|-------|--------|
-| Shell exit | Unload secrets, clear cache, kill watcher |
-| Screen lock | Unset loaded variables in open shells |
-| System sleep | Clear cache — full re-auth required on wake |
+| Event | Action | Linux | macOS |
+|-------|--------|-------|-------|
+| Shell exit | Unload secrets, clear cache, kill watcher | ✓ | ✓ |
+| Screen lock | Unset loaded variables in open shells | ✓ | ✗ |
+| System sleep | Clear cache — full re-auth required on wake | ✓ | ✓ (after wake) |
 
-On Linux, lock/sleep detection uses D-Bus (systemd-logind). On macOS, sleep detection uses a timer-drift heuristic; screen lock detection is not implemented. See [Known limitations](limitations.md).
+On Linux, lock/sleep detection uses D-Bus (systemd-logind). On macOS, sleep detection uses a timer-drift heuristic; screen lock is not detected. See [Known limitations](limitations.md).

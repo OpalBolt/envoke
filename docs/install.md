@@ -23,7 +23,7 @@ nix run github:opalbolt/envoke
 inputs.envoke.url = "github:opalbolt/envoke";
 ```
 
-See [Nix integration](nix.md) for NixOS / Home Manager setup.
+See [Nix integration](nix.md) for NixOS setup and devShell examples.
 
 ## Build from source
 

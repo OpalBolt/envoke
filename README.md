@@ -2,6 +2,14 @@
 
 **envoke** *(env + invoke)* loads secrets from Bitwarden into your shell and manages named kubeconfigs — all from a single `.env` file.
 
+Add shell integration once (see [Installation](docs/install.md#shell-integration)):
+
+```bash
+eval "$(envoke shell-init)"   # add to ~/.bashrc or ~/.zshrc
+```
+
+Then in any directory with a `.env` file:
+
 ```bash
 # .env
 DB_PASSWORD=bw://database/prod-db
