@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/OpalBolt/envoke/compare/v0.7.0...v0.8.0) (2026-05-24)
+
+
+### Features
+
+* **providers:** add config:// URI scheme for YAML config template rendering ([#20](https://github.com/OpalBolt/envoke/issues/20)) ([#69](https://github.com/OpalBolt/envoke/issues/69)) ([6c140a3](https://github.com/OpalBolt/envoke/commit/6c140a3a8f2201c4904daaf71835a4443cee75d4))
+
 ## [0.7.0](https://github.com/OpalBolt/envoke/compare/v0.6.0...v0.7.0) (2026-04-29)
 
 
