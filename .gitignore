@@ -49,3 +49,4 @@ settings.local.json
 .mcp.json
 human-test/
 .claude/
+.blip/
