@@ -60,6 +60,20 @@ func ClearManaged() {
 	}
 }
 
+// ClearRendered removes all envoke-render config tmpfiles from the secure directory.
+// Only files with the "envoke-render-" prefix are removed.
+func ClearRendered() {
+	dir := securedir.Dir()
+	matches, err := filepath.Glob(filepath.Join(dir, "envoke-render-*.tmp"))
+	if err != nil {
+		return
+	}
+	for _, path := range matches {
+		slog.Debug("cleanup: removing rendered config tmpfile", "path", path)
+		os.Remove(path)
+	}
+}
+
 // trackedNamesPath returns the path of the tracked kctx store names file for uid.
 func trackedNamesPath(uid string) string {
 	return filepath.Join(securedir.Dir(), "kctx-"+uid+"-tracked")

@@ -171,6 +171,10 @@ The output must be evaluated by your shell:
 
 			sharedReg := newRegistry(cfg)
 			defer sharedReg.Close() //nolint:errcheck // best-effort session cleanup
+			dotenvDir := filepath.Dir(file)
+			cp := providers.NewConfigProvider(dotenvDir, env.RenderConfigTemplate)
+			sharedReg.Register(cp)
+			cp.SetRegistry(sharedReg)
 
 			var kctxPanelEntries []ui.PanelEntry
 			var kubeconfigPath string
@@ -343,6 +347,10 @@ The resolved variables override any same-named variables already in the environm
 			slog.Debug("running exec", "file", file, "command", args[0])
 			reg := newRegistry(cfg)
 			defer reg.Close() //nolint:errcheck // best-effort session cleanup
+			dotenvDir := filepath.Dir(file)
+			cp := providers.NewConfigProvider(dotenvDir, env.RenderConfigTemplate)
+			reg.Register(cp)
+			cp.SetRegistry(reg)
 
 			entries, err := env.ResolveDotEnv(file, reg)
 			if err != nil {
@@ -844,6 +852,7 @@ func clearCacheCmd() *cobra.Command {
 			if err := store.Clear(uid); err != nil {
 				return fmt.Errorf("clearing kubeconfig store: %w", err)
 			}
+			kubeconfig.ClearRendered()
 
 			ui.Success(os.Stderr, "Cache cleared")
 			return nil
@@ -871,6 +880,7 @@ On sleep: all caches are cleared, requiring full re-authentication after wake.`,
 				slog.Debug("cleanup: unloading env variables and kubeconfigs on lock")
 				_ = state.RequestUnload(uid)
 				kubeconfig.ClearManaged()
+				kubeconfig.ClearRendered()
 				_ = kubeconfig.RequestUnload(uid)
 				return nil
 			}); err != nil {
@@ -883,6 +893,7 @@ On sleep: all caches are cleared, requiring full re-authentication after wake.`,
 				_ = state.RequestUnload(uid)
 				store := kubeconfig.NewNamedStore()
 				_ = store.Clear(uid)
+				kubeconfig.ClearRendered()
 				kubeconfig.ClearManaged()
 				_ = kubeconfig.RequestUnload(uid)
 				return nil
