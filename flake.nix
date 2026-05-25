@@ -2,14 +2,20 @@
   description = "envoke — unified secret environment loader (env vars and kubeconfigs)";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    gomod2nix = {
+      url = "github:nix-community/gomod2nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
+  outputs = { self, nixpkgs, flake-utils, gomod2nix }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
+        inherit (gomod2nix.legacyPackages.${system}) mkGoEnv buildGoApplication;
+
         go = pkgs.go_1_25;
 
         # Single source of truth for the version number — kept in sync with git tags.
@@ -30,11 +36,11 @@
           else
             "${builtins.substring 0 4 raw}-${builtins.substring 4 2 raw}-${builtins.substring 6 2 raw}T${builtins.substring 8 2 raw}:${builtins.substring 10 2 raw}:${builtins.substring 12 2 raw}Z";
 
-        envoke = pkgs.buildGoModule {
+        envoke = buildGoApplication {
           pname = "envoke";
           version = releaseVersion;
           src = ./.;
-          vendorHash = "sha256-LUCRrwakaITrnME5a0tiAp0jsMJQKPtIV8Y8LLwA3LI=";
+          modules = ./gomod2nix.toml;
           subPackages = [ "cmd/envoke" ];
           inherit go;
           ldflags = [
@@ -62,10 +68,11 @@
         devShells.default = pkgs.mkShell {
           packages = [
             go
+            gomod2nix.packages.${system}.default
           ] ++ (with pkgs; [
-            gotools  # goimports, etc.
+            gotools       # goimports, etc.
             gopls
-            go-tools  # staticcheck
+            go-tools      # staticcheck
             goreleaser
             govulncheck
             gosec
@@ -83,4 +90,3 @@
       }
     );
 }
-
