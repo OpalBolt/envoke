@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.3](https://github.com/OpalBolt/envoke/compare/v0.9.2...v0.9.3) (2026-05-25)
+
+
+### Bug Fixes
+
+* **nix:** correct gomod2nix package reference in devShell ([e20cb72](https://github.com/OpalBolt/envoke/commit/e20cb7204216afadca84a572b99b7fdfce489d4d))
+
 ## [0.9.2](https://github.com/OpalBolt/envoke/compare/v0.9.1...v0.9.2) (2026-05-25)
 
 
