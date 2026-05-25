@@ -10,27 +10,68 @@ KEY='value with spaces'
 export KEY=value        # export prefix is accepted and stripped
 ```
 
-### Bitwarden reference format
+### Secret references
 
 ```bash
-KEY=bw://folder/item                    # password field (default)
+KEY=bw://folder/item                    # secure note body or password field
 KEY=bw://folder/item/username           # username field
-KEY=bw://folder/item/note               # notes / secure note
+KEY=bw://folder/item/note               # notes / secure note (explicit)
 KEY=bw://folder/item/totp               # TOTP code
 KEY=bw://folder/item/field:custom_name  # custom field by name
 KEY=bw://collection:name/item           # item in a named collection
 ```
 
-### Kubeconfig directives
+For login items, the default field is `password`. For secure note items with no login, the note body is returned automatically — no `/note` suffix needed.
 
-Lines prefixed with `KCTX_` load a kubeconfig into the named store rather than being exported as env vars:
+### CTX_ context groups
+
+`CTX_<GROUP>=<uri>#<ENVVAR>` entries write a secret to a tmpfile in `/dev/shm` and export `$ENVVAR` pointing at it. The fragment determines the target env var — envoke places no meaning on it beyond that:
 
 ```bash
-KCTX_PROD=bw://kubernetes/prod-cluster
-KCTX_STAGING=bw://kubernetes/staging-cluster
+CTX_PROD=bw://k8s/prod#KUBECONFIG
+CTX_PROD=bw://talos/prod#TALOSCONFIG
+CTX_PROD=bw://aws/prod#AWS_SHARED_CREDENTIALS_FILE
+CTX_META=bw://tokens/github/password#GITHUB_TOKEN
+CTX_META=bw://docker/config#DOCKER_CONFIG
 ```
 
-The prefix is stripped and the remainder is lowercased to form the store name: `KCTX_PROD` → `prod`.
+- The same group name can appear on multiple lines — all entries belong to that group
+- The same URI can appear in multiple groups — it is fetched once per resolve (BW folder cache)
+- Group names are lowercased: `CTX_PROD` → group `prod`
+
+**Reserved group name: `meta`**
+`CTX_META` entries are a persistent baseline loaded on every `envoke switch`. They cannot be switched away from. If a group entry collides with a META entry, the group wins with a warning.
+
+**`ENVOKE_DEFAULT_GROUP`**
+Consumed by envoke during resolve, not exported as an env var. Auto-switches to the named group after all secrets are fetched:
+
+```bash
+ENVOKE_DEFAULT_GROUP=prod
+```
+
+### Built-in content validators
+
+When the `#ENVVAR` fragment matches a known name, envoke validates the secret content before writing it to a tmpfile:
+
+| Fragment | Validation |
+|---|---|
+| `#KUBECONFIG` | must contain `apiVersion` |
+| `#TALOSCONFIG` | must contain `context:` |
+| `#AWS_SHARED_CREDENTIALS_FILE` | must contain `[default]` or `[profile ` |
+| `#DOCKER_CONFIG` | must be valid JSON |
+| anything else | no validation — written as-is |
+
+### Migration from KCTX_
+
+The old `KCTX_<name>=bw://...` syntax is no longer supported. If an entry with a `KCTX_` prefix is encountered, envoke prints a migration error and exits. Migrate to `CTX_`:
+
+```bash
+# Before
+KCTX_PROD=bw://kubernetes/prod-cluster
+
+# After
+CTX_PROD=bw://kubernetes/prod#KUBECONFIG
+```
 
 ---
 
@@ -62,7 +103,7 @@ When shell-init is active:
 
 | Event | Action | Linux | macOS |
 |-------|--------|-------|-------|
-| Shell exit | Unload secrets, clear cache, kill watcher | ✓ | ✓ |
+| Shell exit | Unload secrets, remove context tmpfiles, clear cache | ✓ | ✓ |
 | Screen lock | Unset loaded variables in open shells | ✓ | ✗ |
 | System sleep | Clear cache — full re-auth required on wake | ✓ | ✓ (after wake) |
 

@@ -44,14 +44,20 @@ func rootCmd() *cobra.Command {
 
 	root := &cobra.Command{
 		Use:   "envoke",
-		Short: "Unified secret environment loader — env vars and kubeconfigs",
-		Long: `envoke (env + invoke) resolves secrets and kubeconfigs from a single .env file.
+		Short: "Resolve secrets and context files from a .env file",
+		Long: `envoke resolves secrets from Bitwarden (and other providers) and writes
+context files — kubeconfigs, credentials, tokens — to secure tmpfiles.
 
-  envoke resolve .env            # resolve both env secrets and kubeconfig refs
-  envoke switch prod             # switch KUBECONFIG to a pre-loaded named config
-  envoke shell-init              # combined shell setup
+  eval "$(envoke resolve .env)"   # resolve secrets and apply default group
+  eval "$(envoke switch prod)"    # switch to a different context group
+  envoke status                   # show what is loaded
+  envoke shell-init               # one-time shell setup
 
-The .env file supports KCTX_<name>=bw://... entries that load kubeconfigs into the local named store.`,
+Context groups let any secret file be injected via a single env var fragment:
+
+  CTX_PROD=bw://k8s/prod#KUBECONFIG
+  CTX_PROD=bw://talos/prod#TALOSCONFIG
+	  CTX_META=bw://aws/shared#AWS_SHARED_CREDENTIALS_FILE`,
 		Version:      version.String(),
 		SilenceUsage: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
@@ -121,17 +127,25 @@ func resolveCmd(cfg *config.Config) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "resolve [file]",
-		Short: "Resolve .env secrets and kubeconfig directives",
-		Long: `Resolve a .env file, handling both secret references and kubeconfig directives.
+		Short: "Resolve .env secrets and context groups",
+		Long: `Resolve a .env file, exporting secrets as shell variables and writing
+context files to secure tmpfiles in /dev/shm.
 
-Secret references (bw://) are resolved and exported as shell variables.
+Secret references (bw://) are resolved and exported:
 
-Kubeconfig directives (keys prefixed with KCTX_) load a kubeconfig into the
-local named store and automatically set KUBECONFIG to the last loaded one:
+  DB_PASSWORD=bw://myapp/db
 
-  KCTX_PROD=bw://kubernetes/prod-cluster     # loads kubeconfig named "prod"
+CTX_ entries write a secret to a tmpfile and export an env var pointing at it.
+The fragment (#ENVVAR) determines which env var to set:
 
-Use 'envoke switch <name>' to switch between loaded kubeconfigs at any time.
+  CTX_PROD=bw://k8s/prod#KUBECONFIG             # sets $KUBECONFIG
+  CTX_PROD=bw://talos/prod#TALOSCONFIG           # sets $TALOSCONFIG
+  CTX_META=bw://aws/shared#AWS_SHARED_CREDENTIALS_FILE
+
+CTX_META entries are a persistent baseline re-applied on every switch.
+Add ENVOKE_DEFAULT_GROUP to auto-switch after resolve:
+
+  ENVOKE_DEFAULT_GROUP=prod
 
 The output must be evaluated by your shell:
 
@@ -472,14 +486,15 @@ func yamlCmd(cfg *config.Config) *cobra.Command {
 
 func loadCmd(cfg *config.Config) *cobra.Command {
 	return &cobra.Command{
-		Use:   "load <name> <bw://item>",
-		Short: "Fetch a kubeconfig and cache it under a local name",
-		Long: `Fetch a kubeconfig from Bitwarden and store it in the local
-named store so that 'envoke switch <name>' can load it without re-fetching.
+		Use:   "load",
+		Short: "[deprecated] use CTX_ directives in your .env instead",
+		Long: `envoke load is deprecated and has no effect.
 
-Examples:
-  envoke load prod bw://kubernetes/prod`,
-		Args: cobra.ExactArgs(2),
+ Use CTX_<GROUP>=<uri>#<ENVVAR> entries in your .env file instead:
+
+ CTX_PROD=bw://kubernetes/prod#KUBECONFIG
+
+Then run: eval "$(envoke resolve .env)"`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			fmt.Fprintln(os.Stderr, "envoke load is deprecated and has been removed.")
 			fmt.Fprintln(os.Stderr, "")
