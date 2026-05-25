@@ -19,6 +19,7 @@ import (
 	"github.com/opalbolt/envoke/internal/cleanup"
 	"github.com/opalbolt/envoke/internal/config"
 	"github.com/opalbolt/envoke/internal/env"
+	"github.com/opalbolt/envoke/internal/ctx"
 	"github.com/opalbolt/envoke/internal/kubeconfig"
 	"github.com/opalbolt/envoke/internal/logger"
 	"github.com/opalbolt/envoke/internal/providers"
@@ -153,21 +154,19 @@ The output must be evaluated by your shell:
 				return fmt.Errorf("parsing %s: %w", file, err)
 			}
 
-			var kctxEntries []env.RawEntry
+			var ctxEntries []env.RawEntry
 			var envEntries []env.RawEntry
 			for _, e := range rawEntries {
-				if isKctxDirective(e) {
-					kctxEntries = append(kctxEntries, e)
-				} else {
+				switch {
+				case ctx.IsKCTXDirective(e.Key):
+					return ctx.MigrationError(e.Key, e.Value)
+				case ctx.IsCTXDirective(e.Key):
+					ctxEntries = append(ctxEntries, e)
+				default:
 					envEntries = append(envEntries, e)
 				}
 			}
 
-			for _, e := range kctxEntries {
-				if err := kubeconfig.ValidateStoreName(kctxNameFromKey(e.Key)); err != nil {
-					return fmt.Errorf("invalid kctx directive %q: %w", e.Key, err)
-				}
-			}
 
 			sharedReg := newRegistry(cfg)
 			defer sharedReg.Close() //nolint:errcheck // best-effort session cleanup
@@ -176,36 +175,80 @@ The output must be evaluated by your shell:
 			sharedReg.Register(cp)
 			cp.SetRegistry(sharedReg)
 
-			var kctxPanelEntries []ui.PanelEntry
-			var kubeconfigPath string
-			if len(kctxEntries) > 0 {
-				uid := fmt.Sprintf("%d", os.Getuid())
-				store := kubeconfig.NewNamedStore()
-				var kctxNames []string
-				var lastKubeconfigName string
-				for _, e := range kctxEntries {
-					name := kctxNameFromKey(e.Key)
-					if err := fetchKubeconfigForDirective(sharedReg, name, e.Value, uid, store); err != nil {
-						if errors.Is(err, bw.ErrInvalidPassword) {
-							return err
-						}
-						return fmt.Errorf("loading kubeconfig %q (%s): %w", name, e.Value, err)
-					}
-					lastKubeconfigName = name
-					kctxNames = append(kctxNames, name)
-					kctxPanelEntries = append(kctxPanelEntries, ui.PanelEntry{
-						Key:    name,
-						Source: e.Value,
-					})
-					slog.Debug("loaded kubeconfig into store", "name", name, "source", e.Value)
-				}
-				_ = kubeconfig.SaveTrackedNames(uid, kctxNames)
-
-				if lastKubeconfigName != "" {
-					kubeconfigPath = store.Path(uid, lastKubeconfigName)
-					slog.Debug("set KUBECONFIG", "path", kubeconfigPath)
+			
+			// ── CTX_ group processing ────────────────────────────────────────────────
+			// uid is shared across CTX_, kctx, and var-tracking blocks below.
+			uid := fmt.Sprintf("%d", os.Getuid())
+			var ctxPanelEntries []ui.PanelEntry
+			ctxGroupsState := ctx.GroupsState{Groups: make(map[string][]ctx.ContextEntry)}
+			// createdTmpfiles tracks CTX tmpfiles so we can clean up on error.
+			var createdTmpfiles []string
+			cleanupCTXTmpfiles := func() {
+				for _, p := range createdTmpfiles {
+					_ = os.Remove(p)
 				}
 			}
+
+			if len(ctxEntries) > 0 {
+				for _, e := range ctxEntries {
+					entry, err := ctx.ParseContextEntry(e.Key, e.Value)
+					if err != nil {
+						return err
+					}
+					
+					val, err := sharedReg.Resolve(entry.SourceURI)
+					if err != nil {
+						if errors.Is(err, bw.ErrInvalidPassword) {
+							cleanupCTXTmpfiles()
+							return err
+						}
+						cleanupCTXTmpfiles()
+						return fmt.Errorf("resolving %s (%s): %w", e.Key, entry.SourceURI, err)
+					}
+					
+					content := []byte(val)
+					if err := ctx.ValidateContent(entry.EnvVar, content); err != nil {
+						cleanupCTXTmpfiles()
+						return fmt.Errorf("%s: %w", e.Key, err)
+					}
+					
+					tmpf, err := kubeconfig.NewTempFile("envoke-ctx")
+					if err != nil {
+						cleanupCTXTmpfiles()
+						return fmt.Errorf("creating tmpfile for %s: %w", e.Key, err)
+					}
+					createdTmpfiles = append(createdTmpfiles, tmpf.Name())
+					if _, err := tmpf.Write(content); err != nil {
+						tmpf.Close()
+						cleanupCTXTmpfiles()
+						return fmt.Errorf("writing tmpfile for %s: %w", e.Key, err)
+					}
+					if err := tmpf.Close(); err != nil {
+						cleanupCTXTmpfiles()
+						return fmt.Errorf("closing tmpfile for %s: %w", e.Key, err)
+					}
+					entry.TmpfilePath = tmpf.Name()
+					
+					ctxGroupsState.Groups[entry.Group] = append(ctxGroupsState.Groups[entry.Group], entry)
+					ctxPanelEntries = append(ctxPanelEntries, ui.PanelEntry{
+						Key:    entry.Group + ":" + entry.EnvVar,
+						Source: entry.SourceURI,
+					})
+					slog.Debug("ctx entry resolved", "group", entry.Group, "envVar", entry.EnvVar, "tmpfile", entry.TmpfilePath)
+				}
+				
+				if err := ctx.SaveState(uid, ctxGroupsState); err != nil {
+					slog.Warn("saving ctx state", "err", err)
+				}
+				
+				// Emit META exports as always-on baseline.
+				if metaEntries, ok := ctxGroupsState.Groups["meta"]; ok {
+					for _, entry := range metaEntries {
+						fmt.Fprintf(os.Stdout, "export %s=%s\n", entry.EnvVar, entry.TmpfilePath)
+					}
+				}
+			}
+			var kubeconfigPath string
 
 			var resolvedEntries []env.EnvEntry
 			if len(envEntries) > 0 {
@@ -232,7 +275,7 @@ The output must be evaluated by your shell:
 			}
 
 			if len(resolvedEntries) > 0 {
-				uid := fmt.Sprintf("%d", os.Getuid())
+				// uid already declared above
 				names := make([]string, len(resolvedEntries))
 				for i, e := range resolvedEntries {
 					names[i] = e.Key
@@ -240,17 +283,14 @@ The output must be evaluated by your shell:
 				_ = state.SaveVarNames(uid, names)
 			}
 
-			panelEntries := make([]ui.PanelEntry, 0, len(resolvedEntries)+len(kctxPanelEntries))
+			panelEntries := make([]ui.PanelEntry, 0, len(resolvedEntries)+len(ctxPanelEntries))
 			for _, e := range resolvedEntries {
 				panelEntries = append(panelEntries, ui.PanelEntry{Key: e.Key, Source: e.Source})
 			}
-			for _, e := range kctxPanelEntries {
-				panelEntries = append(panelEntries, ui.PanelEntry{
-					Key:    "kctx:" + e.Key,
-					Source: e.Source,
-				})
+			for _, e := range ctxPanelEntries {
+				panelEntries = append(panelEntries, e)
 			}
-			totalCount := len(resolvedEntries) + len(kctxPanelEntries)
+			totalCount := len(resolvedEntries) + len(ctxPanelEntries)
 			headline := fmt.Sprintf("Loaded %s from %s",
 				ui.Bold(os.Stderr, pluralItems(totalCount)),
 				ui.Bold(os.Stderr, file))
@@ -264,7 +304,7 @@ The output must be evaluated by your shell:
 				case "fish":
 					fmt.Println("# Fish shell trap not supported via eval; use envoke clear-cache manually")
 				default:
-					if kubeconfigPath != "" {
+					if kubeconfigPath != "" || len(ctxEntries) > 0 {
 						fmt.Println("trap 'eval \"$(envoke unload 2>/dev/null)\" 2>/dev/null; envoke clear-cache 2>/dev/null' EXIT")
 					} else {
 						fmt.Println("trap 'envoke clear-cache' EXIT")
@@ -280,29 +320,6 @@ The output must be evaluated by your shell:
 	return cmd
 }
 
-// isKctxDirective returns true if the entry is a KCTX_<name>=bw:// directive.
-func isKctxDirective(e env.RawEntry) bool {
-	if !strings.HasPrefix(e.Key, "KCTX_") {
-		return false
-	}
-	return strings.HasPrefix(e.Value, "bw://")
-}
-
-// kctxNameFromKey derives a kubeconfig store name from a KCTX_ key.
-// KCTX_PROD → "prod", KCTX_MY_CLUSTER → "my_cluster"
-func kctxNameFromKey(key string) string {
-	return strings.ToLower(strings.TrimPrefix(key, "KCTX_"))
-}
-
-// fetchKubeconfigForDirective fetches a kubeconfig from a bw:// source and stores it.
-func fetchKubeconfigForDirective(reg *providers.Registry, name, source, uid string, store *kubeconfig.NamedStore) error {
-	uri := normalizeKubeconfigURI(source)
-	val, err := reg.Resolve(uri)
-	if err != nil {
-		return err
-	}
-	return store.Put(uid, name, []byte(val))
-}
 
 // writeTempEnv writes env entries to a temp .env file for processing by ResolveDotEnv.
 func writeTempEnv(entries []env.RawEntry) (string, error) {
@@ -435,32 +452,14 @@ Examples:
   envoke load prod bw://kubernetes/prod`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := args[0]
-			source := args[1]
-
-			if err := kubeconfig.ValidateStoreName(name); err != nil {
-				return err
-			}
-
-			slog.Debug("loading kubeconfig", "name", name, "source", source)
-
-			uid := fmt.Sprintf("%d", os.Getuid())
-			store := kubeconfig.NewNamedStore()
-			reg := newRegistry(cfg)
-			defer reg.Close() //nolint:errcheck // best-effort session cleanup
-
-			uri := normalizeKubeconfigURI(source)
-			val, err := reg.Resolve(uri)
-			if err != nil {
-				return err
-			}
-
-			if err := store.Put(uid, name, []byte(val)); err != nil {
-				return fmt.Errorf("storing kubeconfig %q: %w", name, err)
-			}
-
-			ui.Success(os.Stderr, fmt.Sprintf("Loaded kubeconfig: %s", ui.Bold(os.Stderr, name)))
-			return nil
+			fmt.Fprintln(os.Stderr, "envoke load is deprecated and has been removed.")
+			fmt.Fprintln(os.Stderr, "")
+			fmt.Fprintln(os.Stderr, "Use CTX_<GROUP>=<uri>#<ENVVAR> entries in your .env file instead:")
+			fmt.Fprintln(os.Stderr, "")
+			fmt.Fprintln(os.Stderr, "  CTX_PROD=bw://kubernetes/prod#KUBECONFIG")
+			fmt.Fprintln(os.Stderr, "")
+			fmt.Fprintln(os.Stderr, `Then run: eval "$(envoke resolve .env)"`)
+			return fmt.Errorf("deprecated: use CTX_ directives and envoke resolve")
 		},
 	}
 }
@@ -469,73 +468,87 @@ Examples:
 
 func switchCmd(cfg *config.Config) *cobra.Command {
 	return &cobra.Command{
-		Use:   "switch <name> [bw://item]",
-		Short: "Switch to a named kubeconfig (or fetch one if a source is given)",
-		Long: `Switch KUBECONFIG to a named kubeconfig previously loaded with 'envoke load'.
+		Use:   "switch <group>",
+		Short: "Switch to a context group (instant, no provider calls)",
+		Long: `Switch all context env vars to a named group previously loaded by 'envoke resolve'.
 
-If the named kubeconfig is not in the local store, a source (bw://) may be
-provided to fetch it on the fly.
+No provider calls are made — all secrets were fetched eagerly by resolve and
+written to tmpfiles in /dev/shm. Switch is purely local.
+
+The META group (CTX_META) is re-applied as a persistent baseline on every switch.
+'envoke switch meta' is rejected — META is always active.
 
 Examples:
-  envoke switch prod                          # use pre-loaded 'prod'
-  envoke switch staging bw://k8s/staging      # fetch directly if not pre-loaded`,
-		Args: cobra.RangeArgs(1, 2),
+  envoke switch prod
+  envoke switch staging`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := args[0]
-			source := ""
-			if len(args) > 1 {
-				source = args[1]
+			name := strings.ToLower(args[0])
+
+			if name == "meta" {
+				return fmt.Errorf("'meta' is not a switchable group — META is always applied as a baseline on every switch")
 			}
-			slog.Debug("switching kubeconfig", "name", name, "source", source)
 
 			uid := fmt.Sprintf("%d", os.Getuid())
-			store := kubeconfig.NewNamedStore()
+			st, err := ctx.LoadState(uid)
+			if err != nil {
+				return fmt.Errorf("loading ctx state: %w", err)
+			}
+			if len(st.Groups) == 0 {
+				return fmt.Errorf("no context groups loaded\n\nRun: eval \"$(envoke resolve .env)\"")
+			}
 
-			var kubeconfigData []byte
-
-			if err := kubeconfig.ValidateStoreName(name); err == nil {
-				data, err := store.Get(uid, name)
-				if err != nil {
-					return fmt.Errorf("reading named kubeconfig %q: %w", name, err)
+			targetEntries, ok := st.Groups[name]
+			if !ok {
+				available := make([]string, 0, len(st.Groups))
+				for g := range st.Groups {
+					if g != "meta" {
+						available = append(available, g)
+					}
 				}
-				if data != nil {
-					kubeconfigData = data
+				sort.Strings(available)
+				return fmt.Errorf("group %q not found in loaded state\n\nAvailable groups: %s", name, strings.Join(available, ", "))
+			}
+
+			// Unload currently active group env vars (not META).
+			if st.ActiveGroup != "" && st.ActiveGroup != name {
+				for _, e := range st.Groups[st.ActiveGroup] {
+					fmt.Fprintf(os.Stdout, "unset %s\n", e.EnvVar)
 				}
 			}
 
-			if kubeconfigData == nil {
-				if source == "" {
-					return fmt.Errorf(
-						"no pre-loaded kubeconfig named %q found\n"+
-							"Run: envoke load %s <bw://item>",
-						name, name,
-					)
-				}
-				reg := newRegistry(cfg)
-				defer reg.Close() //nolint:errcheck // best-effort session cleanup
-				uri := normalizeKubeconfigURI(source)
-				val, err := reg.Resolve(uri)
-				if err != nil {
-					return fmt.Errorf("fetching kubeconfig for %q: %w", name, err)
-				}
-				kubeconfigData = []byte(val)
-				if err := store.Put(uid, name, kubeconfigData); err != nil {
-					return fmt.Errorf("caching kubeconfig %q: %w", name, err)
-				}
+			// Re-apply META baseline.
+			for _, e := range st.Groups["meta"] {
+				fmt.Fprintf(os.Stdout, "export %s=%s\n", e.EnvVar, e.TmpfilePath)
 			}
 
-			path := store.Path(uid, name)
-
-			fmt.Printf("export KUBECONFIG=%s\n", path)
-			fmt.Printf("trap 'eval \"$(envoke unload 2>/dev/null)\"' EXIT\n")
-
-			srcLabel := switchSourceLabel(name, source)
-			panelEntries := []ui.PanelEntry{
-				{Key: "KUBECONFIG", Value: path, Source: srcLabel},
+			// Build META env var set for collision detection.
+			metaEnvVars := make(map[string]bool)
+			for _, e := range st.Groups["meta"] {
+				metaEnvVars[e.EnvVar] = true
 			}
-			if ctx := currentKubectlContext(path); ctx != "" {
-				panelEntries = append(panelEntries, ui.PanelEntry{Key: "Context", Value: ctx})
+
+			// Apply target group — warn loudly on META collision, group wins.
+			var panelEntries []ui.PanelEntry
+			for _, e := range targetEntries {
+				if metaEnvVars[e.EnvVar] {
+					fmt.Fprintf(os.Stderr, "\u26a0  envoke: %s defined in both meta and %s — %s wins\n", e.EnvVar, name, name)
+				}
+				fmt.Fprintf(os.Stdout, "export %s=%s\n", e.EnvVar, e.TmpfilePath)
+				panelEntries = append(panelEntries, ui.PanelEntry{
+					Key:   e.EnvVar,
+					Value: e.TmpfilePath,
+				})
 			}
+
+			fmt.Fprintf(os.Stdout, "trap 'eval \"$(envoke unload 2>/dev/null)\"' EXIT\n")
+
+			// Persist active group for status/unload.
+			st.ActiveGroup = name
+			if err := ctx.SaveState(uid, st); err != nil {
+				slog.Warn("saving active group", "err", err)
+			}
+
 			headline := fmt.Sprintf("Switched to %s", ui.Bold(os.Stderr, name))
 			ui.Panel(os.Stderr, "envoke", headline, panelEntries, cfg.UI.Border)
 			return nil
@@ -543,12 +556,6 @@ Examples:
 	}
 }
 
-func switchSourceLabel(name, source string) string {
-	if source == "" {
-		return "named store"
-	}
-	return source
-}
 
 func currentKubectlContext(kubeconfigPath string) string {
 	cmd := exec.Command("kubectl", "config", "current-context")
@@ -616,6 +623,43 @@ func statusCmd() *cobra.Command {
 				sort.Strings(storedNames)
 				ui.Header(w, "Loaded kubeconfigs (use 'envoke switch <name>')")
 				ui.List(w, storedNames)
+			}
+			// ── CTX groups section ────────────────────────────────────────────
+			ctxSt, ctxErr := ctx.LoadState(uid)
+			if ctxErr == nil && len(ctxSt.Groups) > 0 {
+				fmt.Fprintln(w)
+				ui.Header(w, "Context groups (CTX_)")
+				// META first
+				if metaEntries, ok := ctxSt.Groups["meta"]; ok {
+					fmt.Fprintf(w, "  ◆ meta  %s\n", ui.Gray(w, "(persistent baseline)"))
+					for _, e := range metaEntries {
+						fmt.Fprintf(w, "      %-30s %s\n", e.EnvVar, ui.Gray(w, e.TmpfilePath))
+					}
+				}
+				// Active group
+				if ctxSt.ActiveGroup != "" {
+					if entries, ok := ctxSt.Groups[ctxSt.ActiveGroup]; ok {
+						fmt.Fprintf(w, "  ● %s  %s\n", ctxSt.ActiveGroup, ui.Green(w, "(active group)"))
+						for _, e := range entries {
+							fmt.Fprintf(w, "      %-30s %s\n", e.EnvVar, e.TmpfilePath)
+						}
+					}
+				}
+				// Inactive groups
+				groupNames := make([]string, 0, len(ctxSt.Groups))
+				for g := range ctxSt.Groups {
+					if g != "meta" && g != ctxSt.ActiveGroup {
+						groupNames = append(groupNames, g)
+					}
+				}
+				sort.Strings(groupNames)
+				for _, g := range groupNames {
+					entries := ctxSt.Groups[g]
+					fmt.Fprintf(w, "  ○ %s  %s\n", g, ui.Gray(w, "(inactive, loaded)"))
+					for _, e := range entries {
+						fmt.Fprintf(w, "      %-30s %s\n", e.EnvVar, ui.Gray(w, e.TmpfilePath))
+					}
+				}
 			}
 			return nil
 		},
@@ -692,6 +736,28 @@ When using the envoke shell-init, the shell function handles this automatically.
 				}
 				_ = kubeconfig.ClearTrackedNames(uid)
 			}
+			// ── CTX group cleanup ────────────────────────────────────────────
+			ctxSt, ctxErr := ctx.LoadState(uid)
+			if ctxErr == nil && len(ctxSt.Groups) > 0 {
+				for grp, entries := range ctxSt.Groups {
+					for _, e := range entries {
+						fmt.Fprintf(os.Stdout, "unset %s\n", e.EnvVar)
+						if e.TmpfilePath != "" {
+							if rmErr := os.Remove(e.TmpfilePath); rmErr != nil && !os.IsNotExist(rmErr) {
+								slog.Warn("removing ctx tmpfile", "path", e.TmpfilePath, "err", rmErr)
+							}
+						}
+						panelEntries = append(panelEntries, ui.PanelEntry{
+							Key:   "ctx:" + grp + ":" + e.EnvVar,
+							Value: e.TmpfilePath,
+						})
+					}
+				}
+				if err := ctx.ClearState(uid); err != nil {
+					slog.Warn("clearing ctx state", "err", err)
+				}
+			}
+
 
 			if len(panelEntries) == 0 {
 				ui.Warn(os.Stderr, "Nothing to unload")
