@@ -640,16 +640,10 @@ func statusCmd() *cobra.Command {
 					}
 				}
 
-				// renderGroup prints one group's entries, with extra detail for known types.
+				// renderGroup prints one group's entries (path only, no extra annotations).
 				renderGroup := func(entries []ctx.ContextEntry) {
 					for _, e := range entries {
-						detail := ""
-						if e.EnvVar == "KUBECONFIG" {
-							if ktx := currentKubectlContext(e.TmpfilePath); ktx != "" {
-								detail = "  " + ui.Gray(w, "(→ "+ktx+")")
-							}
-						}
-						fmt.Fprintf(w, "      %-32s %s%s\n", e.EnvVar, e.TmpfilePath, detail)
+						fmt.Fprintf(w, "      %-32s %s\n", e.EnvVar, e.TmpfilePath)
 					}
 				}
 
@@ -672,6 +666,36 @@ func statusCmd() *cobra.Command {
 				for _, g := range groupNames {
 					fmt.Fprintf(w, "  ○ %s  %s\n", g, ui.Gray(w, "(inactive)"))
 					renderGroup(ctxSt.Groups[g])
+				}
+
+				// Active variables summary: META + active group, showing source group.
+				// Only shown when a group is active.
+				if ctxSt.ActiveGroup != "" {
+					fmt.Fprintln(w)
+					ui.Header(w, "Active context variables")
+					// Collect in order: META entries first, then active group (group wins on collision).
+					seen := make(map[string]string) // envVar → group
+					var order []string
+					addEntries := func(entries []ctx.ContextEntry, group string) {
+						for _, e := range entries {
+							if _, exists := seen[e.EnvVar]; !exists {
+								order = append(order, e.EnvVar)
+							}
+							seen[e.EnvVar] = group
+						}
+					}
+					addEntries(ctxSt.Groups["meta"], "meta")
+					addEntries(ctxSt.Groups[ctxSt.ActiveGroup], ctxSt.ActiveGroup)
+					for _, envVar := range order {
+						grp := seen[envVar]
+						var grpLabel string
+						if grp == "meta" {
+							grpLabel = ui.Gray(w, "◆ meta")
+						} else {
+							grpLabel = ui.Green(w, "● "+grp)
+						}
+						fmt.Fprintf(w, "  %-32s %s\n", envVar, grpLabel)
+					}
 				}
 			}
 			return nil
