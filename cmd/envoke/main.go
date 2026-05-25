@@ -680,8 +680,8 @@ func statusCmd() *cobra.Command {
 				}
 
 				// Active variables summary: META + active group, showing source group.
-				// Only shown when a group is active.
-				if ctxSt.ActiveGroup != "" {
+				// Always show when groups are loaded — META is active immediately after resolve.
+				if len(ctxSt.Groups) > 0 {
 					fmt.Fprintln(w)
 					ui.Header(w, "Active context variables")
 					// Collect in order: META entries first, then active group (group wins on collision).
@@ -696,7 +696,9 @@ func statusCmd() *cobra.Command {
 						}
 					}
 					addEntries(ctxSt.Groups["meta"], "meta")
-					addEntries(ctxSt.Groups[ctxSt.ActiveGroup], ctxSt.ActiveGroup)
+					if ctxSt.ActiveGroup != "" {
+						addEntries(ctxSt.Groups[ctxSt.ActiveGroup], ctxSt.ActiveGroup)
+					}
 					for _, envVar := range order {
 						grp := seen[envVar]
 						var grpLabel string
