@@ -10,6 +10,7 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
+        go = pkgs.go_1_25;
 
         # Single source of truth for the version number — kept in sync with git tags.
         # `git tag v0.2.0 && echo -n 0.2.0 > VERSION` is the release workflow.
@@ -35,6 +36,7 @@
           src = ./.;
           vendorHash = "sha256-LUCRrwakaITrnME5a0tiAp0jsMJQKPtIV8Y8LLwA3LI=";
           subPackages = [ "cmd/envoke" ];
+          inherit go;
           ldflags = [
             "-s" "-w"
             "-X ${versionPkg}.Version=${nixVersion}"
@@ -58,8 +60,9 @@
         # `nix develop` — provides the full Go toolchain and dev tools.
         # Run make targets directly: make build, make test-race, make lint, etc.
         devShells.default = pkgs.mkShell {
-          packages = with pkgs; [
+          packages = [
             go
+          ] ++ (with pkgs; [
             gotools  # goimports, etc.
             gopls
             go-tools  # staticcheck
@@ -68,7 +71,7 @@
             gosec
             gnumake
             shellcheck
-          ];
+          ]);
 
           shellHook = ''
             export CGO_ENABLED=0
