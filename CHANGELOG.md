@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.2](https://github.com/OpalBolt/envoke/compare/v0.9.1...v0.9.2) (2026-05-25)
+
+
+### Bug Fixes
+
+* **flake:** switch nixpkgs to nixos-25.11 and bump setup-go to v6 ([fb085cc](https://github.com/OpalBolt/envoke/commit/fb085cc58be0f8211c2fe2ee61d3093a5cfa07c0))
+* **flake:** switch nixpkgs to nixos-25.11 and bump setup-go to v6 ([48ddf02](https://github.com/OpalBolt/envoke/commit/48ddf0249c971a2190c47b6fed0c3bfa333d69e2))
+
 ## [0.9.1](https://github.com/OpalBolt/envoke/compare/v0.9.0...v0.9.1) (2026-05-25)
 
 
