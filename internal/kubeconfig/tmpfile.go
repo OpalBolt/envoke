@@ -29,15 +29,19 @@ func NewTempFile(prefix string) (*os.File, error) {
 	return f, nil
 }
 
-// IsManaged reports whether path looks like a kctx-managed kubeconfig file
-// (i.e. a "kctx-" prefixed file in the secure directory).
+// IsManaged reports whether path is a file managed by envoke — i.e. it lives
+// inside the platform-appropriate secure directory.
+// The old kctx- prefix check is intentionally dropped: CTX_ tmpfiles use the
+// envoke-ctx- prefix, named store entries use kctx-kc-, and future prefixes
+// should all be recognised without updating this function.
 func IsManaged(path string) bool {
 	dir := filepath.Dir(path)
 	base := filepath.Base(path)
 	if dir != securedir.Dir() {
 		return false
 	}
-	return len(base) > 5 && base[:5] == "kctx-"
+	// Any non-empty filename inside securedir is envoke-managed.
+	return base != ""
 }
 
 // IsManagedTemp reports whether path is a kctx-managed kubeconfig tmpfile

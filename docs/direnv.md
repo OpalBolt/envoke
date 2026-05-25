@@ -24,7 +24,7 @@ use_envoke() {
 ```
 
 `watch_file` tells direnv to re-evaluate `.envrc` whenever the `.env` file changes.
-The `envoke unload` call ensures stale variables are cleared before loading fresh ones.
+The `envoke unload` call ensures stale variables and tmpfiles are cleared before loading fresh ones.
 
 ### 2. Use it in your project `.envrc`
 
@@ -49,9 +49,17 @@ direnv allow
 
 **`.env`:**
 ```bash
-DB_HOST=postgres.internal
-DB_PASSWORD=bw://database/myapp-prod
-KCTX_PROD=bw://kubernetes/prod-cluster
+DB_PASSWORD=bw://myapp/db
+
+ENVOKE_DEFAULT_GROUP=prod
+
+CTX_META=bw://tokens/github/password#GITHUB_TOKEN
+CTX_META=bw://aws/shared#AWS_SHARED_CREDENTIALS_FILE
+
+CTX_PROD=bw://k8s/prod#KUBECONFIG
+CTX_PROD=bw://talos/prod#TALOSCONFIG
+
+CTX_STAGING=bw://k8s/staging#KUBECONFIG
 ```
 
 **`.envrc`:**
@@ -59,7 +67,13 @@ KCTX_PROD=bw://kubernetes/prod-cluster
 use envoke .env
 ```
 
-When you `cd` into the directory, direnv evaluates `.envrc`, which calls `envoke resolve .env`. Secrets are loaded and the `prod` kubeconfig is available via `envoke switch prod`. When you `cd` out, direnv unsets them automatically.
+When you `cd` into the directory, direnv evaluates `.envrc`, which calls `envoke resolve .env`. Secrets are exported, context tmpfiles are written, and the `prod` group is activated automatically (via `ENVOKE_DEFAULT_GROUP`). When you `cd` out, direnv clears them automatically.
+
+To switch groups while inside the directory:
+
+```bash
+eval "$(envoke switch staging)"
+```
 
 ## Notes
 

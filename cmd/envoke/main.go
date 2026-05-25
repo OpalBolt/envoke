@@ -18,6 +18,7 @@ import (
 
 	"github.com/opalbolt/envoke/internal/cleanup"
 	"github.com/opalbolt/envoke/internal/config"
+	"github.com/opalbolt/envoke/internal/ctx"
 	"github.com/opalbolt/envoke/internal/env"
 	"github.com/opalbolt/envoke/internal/kubeconfig"
 	"github.com/opalbolt/envoke/internal/logger"
@@ -43,14 +44,20 @@ func rootCmd() *cobra.Command {
 
 	root := &cobra.Command{
 		Use:   "envoke",
-		Short: "Unified secret environment loader — env vars and kubeconfigs",
-		Long: `envoke (env + invoke) resolves secrets and kubeconfigs from a single .env file.
+		Short: "Resolve secrets and context files from a .env file",
+		Long: `envoke resolves secrets from Bitwarden (and other providers) and writes
+context files — kubeconfigs, credentials, tokens — to secure tmpfiles.
 
-  envoke resolve .env            # resolve both env secrets and kubeconfig refs
-  envoke switch prod             # switch KUBECONFIG to a pre-loaded named config
-  envoke shell-init              # combined shell setup
+  eval "$(envoke resolve .env)"   # resolve secrets and apply default group
+  eval "$(envoke switch prod)"    # switch to a different context group
+  envoke status                   # show what is loaded
+  envoke shell-init               # one-time shell setup
 
-The .env file supports KCTX_<name>=bw://... entries that load kubeconfigs into the local named store.`,
+Context groups let any secret file be injected via a single env var fragment:
+
+  CTX_PROD=bw://k8s/prod#KUBECONFIG
+  CTX_PROD=bw://talos/prod#TALOSCONFIG
+	  CTX_META=bw://aws/shared#AWS_SHARED_CREDENTIALS_FILE`,
 		Version:      version.String(),
 		SilenceUsage: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
@@ -120,17 +127,25 @@ func resolveCmd(cfg *config.Config) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "resolve [file]",
-		Short: "Resolve .env secrets and kubeconfig directives",
-		Long: `Resolve a .env file, handling both secret references and kubeconfig directives.
+		Short: "Resolve .env secrets and context groups",
+		Long: `Resolve a .env file, exporting secrets as shell variables and writing
+context files to secure tmpfiles in /dev/shm.
 
-Secret references (bw://) are resolved and exported as shell variables.
+Secret references (bw://) are resolved and exported:
 
-Kubeconfig directives (keys prefixed with KCTX_) load a kubeconfig into the
-local named store and automatically set KUBECONFIG to the last loaded one:
+  DB_PASSWORD=bw://myapp/db
 
-  KCTX_PROD=bw://kubernetes/prod-cluster     # loads kubeconfig named "prod"
+CTX_ entries write a secret to a tmpfile and export an env var pointing at it.
+The fragment (#ENVVAR) determines which env var to set:
 
-Use 'envoke switch <name>' to switch between loaded kubeconfigs at any time.
+  CTX_PROD=bw://k8s/prod#KUBECONFIG             # sets $KUBECONFIG
+  CTX_PROD=bw://talos/prod#TALOSCONFIG           # sets $TALOSCONFIG
+  CTX_META=bw://aws/shared#AWS_SHARED_CREDENTIALS_FILE
+
+CTX_META entries are a persistent baseline re-applied on every switch.
+Add ENVOKE_DEFAULT_GROUP to auto-switch after resolve:
+
+  ENVOKE_DEFAULT_GROUP=prod
 
 The output must be evaluated by your shell:
 
@@ -153,19 +168,19 @@ The output must be evaluated by your shell:
 				return fmt.Errorf("parsing %s: %w", file, err)
 			}
 
-			var kctxEntries []env.RawEntry
+			var ctxEntries []env.RawEntry
 			var envEntries []env.RawEntry
+			var defaultGroup string
 			for _, e := range rawEntries {
-				if isKctxDirective(e) {
-					kctxEntries = append(kctxEntries, e)
-				} else {
+				switch {
+				case ctx.IsKCTXDirective(e.Key):
+					return ctx.MigrationError(e.Key, e.Value)
+				case ctx.IsCTXDirective(e.Key):
+					ctxEntries = append(ctxEntries, e)
+				case e.Key == "ENVOKE_DEFAULT_GROUP":
+					defaultGroup = strings.ToLower(e.Value) // consumed, not exported
+				default:
 					envEntries = append(envEntries, e)
-				}
-			}
-
-			for _, e := range kctxEntries {
-				if err := kubeconfig.ValidateStoreName(kctxNameFromKey(e.Key)); err != nil {
-					return fmt.Errorf("invalid kctx directive %q: %w", e.Key, err)
 				}
 			}
 
@@ -176,36 +191,105 @@ The output must be evaluated by your shell:
 			sharedReg.Register(cp)
 			cp.SetRegistry(sharedReg)
 
-			var kctxPanelEntries []ui.PanelEntry
-			var kubeconfigPath string
-			if len(kctxEntries) > 0 {
-				uid := fmt.Sprintf("%d", os.Getuid())
-				store := kubeconfig.NewNamedStore()
-				var kctxNames []string
-				var lastKubeconfigName string
-				for _, e := range kctxEntries {
-					name := kctxNameFromKey(e.Key)
-					if err := fetchKubeconfigForDirective(sharedReg, name, e.Value, uid, store); err != nil {
-						if errors.Is(err, bw.ErrInvalidPassword) {
-							return err
-						}
-						return fmt.Errorf("loading kubeconfig %q (%s): %w", name, e.Value, err)
-					}
-					lastKubeconfigName = name
-					kctxNames = append(kctxNames, name)
-					kctxPanelEntries = append(kctxPanelEntries, ui.PanelEntry{
-						Key:    name,
-						Source: e.Value,
-					})
-					slog.Debug("loaded kubeconfig into store", "name", name, "source", e.Value)
-				}
-				_ = kubeconfig.SaveTrackedNames(uid, kctxNames)
-
-				if lastKubeconfigName != "" {
-					kubeconfigPath = store.Path(uid, lastKubeconfigName)
-					slog.Debug("set KUBECONFIG", "path", kubeconfigPath)
+			// ── CTX_ group processing ────────────────────────────────────────────────
+			// uid is shared across CTX_, kctx, and var-tracking blocks below.
+			uid := fmt.Sprintf("%d", os.Getuid())
+			var ctxPanelEntries []ui.PanelEntry
+			ctxGroupsState := ctx.GroupsState{Groups: make(map[string][]ctx.ContextEntry)}
+			// createdTmpfiles tracks CTX tmpfiles so we can clean up on error.
+			var createdTmpfiles []string
+			cleanupCTXTmpfiles := func() {
+				for _, p := range createdTmpfiles {
+					_ = os.Remove(p)
 				}
 			}
+
+			if len(ctxEntries) > 0 {
+				for _, e := range ctxEntries {
+					entry, err := ctx.ParseContextEntry(e.Key, e.Value)
+					if err != nil {
+						return err
+					}
+
+					val, err := sharedReg.Resolve(entry.SourceURI)
+					if err != nil {
+						if errors.Is(err, bw.ErrInvalidPassword) {
+							cleanupCTXTmpfiles()
+							return err
+						}
+						cleanupCTXTmpfiles()
+						return fmt.Errorf("resolving %s (%s): %w", e.Key, entry.SourceURI, err)
+					}
+
+					content := []byte(val)
+					if err := ctx.ValidateContent(entry.EnvVar, content); err != nil {
+						cleanupCTXTmpfiles()
+						return fmt.Errorf("%s: %w", e.Key, err)
+					}
+
+					tmpf, err := kubeconfig.NewTempFile("envoke-ctx")
+					if err != nil {
+						cleanupCTXTmpfiles()
+						return fmt.Errorf("creating tmpfile for %s: %w", e.Key, err)
+					}
+					createdTmpfiles = append(createdTmpfiles, tmpf.Name())
+					if _, err := tmpf.Write(content); err != nil {
+						tmpf.Close()
+						cleanupCTXTmpfiles()
+						return fmt.Errorf("writing tmpfile for %s: %w", e.Key, err)
+					}
+					if err := tmpf.Close(); err != nil {
+						cleanupCTXTmpfiles()
+						return fmt.Errorf("closing tmpfile for %s: %w", e.Key, err)
+					}
+					entry.TmpfilePath = tmpf.Name()
+
+					ctxGroupsState.Groups[entry.Group] = append(ctxGroupsState.Groups[entry.Group], entry)
+					ctxPanelEntries = append(ctxPanelEntries, ui.PanelEntry{
+						Key:    entry.Group + ":" + entry.EnvVar,
+						Source: entry.SourceURI,
+					})
+					slog.Debug("ctx entry resolved", "group", entry.Group, "envVar", entry.EnvVar, "tmpfile", entry.TmpfilePath)
+				}
+
+				if err := ctx.SaveState(uid, ctxGroupsState); err != nil {
+					slog.Warn("saving ctx state", "err", err)
+				}
+
+				// Emit META exports as always-on baseline.
+				if metaEntries, ok := ctxGroupsState.Groups["meta"]; ok {
+					for _, entry := range metaEntries {
+						fmt.Fprintf(os.Stdout, "export %s=%s\n", entry.EnvVar, entry.TmpfilePath)
+					}
+				}
+
+				// Auto-apply ENVOKE_DEFAULT_GROUP if specified and the group was loaded.
+				if defaultGroup != "" {
+					if groupEntries, ok := ctxGroupsState.Groups[defaultGroup]; ok {
+						metaEnvVars := make(map[string]bool)
+						for _, e := range ctxGroupsState.Groups["meta"] {
+							metaEnvVars[e.EnvVar] = true
+						}
+						for _, e := range groupEntries {
+							if metaEnvVars[e.EnvVar] {
+								fmt.Fprintf(os.Stderr, "⚠  envoke: %s defined in both meta and %s — %s wins\n", e.EnvVar, defaultGroup, defaultGroup)
+							}
+							fmt.Fprintf(os.Stdout, "export %s=%s\n", e.EnvVar, e.TmpfilePath)
+						}
+						ctxGroupsState.ActiveGroup = defaultGroup
+						if err := ctx.SaveState(uid, ctxGroupsState); err != nil {
+							slog.Warn("saving active group after default", "err", err)
+						}
+						slog.Debug("applied default group", "group", defaultGroup)
+					} else {
+						fmt.Fprintf(os.Stderr, "⚠  envoke: ENVOKE_DEFAULT_GROUP=%q is not a loaded group — ignored\n", defaultGroup)
+					}
+				}
+			}
+			if defaultGroup != "" && len(ctxEntries) == 0 {
+				fmt.Fprintf(os.Stderr, "⚠  envoke: ENVOKE_DEFAULT_GROUP=%q set but no CTX_ groups were loaded\n", defaultGroup)
+			}
+			var kubeconfigPath string
 
 			var resolvedEntries []env.EnvEntry
 			if len(envEntries) > 0 {
@@ -232,7 +316,7 @@ The output must be evaluated by your shell:
 			}
 
 			if len(resolvedEntries) > 0 {
-				uid := fmt.Sprintf("%d", os.Getuid())
+				// uid already declared above
 				names := make([]string, len(resolvedEntries))
 				for i, e := range resolvedEntries {
 					names[i] = e.Key
@@ -240,17 +324,14 @@ The output must be evaluated by your shell:
 				_ = state.SaveVarNames(uid, names)
 			}
 
-			panelEntries := make([]ui.PanelEntry, 0, len(resolvedEntries)+len(kctxPanelEntries))
+			panelEntries := make([]ui.PanelEntry, 0, len(resolvedEntries)+len(ctxPanelEntries))
 			for _, e := range resolvedEntries {
 				panelEntries = append(panelEntries, ui.PanelEntry{Key: e.Key, Source: e.Source})
 			}
-			for _, e := range kctxPanelEntries {
-				panelEntries = append(panelEntries, ui.PanelEntry{
-					Key:    "kctx:" + e.Key,
-					Source: e.Source,
-				})
+			for _, e := range ctxPanelEntries {
+				panelEntries = append(panelEntries, e)
 			}
-			totalCount := len(resolvedEntries) + len(kctxPanelEntries)
+			totalCount := len(resolvedEntries) + len(ctxPanelEntries)
 			headline := fmt.Sprintf("Loaded %s from %s",
 				ui.Bold(os.Stderr, pluralItems(totalCount)),
 				ui.Bold(os.Stderr, file))
@@ -264,7 +345,7 @@ The output must be evaluated by your shell:
 				case "fish":
 					fmt.Println("# Fish shell trap not supported via eval; use envoke clear-cache manually")
 				default:
-					if kubeconfigPath != "" {
+					if kubeconfigPath != "" || len(ctxEntries) > 0 {
 						fmt.Println("trap 'eval \"$(envoke unload 2>/dev/null)\" 2>/dev/null; envoke clear-cache 2>/dev/null' EXIT")
 					} else {
 						fmt.Println("trap 'envoke clear-cache' EXIT")
@@ -278,30 +359,6 @@ The output must be evaluated by your shell:
 	cmd.Flags().StringVar(&shell, "shell", "bash", "Shell type (bash|fish|zsh)")
 	cmd.Flags().BoolVar(&force, "force", false, "Bypass terminal check and print exports to terminal anyway")
 	return cmd
-}
-
-// isKctxDirective returns true if the entry is a KCTX_<name>=bw:// directive.
-func isKctxDirective(e env.RawEntry) bool {
-	if !strings.HasPrefix(e.Key, "KCTX_") {
-		return false
-	}
-	return strings.HasPrefix(e.Value, "bw://")
-}
-
-// kctxNameFromKey derives a kubeconfig store name from a KCTX_ key.
-// KCTX_PROD → "prod", KCTX_MY_CLUSTER → "my_cluster"
-func kctxNameFromKey(key string) string {
-	return strings.ToLower(strings.TrimPrefix(key, "KCTX_"))
-}
-
-// fetchKubeconfigForDirective fetches a kubeconfig from a bw:// source and stores it.
-func fetchKubeconfigForDirective(reg *providers.Registry, name, source, uid string, store *kubeconfig.NamedStore) error {
-	uri := normalizeKubeconfigURI(source)
-	val, err := reg.Resolve(uri)
-	if err != nil {
-		return err
-	}
-	return store.Put(uid, name, []byte(val))
 }
 
 // writeTempEnv writes env entries to a temp .env file for processing by ResolveDotEnv.
@@ -426,41 +483,24 @@ func yamlCmd(cfg *config.Config) *cobra.Command {
 
 func loadCmd(cfg *config.Config) *cobra.Command {
 	return &cobra.Command{
-		Use:   "load <name> <bw://item>",
-		Short: "Fetch a kubeconfig and cache it under a local name",
-		Long: `Fetch a kubeconfig from Bitwarden and store it in the local
-named store so that 'envoke switch <name>' can load it without re-fetching.
+		Use:   "load",
+		Short: "[deprecated] use CTX_ directives in your .env instead",
+		Long: `envoke load is deprecated and has no effect.
 
-Examples:
-  envoke load prod bw://kubernetes/prod`,
-		Args: cobra.ExactArgs(2),
+ Use CTX_<GROUP>=<uri>#<ENVVAR> entries in your .env file instead:
+
+ CTX_PROD=bw://kubernetes/prod#KUBECONFIG
+
+Then run: eval "$(envoke resolve .env)"`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := args[0]
-			source := args[1]
-
-			if err := kubeconfig.ValidateStoreName(name); err != nil {
-				return err
-			}
-
-			slog.Debug("loading kubeconfig", "name", name, "source", source)
-
-			uid := fmt.Sprintf("%d", os.Getuid())
-			store := kubeconfig.NewNamedStore()
-			reg := newRegistry(cfg)
-			defer reg.Close() //nolint:errcheck // best-effort session cleanup
-
-			uri := normalizeKubeconfigURI(source)
-			val, err := reg.Resolve(uri)
-			if err != nil {
-				return err
-			}
-
-			if err := store.Put(uid, name, []byte(val)); err != nil {
-				return fmt.Errorf("storing kubeconfig %q: %w", name, err)
-			}
-
-			ui.Success(os.Stderr, fmt.Sprintf("Loaded kubeconfig: %s", ui.Bold(os.Stderr, name)))
-			return nil
+			fmt.Fprintln(os.Stderr, "envoke load is deprecated and has been removed.")
+			fmt.Fprintln(os.Stderr, "")
+			fmt.Fprintln(os.Stderr, "Use CTX_<GROUP>=<uri>#<ENVVAR> entries in your .env file instead:")
+			fmt.Fprintln(os.Stderr, "")
+			fmt.Fprintln(os.Stderr, "  CTX_PROD=bw://kubernetes/prod#KUBECONFIG")
+			fmt.Fprintln(os.Stderr, "")
+			fmt.Fprintln(os.Stderr, `Then run: eval "$(envoke resolve .env)"`)
+			return fmt.Errorf("deprecated: use CTX_ directives and envoke resolve")
 		},
 	}
 }
@@ -469,85 +509,92 @@ Examples:
 
 func switchCmd(cfg *config.Config) *cobra.Command {
 	return &cobra.Command{
-		Use:   "switch <name> [bw://item]",
-		Short: "Switch to a named kubeconfig (or fetch one if a source is given)",
-		Long: `Switch KUBECONFIG to a named kubeconfig previously loaded with 'envoke load'.
+		Use:   "switch <group>",
+		Short: "Switch to a context group (instant, no provider calls)",
+		Long: `Switch all context env vars to a named group previously loaded by 'envoke resolve'.
 
-If the named kubeconfig is not in the local store, a source (bw://) may be
-provided to fetch it on the fly.
+No provider calls are made — all secrets were fetched eagerly by resolve and
+written to tmpfiles in /dev/shm. Switch is purely local.
+
+The META group (CTX_META) is re-applied as a persistent baseline on every switch.
+'envoke switch meta' is rejected — META is always active.
 
 Examples:
-  envoke switch prod                          # use pre-loaded 'prod'
-  envoke switch staging bw://k8s/staging      # fetch directly if not pre-loaded`,
-		Args: cobra.RangeArgs(1, 2),
+  envoke switch prod
+  envoke switch staging`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := args[0]
-			source := ""
-			if len(args) > 1 {
-				source = args[1]
+			name := strings.ToLower(args[0])
+
+			if name == "meta" {
+				return fmt.Errorf("'meta' is not a switchable group — META is always applied as a baseline on every switch")
 			}
-			slog.Debug("switching kubeconfig", "name", name, "source", source)
 
 			uid := fmt.Sprintf("%d", os.Getuid())
-			store := kubeconfig.NewNamedStore()
+			st, err := ctx.LoadState(uid)
+			if err != nil {
+				return fmt.Errorf("loading ctx state: %w", err)
+			}
+			if len(st.Groups) == 0 {
+				return fmt.Errorf("no context groups loaded\n\nRun: eval \"$(envoke resolve .env)\"")
+			}
 
-			var kubeconfigData []byte
-
-			if err := kubeconfig.ValidateStoreName(name); err == nil {
-				data, err := store.Get(uid, name)
-				if err != nil {
-					return fmt.Errorf("reading named kubeconfig %q: %w", name, err)
+			targetEntries, ok := st.Groups[name]
+			if !ok {
+				available := make([]string, 0, len(st.Groups))
+				for g := range st.Groups {
+					if g != "meta" {
+						available = append(available, g)
+					}
 				}
-				if data != nil {
-					kubeconfigData = data
+				sort.Strings(available)
+				return fmt.Errorf("group %q not found in loaded state\n\nAvailable groups: %s", name, strings.Join(available, ", "))
+			}
+
+			// Unload currently active group env vars (not META).
+			if st.ActiveGroup != "" && st.ActiveGroup != name {
+				for _, e := range st.Groups[st.ActiveGroup] {
+					fmt.Fprintf(os.Stdout, "unset %s\n", e.EnvVar)
 				}
 			}
 
-			if kubeconfigData == nil {
-				if source == "" {
-					return fmt.Errorf(
-						"no pre-loaded kubeconfig named %q found\n"+
-							"Run: envoke load %s <bw://item>",
-						name, name,
-					)
-				}
-				reg := newRegistry(cfg)
-				defer reg.Close() //nolint:errcheck // best-effort session cleanup
-				uri := normalizeKubeconfigURI(source)
-				val, err := reg.Resolve(uri)
-				if err != nil {
-					return fmt.Errorf("fetching kubeconfig for %q: %w", name, err)
-				}
-				kubeconfigData = []byte(val)
-				if err := store.Put(uid, name, kubeconfigData); err != nil {
-					return fmt.Errorf("caching kubeconfig %q: %w", name, err)
-				}
+			// Re-apply META baseline.
+			for _, e := range st.Groups["meta"] {
+				fmt.Fprintf(os.Stdout, "export %s=%s\n", e.EnvVar, e.TmpfilePath)
 			}
 
-			path := store.Path(uid, name)
-
-			fmt.Printf("export KUBECONFIG=%s\n", path)
-			fmt.Printf("trap 'eval \"$(envoke unload 2>/dev/null)\"' EXIT\n")
-
-			srcLabel := switchSourceLabel(name, source)
-			panelEntries := []ui.PanelEntry{
-				{Key: "KUBECONFIG", Value: path, Source: srcLabel},
+			// Build META env var set for collision detection.
+			metaEnvVars := make(map[string]bool)
+			for _, e := range st.Groups["meta"] {
+				metaEnvVars[e.EnvVar] = true
 			}
-			if ctx := currentKubectlContext(path); ctx != "" {
-				panelEntries = append(panelEntries, ui.PanelEntry{Key: "Context", Value: ctx})
+
+			// Apply target group — warn loudly on META collision, group wins.
+			var panelEntries []ui.PanelEntry
+			for _, e := range targetEntries {
+				if metaEnvVars[e.EnvVar] {
+					fmt.Fprintf(os.Stderr, "\u26a0  envoke: %s defined in both meta and %s — %s wins\n", e.EnvVar, name, name)
+				}
+				fmt.Fprintf(os.Stdout, "export %s=%s\n", e.EnvVar, e.TmpfilePath)
+				panelEntries = append(panelEntries, ui.PanelEntry{
+					Key:   e.EnvVar,
+					Value: e.TmpfilePath,
+				})
 			}
+
+			fmt.Fprintf(os.Stdout, "trap 'eval \"$(envoke unload 2>/dev/null)\"' EXIT\n")
+
+			// Persist active group for status/unload.
+			st.ActiveGroup = name
+			if err := ctx.SaveState(uid, st); err != nil {
+				slog.Warn("saving active group", "err", err)
+			}
+
 			headline := fmt.Sprintf("Switched to %s", ui.Bold(os.Stderr, name))
 			ui.Panel(os.Stderr, "envoke", headline, panelEntries, cfg.UI.Border)
 			return nil
 		},
 	}
-}
-
-func switchSourceLabel(name, source string) string {
-	if source == "" {
-		return "named store"
-	}
-	return source
 }
 
 func currentKubectlContext(kubeconfigPath string) string {
@@ -573,7 +620,7 @@ func currentKubectlContext(kubeconfigPath string) string {
 func statusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
-		Short: "Show loaded env vars, KUBECONFIG, and named kubeconfigs",
+		Short: "Show loaded env vars and context groups",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			w := os.Stdout
 			uid := fmt.Sprintf("%d", os.Getuid())
@@ -591,31 +638,78 @@ func statusCmd() *cobra.Command {
 			}
 			fmt.Fprintln(w)
 
-			ui.Header(w, "Kubeconfig")
-			kc := os.Getenv("KUBECONFIG")
-			if kc == "" {
-				ui.Item(w, "KUBECONFIG", ui.Gray(w, "not set"))
-				ui.Item(w, "Managed by envoke", ui.Gray(w, "no"))
-			} else {
-				ui.Item(w, "KUBECONFIG", ui.Green(w, kc))
-				if kubeconfig.IsManaged(kc) {
-					ui.Item(w, "Managed by envoke", ui.Green(w, "yes"))
-				} else {
-					ui.Item(w, "Managed by envoke", ui.Yellow(w, "no (external)"))
-				}
-				if ctx := currentKubectlContext(kc); ctx != "" {
-					ui.Item(w, "Current context", ui.Bold(w, ctx))
-				}
-			}
+			// ── CTX groups section ────────────────────────────────────────────
+			ctxSt, ctxErr := ctx.LoadState(uid)
+			if ctxErr == nil && len(ctxSt.Groups) > 0 {
+				ui.Header(w, "Context groups (CTX_)")
 
-			store := kubeconfig.NewNamedStore()
-			storedNames, err := store.List(uid)
-			if err != nil {
-				slog.Warn("listing named kubeconfigs", "err", err)
-			} else if len(storedNames) > 0 {
-				sort.Strings(storedNames)
-				ui.Header(w, "Loaded kubeconfigs (use 'envoke switch <name>')")
-				ui.List(w, storedNames)
+				// META first
+				if metaEntries, ok := ctxSt.Groups["meta"]; ok {
+					fmt.Fprintf(w, "  ◆ meta  %s\n", ui.Gray(w, "(persistent baseline)"))
+					for _, e := range metaEntries {
+						fmt.Fprintf(w, "      %-32s %s\n", e.EnvVar, ui.Gray(w, e.TmpfilePath))
+					}
+				}
+
+				// renderGroup prints one group's entries (path only, no extra annotations).
+				renderGroup := func(entries []ctx.ContextEntry) {
+					for _, e := range entries {
+						fmt.Fprintf(w, "      %-32s %s\n", e.EnvVar, e.TmpfilePath)
+					}
+				}
+
+				// Active group
+				if ctxSt.ActiveGroup != "" {
+					if entries, ok := ctxSt.Groups[ctxSt.ActiveGroup]; ok {
+						fmt.Fprintf(w, "  ● %s  %s\n", ctxSt.ActiveGroup, ui.Green(w, "(active)"))
+						renderGroup(entries)
+					}
+				}
+
+				// Inactive groups
+				groupNames := make([]string, 0, len(ctxSt.Groups))
+				for g := range ctxSt.Groups {
+					if g != "meta" && g != ctxSt.ActiveGroup {
+						groupNames = append(groupNames, g)
+					}
+				}
+				sort.Strings(groupNames)
+				for _, g := range groupNames {
+					fmt.Fprintf(w, "  ○ %s  %s\n", g, ui.Gray(w, "(inactive)"))
+					renderGroup(ctxSt.Groups[g])
+				}
+
+				// Active variables summary: META + active group, showing source group.
+				// Always show when groups are loaded — META is active immediately after resolve.
+				if len(ctxSt.Groups) > 0 {
+					fmt.Fprintln(w)
+					ui.Header(w, "Active context variables")
+					// Collect in order: META entries first, then active group (group wins on collision).
+					seen := make(map[string]string) // envVar → group
+					var order []string
+					addEntries := func(entries []ctx.ContextEntry, group string) {
+						for _, e := range entries {
+							if _, exists := seen[e.EnvVar]; !exists {
+								order = append(order, e.EnvVar)
+							}
+							seen[e.EnvVar] = group
+						}
+					}
+					addEntries(ctxSt.Groups["meta"], "meta")
+					if ctxSt.ActiveGroup != "" {
+						addEntries(ctxSt.Groups[ctxSt.ActiveGroup], ctxSt.ActiveGroup)
+					}
+					for _, envVar := range order {
+						grp := seen[envVar]
+						var grpLabel string
+						if grp == "meta" {
+							grpLabel = ui.Gray(w, "◆ meta")
+						} else {
+							grpLabel = ui.Green(w, "● "+grp)
+						}
+						fmt.Fprintf(w, "  %-32s %s\n", envVar, grpLabel)
+					}
+				}
 			}
 			return nil
 		},
@@ -691,6 +785,27 @@ When using the envoke shell-init, the shell function handles this automatically.
 					}
 				}
 				_ = kubeconfig.ClearTrackedNames(uid)
+			}
+			// ── CTX group cleanup ────────────────────────────────────────────
+			ctxSt, ctxErr := ctx.LoadState(uid)
+			if ctxErr == nil && len(ctxSt.Groups) > 0 {
+				for grp, entries := range ctxSt.Groups {
+					for _, e := range entries {
+						fmt.Fprintf(os.Stdout, "unset %s\n", e.EnvVar)
+						if e.TmpfilePath != "" {
+							if rmErr := os.Remove(e.TmpfilePath); rmErr != nil && !os.IsNotExist(rmErr) {
+								slog.Warn("removing ctx tmpfile", "path", e.TmpfilePath, "err", rmErr)
+							}
+						}
+						panelEntries = append(panelEntries, ui.PanelEntry{
+							Key:   "ctx:" + grp + ":" + e.EnvVar,
+							Value: e.TmpfilePath,
+						})
+					}
+				}
+				if err := ctx.ClearState(uid); err != nil {
+					slog.Warn("clearing ctx state", "err", err)
+				}
 			}
 
 			if len(panelEntries) == 0 {
