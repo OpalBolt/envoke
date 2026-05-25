@@ -18,8 +18,8 @@ import (
 
 	"github.com/opalbolt/envoke/internal/cleanup"
 	"github.com/opalbolt/envoke/internal/config"
-	"github.com/opalbolt/envoke/internal/env"
 	"github.com/opalbolt/envoke/internal/ctx"
+	"github.com/opalbolt/envoke/internal/env"
 	"github.com/opalbolt/envoke/internal/kubeconfig"
 	"github.com/opalbolt/envoke/internal/logger"
 	"github.com/opalbolt/envoke/internal/providers"
@@ -184,7 +184,6 @@ The output must be evaluated by your shell:
 				}
 			}
 
-
 			sharedReg := newRegistry(cfg)
 			defer sharedReg.Close() //nolint:errcheck // best-effort session cleanup
 			dotenvDir := filepath.Dir(file)
@@ -192,7 +191,6 @@ The output must be evaluated by your shell:
 			sharedReg.Register(cp)
 			cp.SetRegistry(sharedReg)
 
-			
 			// ── CTX_ group processing ────────────────────────────────────────────────
 			// uid is shared across CTX_, kctx, and var-tracking blocks below.
 			uid := fmt.Sprintf("%d", os.Getuid())
@@ -212,7 +210,7 @@ The output must be evaluated by your shell:
 					if err != nil {
 						return err
 					}
-					
+
 					val, err := sharedReg.Resolve(entry.SourceURI)
 					if err != nil {
 						if errors.Is(err, bw.ErrInvalidPassword) {
@@ -222,13 +220,13 @@ The output must be evaluated by your shell:
 						cleanupCTXTmpfiles()
 						return fmt.Errorf("resolving %s (%s): %w", e.Key, entry.SourceURI, err)
 					}
-					
+
 					content := []byte(val)
 					if err := ctx.ValidateContent(entry.EnvVar, content); err != nil {
 						cleanupCTXTmpfiles()
 						return fmt.Errorf("%s: %w", e.Key, err)
 					}
-					
+
 					tmpf, err := kubeconfig.NewTempFile("envoke-ctx")
 					if err != nil {
 						cleanupCTXTmpfiles()
@@ -245,7 +243,7 @@ The output must be evaluated by your shell:
 						return fmt.Errorf("closing tmpfile for %s: %w", e.Key, err)
 					}
 					entry.TmpfilePath = tmpf.Name()
-					
+
 					ctxGroupsState.Groups[entry.Group] = append(ctxGroupsState.Groups[entry.Group], entry)
 					ctxPanelEntries = append(ctxPanelEntries, ui.PanelEntry{
 						Key:    entry.Group + ":" + entry.EnvVar,
@@ -253,18 +251,18 @@ The output must be evaluated by your shell:
 					})
 					slog.Debug("ctx entry resolved", "group", entry.Group, "envVar", entry.EnvVar, "tmpfile", entry.TmpfilePath)
 				}
-				
+
 				if err := ctx.SaveState(uid, ctxGroupsState); err != nil {
 					slog.Warn("saving ctx state", "err", err)
 				}
-				
+
 				// Emit META exports as always-on baseline.
 				if metaEntries, ok := ctxGroupsState.Groups["meta"]; ok {
 					for _, entry := range metaEntries {
 						fmt.Fprintf(os.Stdout, "export %s=%s\n", entry.EnvVar, entry.TmpfilePath)
 					}
 				}
-				
+
 				// Auto-apply ENVOKE_DEFAULT_GROUP if specified and the group was loaded.
 				if defaultGroup != "" {
 					if groupEntries, ok := ctxGroupsState.Groups[defaultGroup]; ok {
@@ -362,7 +360,6 @@ The output must be evaluated by your shell:
 	cmd.Flags().BoolVar(&force, "force", false, "Bypass terminal check and print exports to terminal anyway")
 	return cmd
 }
-
 
 // writeTempEnv writes env entries to a temp .env file for processing by ResolveDotEnv.
 func writeTempEnv(entries []env.RawEntry) (string, error) {
@@ -600,7 +597,6 @@ Examples:
 	}
 }
 
-
 func currentKubectlContext(kubeconfigPath string) string {
 	cmd := exec.Command("kubectl", "config", "current-context")
 	if kubeconfigPath != "" {
@@ -809,7 +805,6 @@ When using the envoke shell-init, the shell function handles this automatically.
 					slog.Warn("clearing ctx state", "err", err)
 				}
 			}
-
 
 			if len(panelEntries) == 0 {
 				ui.Warn(os.Stderr, "Nothing to unload")
