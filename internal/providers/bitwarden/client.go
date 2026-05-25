@@ -381,11 +381,15 @@ func extractField(item map[string]interface{}, fieldSpec string) (string, error)
 	switch fieldSpec {
 	case "password":
 		login, _ := item["login"].(map[string]interface{})
-		if login == nil {
-			return "", fmt.Errorf("item has no login")
+		if login != nil {
+			val, _ := login["password"].(string)
+			return val, nil
 		}
-		val, _ := login["password"].(string)
-		return val, nil
+		// No login field — fall back to secure note body if present.
+		if notes, _ := item["notes"].(string); notes != "" {
+			return notes, nil
+		}
+		return "", fmt.Errorf("item has no login and no notes; specify /note or /field:<name> explicitly")
 	case "username":
 		login, _ := item["login"].(map[string]interface{})
 		if login == nil {
