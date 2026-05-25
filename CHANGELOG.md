@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.1](https://github.com/OpalBolt/envoke/compare/v0.9.0...v0.9.1) (2026-05-25)
+
+
+### Bug Fixes
+
+* **flake:** pin go_1_25 in buildGoModule and devShell ([99babfc](https://github.com/OpalBolt/envoke/commit/99babfc0d35ca813d216de34a59dd1544ffb3271))
+* **flake:** pin go_1_25 in buildGoModule and devShell ([33e09fb](https://github.com/OpalBolt/envoke/commit/33e09fb7bb3a1c7af8f051668b8f23aa493be004))
+
 ## [0.9.0](https://github.com/OpalBolt/envoke/compare/v0.8.0...v0.9.0) (2026-05-25)
 
 
