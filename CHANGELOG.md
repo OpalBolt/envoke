@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.9.0](https://github.com/OpalBolt/envoke/compare/v0.8.0...v0.9.0) (2026-05-25)
+
+
+### Features
+
+* **ctx:** generic context/file injection via CTX_ groups, deprecate kctx ([#23](https://github.com/OpalBolt/envoke/issues/23)) ([4908640](https://github.com/OpalBolt/envoke/commit/4908640b5db61c36a43bf9133e4ef58b25d897a3))
+* **ctx:** generic CTX_ group injection, deprecate kctx and loadCmd ([#23](https://github.com/OpalBolt/envoke/issues/23)) ([cf641dd](https://github.com/OpalBolt/envoke/commit/cf641ddc07c4fcd68761396b5a9cabadd1bc8553))
+* **status,resolve:** drop legacy Kubeconfig section, add ENVOKE_DEFAULT_GROUP ([7d16492](https://github.com/OpalBolt/envoke/commit/7d1649273b1e74ee2888c784da38f930d69e2a8d))
+* **status:** add Active context variables summary, drop kubectl hint noise ([5156ea2](https://github.com/OpalBolt/envoke/commit/5156ea22d2a188a0ce426d27617fcf10e4fb9439))
+
+
+### Bug Fixes
+
+* **bw:** fall back to note body when item has no login field ([9fac8a6](https://github.com/OpalBolt/envoke/commit/9fac8a6affa68668a1a21ddaac42f906a2ede9db))
+* **status:** IsManaged now recognises envoke-ctx- prefixed tmpfiles ([2ba4c5a](https://github.com/OpalBolt/envoke/commit/2ba4c5a586fce793c1a9664e2630e524a16480d8))
+* **status:** show Active context variables even when no group is switched ([c04ca2c](https://github.com/OpalBolt/envoke/commit/c04ca2c5347044538ae8c4e10cd1e5fc0f64f0ae))
+
 ## [0.8.0](https://github.com/OpalBolt/envoke/compare/v0.7.0...v0.8.0) (2026-05-24)
 
 
