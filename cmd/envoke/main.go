@@ -156,12 +156,15 @@ The output must be evaluated by your shell:
 
 			var ctxEntries []env.RawEntry
 			var envEntries []env.RawEntry
+			var defaultGroup string
 			for _, e := range rawEntries {
 				switch {
 				case ctx.IsKCTXDirective(e.Key):
 					return ctx.MigrationError(e.Key, e.Value)
 				case ctx.IsCTXDirective(e.Key):
 					ctxEntries = append(ctxEntries, e)
+				case e.Key == "ENVOKE_DEFAULT_GROUP":
+					defaultGroup = strings.ToLower(e.Value) // consumed, not exported
 				default:
 					envEntries = append(envEntries, e)
 				}
@@ -247,6 +250,32 @@ The output must be evaluated by your shell:
 						fmt.Fprintf(os.Stdout, "export %s=%s\n", entry.EnvVar, entry.TmpfilePath)
 					}
 				}
+				
+				// Auto-apply ENVOKE_DEFAULT_GROUP if specified and the group was loaded.
+				if defaultGroup != "" {
+					if groupEntries, ok := ctxGroupsState.Groups[defaultGroup]; ok {
+						metaEnvVars := make(map[string]bool)
+						for _, e := range ctxGroupsState.Groups["meta"] {
+							metaEnvVars[e.EnvVar] = true
+						}
+						for _, e := range groupEntries {
+							if metaEnvVars[e.EnvVar] {
+								fmt.Fprintf(os.Stderr, "⚠  envoke: %s defined in both meta and %s — %s wins\n", e.EnvVar, defaultGroup, defaultGroup)
+							}
+							fmt.Fprintf(os.Stdout, "export %s=%s\n", e.EnvVar, e.TmpfilePath)
+						}
+						ctxGroupsState.ActiveGroup = defaultGroup
+						if err := ctx.SaveState(uid, ctxGroupsState); err != nil {
+							slog.Warn("saving active group after default", "err", err)
+						}
+						slog.Debug("applied default group", "group", defaultGroup)
+					} else {
+						fmt.Fprintf(os.Stderr, "⚠  envoke: ENVOKE_DEFAULT_GROUP=%q is not a loaded group — ignored\n", defaultGroup)
+					}
+				}
+			}
+			if defaultGroup != "" && len(ctxEntries) == 0 {
+				fmt.Fprintf(os.Stderr, "⚠  envoke: ENVOKE_DEFAULT_GROUP=%q set but no CTX_ groups were loaded\n", defaultGroup)
 			}
 			var kubeconfigPath string
 
@@ -580,7 +609,7 @@ func currentKubectlContext(kubeconfigPath string) string {
 func statusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
-		Short: "Show loaded env vars, KUBECONFIG, and named kubeconfigs",
+		Short: "Show loaded env vars and context groups",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			w := os.Stdout
 			uid := fmt.Sprintf("%d", os.Getuid())
@@ -598,53 +627,40 @@ func statusCmd() *cobra.Command {
 			}
 			fmt.Fprintln(w)
 
-			ui.Header(w, "Kubeconfig")
-			kc := os.Getenv("KUBECONFIG")
-			if kc == "" {
-				ui.Item(w, "KUBECONFIG", ui.Gray(w, "not set"))
-				ui.Item(w, "Managed by envoke", ui.Gray(w, "no"))
-			} else {
-				ui.Item(w, "KUBECONFIG", ui.Green(w, kc))
-				if kubeconfig.IsManaged(kc) {
-					ui.Item(w, "Managed by envoke", ui.Green(w, "yes"))
-				} else {
-					ui.Item(w, "Managed by envoke", ui.Yellow(w, "no (external)"))
-				}
-				if ctx := currentKubectlContext(kc); ctx != "" {
-					ui.Item(w, "Current context", ui.Bold(w, ctx))
-				}
-			}
-
-			store := kubeconfig.NewNamedStore()
-			storedNames, err := store.List(uid)
-			if err != nil {
-				slog.Warn("listing named kubeconfigs", "err", err)
-			} else if len(storedNames) > 0 {
-				sort.Strings(storedNames)
-				ui.Header(w, "Loaded kubeconfigs (use 'envoke switch <name>')")
-				ui.List(w, storedNames)
-			}
 			// ── CTX groups section ────────────────────────────────────────────
 			ctxSt, ctxErr := ctx.LoadState(uid)
 			if ctxErr == nil && len(ctxSt.Groups) > 0 {
-				fmt.Fprintln(w)
 				ui.Header(w, "Context groups (CTX_)")
+
 				// META first
 				if metaEntries, ok := ctxSt.Groups["meta"]; ok {
 					fmt.Fprintf(w, "  ◆ meta  %s\n", ui.Gray(w, "(persistent baseline)"))
 					for _, e := range metaEntries {
-						fmt.Fprintf(w, "      %-30s %s\n", e.EnvVar, ui.Gray(w, e.TmpfilePath))
+						fmt.Fprintf(w, "      %-32s %s\n", e.EnvVar, ui.Gray(w, e.TmpfilePath))
 					}
 				}
+
+				// renderGroup prints one group's entries, with extra detail for known types.
+				renderGroup := func(entries []ctx.ContextEntry) {
+					for _, e := range entries {
+						detail := ""
+						if e.EnvVar == "KUBECONFIG" {
+							if ktx := currentKubectlContext(e.TmpfilePath); ktx != "" {
+								detail = "  " + ui.Gray(w, "(→ "+ktx+")")
+							}
+						}
+						fmt.Fprintf(w, "      %-32s %s%s\n", e.EnvVar, e.TmpfilePath, detail)
+					}
+				}
+
 				// Active group
 				if ctxSt.ActiveGroup != "" {
 					if entries, ok := ctxSt.Groups[ctxSt.ActiveGroup]; ok {
-						fmt.Fprintf(w, "  ● %s  %s\n", ctxSt.ActiveGroup, ui.Green(w, "(active group)"))
-						for _, e := range entries {
-							fmt.Fprintf(w, "      %-30s %s\n", e.EnvVar, e.TmpfilePath)
-						}
+						fmt.Fprintf(w, "  ● %s  %s\n", ctxSt.ActiveGroup, ui.Green(w, "(active)"))
+						renderGroup(entries)
 					}
 				}
+
 				// Inactive groups
 				groupNames := make([]string, 0, len(ctxSt.Groups))
 				for g := range ctxSt.Groups {
@@ -654,11 +670,8 @@ func statusCmd() *cobra.Command {
 				}
 				sort.Strings(groupNames)
 				for _, g := range groupNames {
-					entries := ctxSt.Groups[g]
-					fmt.Fprintf(w, "  ○ %s  %s\n", g, ui.Gray(w, "(inactive, loaded)"))
-					for _, e := range entries {
-						fmt.Fprintf(w, "      %-30s %s\n", e.EnvVar, ui.Gray(w, e.TmpfilePath))
-					}
+					fmt.Fprintf(w, "  ○ %s  %s\n", g, ui.Gray(w, "(inactive)"))
+					renderGroup(ctxSt.Groups[g])
 				}
 			}
 			return nil
