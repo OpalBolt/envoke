@@ -68,7 +68,7 @@
         devShells.default = pkgs.mkShell {
           packages = [
             go
-            gomod2nix.packages.${system}.gomod2nix
+            gomod2nix.packages.${system}.default
           ] ++ (with pkgs; [
             gotools       # goimports, etc.
             gopls
