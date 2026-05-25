@@ -2,7 +2,7 @@
   description = "envoke — unified secret environment loader (env vars and kubeconfigs)";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
     flake-utils.url = "github:numtide/flake-utils";
   };
 
@@ -30,13 +30,14 @@
           else
             "${builtins.substring 0 4 raw}-${builtins.substring 4 2 raw}-${builtins.substring 6 2 raw}T${builtins.substring 8 2 raw}:${builtins.substring 10 2 raw}:${builtins.substring 12 2 raw}Z";
 
-        envoke = pkgs.buildGoModule {
+        buildGoModule = pkgs.buildGoModule.override { inherit go; };
+
+        envoke = buildGoModule {
           pname = "envoke";
           version = releaseVersion;
           src = ./.;
           vendorHash = "sha256-LUCRrwakaITrnME5a0tiAp0jsMJQKPtIV8Y8LLwA3LI=";
           subPackages = [ "cmd/envoke" ];
-          inherit go;
           ldflags = [
             "-s" "-w"
             "-X ${versionPkg}.Version=${nixVersion}"

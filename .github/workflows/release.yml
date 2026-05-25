@@ -43,7 +43,7 @@ jobs:
           # to resolve the tag that release-please just created.
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
